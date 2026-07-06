@@ -1,0 +1,15 @@
+/*.djvu
+/*.pdf
+/*.html
+/_Լ�ּ�����ʱĿ¼/
+
+/.tmp/full_run_v4/
+/.tmp/samples/
+/.tmp/work/run/
+/.tmp/work/parallel_sample/
+/.tmp/work/tessdata/
+
+__pycache__/
+*.pyc
+*.ppm
+*.webp

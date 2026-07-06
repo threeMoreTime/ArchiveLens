@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>约字检索报告重构草图 A+C</title>
+  <style>
+    :root {
+      --bg: #efe2c4;
+      --panel: #fffaf0;
+      --panel-strong: #fffdf8;
+      --line: #d7bf92;
+      --line-soft: #e8d9bc;
+      --ink: #2f2418;
+      --muted: #72583b;
+      --accent: #9f3f10;
+      --accent-soft: #f2d0a7;
+      --ok: #1f6b43;
+      --warn: #92551b;
+      --bad: #8d2d27;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.55), transparent 28%),
+        linear-gradient(180deg, #ead8af 0%, #f7f0e0 100%);
+    }
+    .shell {
+      max-width: 1540px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .hero,
+    .toolbar,
+    .workspace,
+    .notes {
+      background: rgba(255,250,240,0.92);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: 0 16px 50px rgba(99, 63, 18, 0.09);
+    }
+    .hero {
+      padding: 20px 22px;
+      display: grid;
+      grid-template-columns: 1.6fr 1fr;
+      gap: 18px;
+      align-items: start;
+    }
+    .hero h1 {
+      margin: 0 0 10px;
+      font-size: 32px;
+      line-height: 1.1;
+    }
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .badges {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    .badge {
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      font-size: 13px;
+    }
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .hero-stat {
+      padding: 14px;
+      border-radius: 16px;
+      background: linear-gradient(180deg, #fffdf7 0%, #f8ecd5 100%);
+      border: 1px solid var(--line-soft);
+    }
+    .hero-stat strong {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .hero-stat span {
+      font-size: 24px;
+      font-weight: 700;
+    }
+    .toolbar {
+      margin-top: 18px;
+      padding: 18px;
+    }
+    .toolbar h2,
+    .notes h2,
+    .pane-title {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+    .filters {
+      display: grid;
+      grid-template-columns: 2.3fr 1fr 1fr 1.1fr;
+      gap: 12px;
+      align-items: end;
+    }
+    .field label {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .field .box,
+    .mini-chip,
+    .action-btn,
+    .queue-btn {
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      border-radius: 14px;
+    }
+    .field .box {
+      padding: 11px 12px;
+      min-height: 46px;
+      display: flex;
+      align-items: center;
+      color: var(--ink);
+    }
+    .filter-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .mini-chip {
+      padding: 7px 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .mini-chip.active {
+      background: var(--accent-soft);
+      color: #6e2600;
+      border-color: #d29a60;
+    }
+    .workspace {
+      margin-top: 18px;
+      padding: 16px;
+      display: grid;
+      grid-template-columns: 0.92fr 1.28fr;
+      gap: 16px;
+      min-height: 860px;
+    }
+    .left-pane,
+    .right-pane {
+      min-width: 0;
+    }
+    .left-pane {
+      border-right: 1px solid var(--line-soft);
+      padding-right: 14px;
+    }
+    .pane-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .pane-sub {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .result-list {
+      display: grid;
+      gap: 10px;
+      max-height: 760px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .result-card {
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid var(--line-soft);
+      background: var(--panel);
+    }
+    .result-card.active {
+      border-color: #cf8c4c;
+      background: linear-gradient(180deg, #fff8ee 0%, #fde8ca 100%);
+      box-shadow: inset 0 0 0 1px rgba(207,140,76,0.18);
+    }
+    .result-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .result-char {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--accent);
+      line-height: 1;
+    }
+    .result-status {
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    .status-review { color: var(--warn); }
+    .status-ok { color: var(--ok); }
+    .status-no { color: var(--bad); }
+    .result-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .result-meta,
+    .result-context,
+    .detail-meta,
+    .detail-note {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .result-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .action-btn,
+    .queue-btn {
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+    .queue-btn.primary {
+      background: #f7e4c3;
+      border-color: #d7a364;
+      color: #6c2d03;
+      font-weight: 700;
+    }
+    .queue-btn.ok {
+      color: var(--ok);
+    }
+    .queue-btn.no {
+      color: var(--bad);
+    }
+    .right-pane {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: 14px;
+    }
+    .detail-head,
+    .detail-images,
+    .detail-evidence,
+    .detail-workbench {
+      border: 1px solid var(--line-soft);
+      border-radius: 18px;
+      background: var(--panel);
+      padding: 16px;
+    }
+    .detail-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .detail-head h3 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+    .detail-images {
+      display: grid;
+      grid-template-columns: 1.45fr 0.9fr;
+      gap: 14px;
+    }
+    .image-panel {
+      border: 1px dashed #d9c297;
+      border-radius: 16px;
+      padding: 12px;
+      background: linear-gradient(180deg, #fffef9 0%, #f8ead1 100%);
+    }
+    .image-panel strong {
+      display: block;
+      margin-bottom: 10px;
+    }
+    .page-stage {
+      height: 360px;
+      border-radius: 12px;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.92), rgba(250,240,220,0.92)),
+        repeating-linear-gradient(90deg, rgba(115,88,51,0.04) 0 1px, transparent 1px 52px),
+        repeating-linear-gradient(180deg, rgba(115,88,51,0.04) 0 1px, transparent 1px 52px);
+    }
+    .page-box {
+      position: absolute;
+      inset: 28px 40px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.72);
+      border: 1px solid rgba(140,112,67,0.18);
+    }
+    .highlight {
+      position: absolute;
+      top: 118px;
+      left: 170px;
+      width: 56px;
+      height: 68px;
+      border: 3px solid #d34f15;
+      background: rgba(255, 219, 88, 0.28);
+      box-shadow: 0 0 0 8px rgba(255, 196, 0, 0.08);
+    }
+    .crop-stage {
+      height: 360px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #fffaf0 0%, #f7ebd4 100%);
+      border: 1px solid rgba(140,112,67,0.12);
+    }
+    .crop-glyph {
+      width: 130px;
+      height: 160px;
+      display: grid;
+      place-items: center;
+      border-radius: 18px;
+      border: 1px solid #d7bf92;
+      background: #fff;
+      font-size: 74px;
+      color: var(--accent);
+      box-shadow: 0 8px 24px rgba(101, 63, 18, 0.08);
+    }
+    .detail-evidence {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    .evidence-block {
+      border: 1px solid var(--line-soft);
+      border-radius: 14px;
+      background: var(--panel-strong);
+      padding: 14px;
+    }
+    .evidence-block strong {
+      display: block;
+      margin-bottom: 8px;
+    }
+    .detail-workbench {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 14px;
+    }
+    .textarea {
+      min-height: 120px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      padding: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .queue-panel {
+      border: 1px solid var(--line-soft);
+      border-radius: 14px;
+      background: var(--panel-strong);
+      padding: 14px;
+    }
+    .queue-panel ul {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+    .queue-actions {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .notes {
+      margin-top: 18px;
+      padding: 18px;
+    }
+    .notes-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .note-card {
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid var(--line-soft);
+      background: var(--panel-strong);
+    }
+    .note-card strong {
+      display: block;
+      margin-bottom: 8px;
+    }
+    @media (max-width: 1200px) {
+      .hero,
+      .workspace,
+      .detail-images,
+      .detail-evidence,
+      .detail-workbench,
+      .notes-grid,
+      .filters {
+        grid-template-columns: 1fr;
+      }
+      .left-pane {
+        border-right: 0;
+        border-bottom: 1px solid var(--line-soft);
+        padding-right: 0;
+        padding-bottom: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div>
+        <h1>约字检索报告 · 档案校对工作台</h1>
+        <p>把“找到结果、看清出处、完成校对”压缩到同一屏。左侧持续浏览命中队列，右侧固定显示原页、裁剪图和校对动作，避免在表格和弹层之间来回跳。</p>
+        <div class="badges">
+          <span class="badge">优先目标：快速回到出处</span>
+          <span class="badge">次要目标：按文档 / 页码做研究筛选</span>
+          <span class="badge">增强能力：状态、备注、本地保存、导出</span>
+        </div>
+      </div>
+      <div class="hero-stats">
+        <div class="hero-stat"><strong>当前文档</strong><span>道光婺源县志</span></div>
+        <div class="hero-stat"><strong>命中总数</strong><span>136</span></div>
+        <div class="hero-stat"><strong>待校对</strong><span>28</span></div>
+        <div class="hero-stat"><strong>当前定位</strong><span>第 312 页</span></div>
+      </div>
+    </section>
+
+    <section class="toolbar">
+      <h2>一屏就能上手的筛选条</h2>
+      <div class="filters">
+        <div class="field">
+          <label>按文档筛选</label>
+          <div class="box">道光婺源县志.pdf</div>
+        </div>
+        <div class="field">
+          <label>页码区间</label>
+          <div class="box">280 - 340</div>
+        </div>
+        <div class="field">
+          <label>图像证据</label>
+          <div class="box">仅看有原页图和裁剪图</div>
+        </div>
+        <div class="field">
+          <label>快速队列</label>
+          <div class="box">只看待校对</div>
+        </div>
+      </div>
+      <div class="filter-row">
+        <span class="mini-chip active">按文档顺序 + 页码顺序</span>
+        <span class="mini-chip">导出当前筛选结果</span>
+        <span class="mini-chip">恢复上次校对现场</span>
+        <span class="mini-chip">跳到上一条未处理</span>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="left-pane">
+        <div class="pane-head">
+          <div>
+            <div class="pane-title">结果清单</div>
+            <div class="pane-sub">先扫清单，再点一条；右侧详情始终常驻，不再用弹层打断。</div>
+          </div>
+          <div class="mini-chip active">28 条待校对</div>
+        </div>
+        <div class="result-list">
+          <article class="result-card active">
+            <div class="result-top">
+              <div class="result-char">約</div>
+              <div class="result-status status-review">needs_review</div>
+            </div>
+            <div class="result-title">道光婺源县志 · 第 312 页 · 页内第 2 处</div>
+            <div class="result-meta">原页与裁剪图齐全 · 文档内顺序 87 · OCR 置信度 0.81</div>
+            <div class="result-context">上下文：……里甲以約束乡民，旧例仍存……</div>
+            <div class="result-actions">
+              <span class="action-btn">定位出处</span>
+              <span class="action-btn">复制路径</span>
+              <span class="action-btn">加入待复核队列</span>
+            </div>
+          </article>
+
+          <article class="result-card">
+            <div class="result-top">
+              <div class="result-char">约</div>
+              <div class="result-status status-ok">confirmed</div>
+            </div>
+            <div class="result-title">道光婺源县志 · 第 313 页 · 页内第 1 处</div>
+            <div class="result-meta">原页与裁剪图齐全 · 文档内顺序 88 · OCR 置信度 0.93</div>
+            <div class="result-context">上下文：……约为定额，不得擅改……</div>
+            <div class="result-actions">
+              <span class="action-btn">定位出处</span>
+              <span class="action-btn">复制路径</span>
+            </div>
+          </article>
+
+          <article class="result-card">
+            <div class="result-top">
+              <div class="result-char">約</div>
+              <div class="result-status status-no">rejected</div>
+            </div>
+            <div class="result-title">道光婺源县志 · 第 318 页 · 页内第 4 处</div>
+            <div class="result-meta">有裁剪图 · 原页较模糊 · OCR 置信度 0.58</div>
+            <div class="result-context">上下文：……疑似误识别，实为“納”旁近形……</div>
+            <div class="result-actions">
+              <span class="action-btn">定位出处</span>
+              <span class="action-btn">查看备注</span>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div class="right-pane">
+        <section class="detail-head">
+          <div>
+            <h3>当前条目：道光婺源县志 · 第 312 页 · 約</h3>
+            <div class="detail-meta">默认顺序：先看原页定位，再看裁剪核对，最后看文本与技术线索。</div>
+            <div class="badges" style="margin-top:10px">
+              <span class="badge">页内定位</span>
+              <span class="badge">单独看原页</span>
+              <span class="badge">复制原始路径</span>
+            </div>
+          </div>
+          <div class="detail-note">
+            操作目标：<br>
+            1. 确认是否真是“约/約”<br>
+            2. 快速回到原页出处<br>
+            3. 留下状态与备注
+          </div>
+        </section>
+
+        <section class="detail-images">
+          <div class="image-panel">
+            <strong>原页定位视图</strong>
+            <div class="page-stage">
+              <div class="page-box"></div>
+              <div class="highlight"></div>
+            </div>
+            <div class="detail-note">当前页内自动高亮目标位置，并保留“单独打开原页”入口。</div>
+          </div>
+          <div class="image-panel">
+            <strong>裁剪核对视图</strong>
+            <div class="crop-stage">
+              <div class="crop-glyph">約</div>
+            </div>
+            <div class="detail-note">裁剪图不再埋在弹层说明里，而是直接进入主校对流程。</div>
+          </div>
+        </section>
+
+        <section class="detail-evidence">
+          <div class="evidence-block">
+            <strong>文本与出处线索</strong>
+            <div class="detail-meta">
+              文档名：道光婺源县志.pdf<br>
+              相对路径：地方志 / 婺源县 / 道光婺源县志.pdf<br>
+              页码：312 / 1858<br>
+              上下文：……里甲以約束乡民，旧例仍存……
+            </div>
+          </div>
+          <div class="evidence-block">
+            <strong>技术证据</strong>
+            <div class="detail-meta">
+              定位方式：djvu_ocr<br>
+              OCR 置信度：0.81<br>
+              二次 OCR：約 / 0.77<br>
+              坐标：保留，但降级到辅助信息
+            </div>
+          </div>
+        </section>
+
+        <section class="detail-workbench">
+          <div>
+            <div class="pane-title">校对动作区</div>
+            <div class="filter-row" style="margin-top:0; margin-bottom:12px;">
+              <span class="queue-btn primary">标记 confirmed</span>
+              <span class="queue-btn">标记 needs_review</span>
+              <span class="queue-btn no">标记 rejected</span>
+              <span class="queue-btn">保存本地进度</span>
+              <span class="queue-btn">导出校对记录</span>
+            </div>
+            <div class="textarea">备注输入区：例如“字形偏近‘納’，但结合上下文仍判为‘約’；建议保留并补审旁页。”</div>
+          </div>
+          <div class="queue-panel">
+            <div class="pane-title">连续校对队列</div>
+            <ul>
+              <li>上一条 / 下一条</li>
+              <li>同页上一处 / 同页下一处</li>
+              <li>下一条待校对结果</li>
+              <li>仅浏览当前筛选集</li>
+              <li>本地持久化，下次继续</li>
+            </ul>
+            <div class="queue-actions">
+              <span class="queue-btn">上一条</span>
+              <span class="queue-btn primary">下一条待校对</span>
+              <span class="queue-btn">打开原页大图</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="notes">
+      <h2>这版草图的重点取舍</h2>
+      <div class="notes-grid">
+        <div class="note-card">
+          <strong>为什么弱化大表格</strong>
+          首屏不再堆所有技术字段，避免“找得到数据但看不清出处”。全字段仍保留到详情中。
+        </div>
+        <div class="note-card">
+          <strong>为什么固定右侧详情</strong>
+          你要做的是连续校对，不是一次次打开查看器。固定详情能减少来回跳转成本。
+        </div>
+        <div class="note-card">
+          <strong>为什么吸收队列能力</strong>
+          把状态、备注、下一条待校对并入同屏，才能兼顾“研究筛选”和“深校对”。
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
