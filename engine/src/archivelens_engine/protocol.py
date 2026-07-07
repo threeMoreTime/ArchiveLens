@@ -41,6 +41,8 @@ class ErrorCode:
     PROTOCOL_MISMATCH = "PROTOCOL_MISMATCH"
     UNKNOWN_METHOD = "UNKNOWN_METHOD"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
+    ENGINE_SHUTTING_DOWN = "ENGINE_SHUTTING_DOWN"
+    ENGINE_STOPPED = "ENGINE_STOPPED"
 
 
 # --------------------------------------------------------------------------- #

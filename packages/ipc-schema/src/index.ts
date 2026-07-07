@@ -32,6 +32,8 @@ export const ErrorCodeSchema = z.enum([
   "PROTOCOL_MISMATCH",
   "UNKNOWN_METHOD",
   "UNKNOWN_ERROR",
+  "ENGINE_SHUTTING_DOWN",
+  "ENGINE_STOPPED",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 

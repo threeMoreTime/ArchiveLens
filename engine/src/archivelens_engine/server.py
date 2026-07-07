@@ -94,6 +94,7 @@ class Server:
             self.ocr_engine: Any = ThreadSafeRapidOCR()
         else:
             self.ocr_engine = None
+        self._shutting_down = False
         self._register_defaults()
 
     # ---- 输出 ----
@@ -130,6 +131,11 @@ class Server:
         try:
             require_protocol_version(message)
             method = message.get("method")
+            if self._shutting_down and method != "app.shutdown":
+                raise ProtocolError(
+                    ErrorCode.ENGINE_SHUTTING_DOWN,
+                    "Engine 正在关闭，不接受新请求",
+                )
             params = message.get("params") or {}
             if not isinstance(params, dict):
                 raise ProtocolError(ErrorCode.VALIDATION_ERROR, "params 必须是对象")
@@ -157,6 +163,7 @@ class Server:
         self.handlers.update(
             {
                 "app.info": _h_app_info,
+                "app.shutdown": _h_shutdown,
                 "diagnostics.run": _h_diagnostics,
                 "tasks.create": _h_tasks_create,
                 "tasks.start": _h_tasks_start,
@@ -322,6 +329,21 @@ def _h_app_info(server: Server, params: dict) -> dict:
 
 def _h_diagnostics(server: Server, params: dict) -> dict:
     return detect_all(server.config, server.workspace_root)
+
+
+def _h_shutdown(server: Server, params: dict) -> dict:
+    """优雅 shutdown（任务 §六）：设标志 + 唤醒 paused/cancel + emit。
+
+    幂等：重复 shutdown 返回当前状态，不重复销毁。
+    """
+    if server._shutting_down:
+        return {"status": "shutting_down", "already": True}
+    server._shutting_down = True
+    # 唤醒所有 paused/正在处理的任务（协作式退出）
+    for tc in server._task_controls.values():
+        tc.request_cancel()
+    server.emit_event("engine.shutdown", payload={"reason": "requested"})
+    return {"status": "shutting_down"}
 
 
 def _h_tasks_create(server: Server, params: dict) -> dict:
