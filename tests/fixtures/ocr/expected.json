@@ -1,0 +1,34 @@
+{
+  "documents": [
+    {
+      "file": "simplified-horizontal.pdf",
+      "expected_min_hits": 2,
+      "expected_characters": [
+        "约"
+      ]
+    },
+    {
+      "file": "traditional-horizontal.pdf",
+      "expected_min_hits": 2,
+      "expected_characters": [
+        "約"
+      ]
+    },
+    {
+      "file": "mixed-multipage.pdf",
+      "expected_min_hits": 2,
+      "expected_characters": [
+        "约",
+        "約"
+      ]
+    },
+    {
+      "file": "中文 空格 # %.pdf",
+      "expected_min_hits": 1,
+      "expected_characters": [
+        "约",
+        "約"
+      ]
+    }
+  ]
+}

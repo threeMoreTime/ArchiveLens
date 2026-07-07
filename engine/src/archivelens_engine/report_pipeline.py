@@ -17,13 +17,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-import fitz
 import pytesseract
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 
 from .config import DEFAULT_CONFIG, EngineConfig, TARGET_CHARS
 from .runtime.task_control import TaskControl
+from .documents import DocumentBackendRegistry
 from .ocr_core import (
     assign_occurrence_indexes,
     build_context_fields,
@@ -77,6 +77,7 @@ class ReportPipeline:
         # Phase 1 预留实例配置入口；Phase 3 起 Sidecar 将按任务注入打包内路径。
         self.config = config or DEFAULT_CONFIG
         self.task_control = task_control
+        self.backend_registry = DocumentBackendRegistry(self.config)
         self.root_dir = root_dir
         self.output_html = output_html
         self.workspace_dir = workspace_dir
@@ -245,16 +246,7 @@ class ReportPipeline:
         self._checkpoint_path(document).unlink(missing_ok=True)
 
     def _page_count(self, path: Path) -> int:
-        if path.suffix.lower() == ".pdf":
-            doc = fitz.open(path)
-            return doc.page_count
-        result = subprocess.run(
-            [str(DJVU_BIN_DIR / "djvused.exe"), "-e", "n", str(path)],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return int(result.stdout.strip())
+        return self.backend_registry.page_count(path)
 
     def _sha256(self, path: Path) -> str:
         digest = hashlib.sha256()
@@ -405,30 +397,9 @@ class ReportPipeline:
                 render_path.unlink(missing_ok=True)
 
     def _render_page(self, document: DocumentRecord, page_index: int) -> Path:
-        render_path = self.run_dir / f"{document.document_id}-p{page_index+1}.png"
-        if document.file_type == "PDF":
-            pdf = fitz.open(document.file_path)
-            page = pdf[page_index]
-            pix = page.get_pixmap(matrix=fitz.Matrix(DEFAULT_RENDER_DPI / 72, DEFAULT_RENDER_DPI / 72), alpha=False)
-            render_path.write_bytes(pix.tobytes("png"))
-            pdf.close()
-            return render_path
-        ppm_path = self.run_dir / f"{document.document_id}-p{page_index+1}.ppm"
-        subprocess.run(
-            [
-                str(DJVU_BIN_DIR / "ddjvu.exe"),
-                "-format=ppm",
-                f"-page={page_index + 1}",
-                str(document.file_path),
-                str(ppm_path),
-            ],
-            check=True,
-            capture_output=True,
+        return self.backend_registry.render_page(
+            document.file_path, page_index, DEFAULT_RENDER_DPI
         )
-        with Image.open(ppm_path) as image:
-            image.save(render_path)
-        ppm_path.unlink(missing_ok=True)
-        return render_path
 
     def _line_rect(self, polygon: list[list[float]]) -> tuple[float, float, float, float]:
         xs = [float(point[0]) for point in polygon]
