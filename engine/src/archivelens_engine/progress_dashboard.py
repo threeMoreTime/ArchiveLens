@@ -7,28 +7,64 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .runtime.worker_state import WorkerState, classify_worker_status, load_worker_state
+
 
 def _latest_checkpoint(run_dir: Path) -> Path | None:
     checkpoints = sorted(run_dir.glob("checkpoint-*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     return checkpoints[0] if checkpoints else None
 
 
-def _load_running_worker(worker_dir: Path, checkpoint_path: Path) -> dict[str, Any]:
+def _checkpoint_progress(checkpoint_path: Path) -> dict[str, Any]:
+    """从 checkpoint 读取进度字段（不判定状态）。"""
     payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     total_pages = int(payload.get("document_page_count") or 0)
     processed_pages = int(payload.get("next_page_index") or 0)
+    return {
+        "file": payload.get("relative_path", ""),
+        "processed_pages": processed_pages,
+        "total_pages": total_pages,
+        "occurrences_found": len(payload.get("occurrences", [])),
+        "failure_count": len(payload.get("failures", [])),
+    }
+
+
+def _load_worker_from_state(worker_dir: Path, state: WorkerState) -> dict[str, Any]:
+    """基于显式 WorkerState 综合判定状态（任务 §十二）。"""
+    status = classify_worker_status(state, report_completed=False)
+    total_pages = state.total_pages
+    processed_pages = state.processed_pages
     remaining_pages = max(total_pages - processed_pages, 0)
     progress_pct = round((processed_pages / total_pages) * 100, 2) if total_pages else 0.0
     return {
         "worker": worker_dir.name,
-        "file": payload.get("relative_path", ""),
-        "status": "running",
+        "file": state.input_file or worker_dir.name,
+        "status": status,
         "processed_pages": processed_pages,
         "total_pages": total_pages,
         "remaining_pages": remaining_pages,
         "progress_pct": progress_pct,
-        "occurrences_found": len(payload.get("occurrences", [])),
-        "failure_count": len(payload.get("failures", [])),
+        "occurrences_found": state.occurrences_found,
+        "failure_count": state.failure_count,
+        "updated_at": state.heartbeat_at or state.started_at or "",
+    }
+
+
+def _load_stale_worker(worker_dir: Path, checkpoint_path: Path) -> dict[str, Any]:
+    """残留 checkpoint 但无 worker-state：标记 stale，绝不判 running（核心修复）。"""
+    progress = _checkpoint_progress(checkpoint_path)
+    total_pages = progress["total_pages"]
+    processed_pages = progress["processed_pages"]
+    return {
+        "worker": worker_dir.name,
+        "file": progress["file"],
+        "status": "stale",
+        "processed_pages": processed_pages,
+        "total_pages": total_pages,
+        "remaining_pages": max(total_pages - processed_pages, 0),
+        "progress_pct": round((processed_pages / total_pages) * 100, 2) if total_pages else 0.0,
+        "occurrences_found": progress["occurrences_found"],
+        "failure_count": progress["failure_count"],
         "updated_at": datetime.fromtimestamp(checkpoint_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -60,8 +96,14 @@ def collect_progress_snapshot(workspace_dir: Path) -> dict[str, Any]:
         checkpoint_path = _latest_checkpoint(run_dir)
         if report_path.exists():
             workers.append(_load_completed_worker(worker_dir, report_path))
+            continue
+        state_path = worker_dir / "worker-state.json"
+        worker_state = load_worker_state(state_path)
+        if worker_state is not None:
+            workers.append(_load_worker_from_state(worker_dir, worker_state))
         elif checkpoint_path is not None:
-            workers.append(_load_running_worker(worker_dir, checkpoint_path))
+            # 残留 checkpoint 无 worker-state：绝不判 running（任务 §十二 核心修复）
+            workers.append(_load_stale_worker(worker_dir, checkpoint_path))
 
     total_pages = sum(worker["total_pages"] for worker in workers)
     processed_pages = sum(worker["processed_pages"] for worker in workers)
@@ -84,6 +126,7 @@ def collect_progress_snapshot(workspace_dir: Path) -> dict[str, Any]:
             "worker_count": len(workers),
             "completed_workers": sum(1 for worker in workers if worker["status"] == "completed"),
             "running_workers": sum(1 for worker in workers if worker["status"] == "running"),
+            "stale_workers": sum(1 for worker in workers if worker["status"] == "stale"),
             "total_pages": total_pages,
             "processed_pages": processed_pages,
             "remaining_pages": remaining_pages,
