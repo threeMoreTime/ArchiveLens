@@ -238,7 +238,7 @@ class WriteReportOutputsTests(unittest.TestCase):
                 self.assertIn("档案校对工作台", html)
                 self.assertIn("结果清单", html)
                 self.assertIn("导出校对记录", html)
-                self.assertIn("更多信息", html)
+                self.assertIn("查看来源详情", html)
                 self.assertIn("localStorage", html)
                 self.assertNotIn("验证状态", html)
                 self.assertNotIn("OCR 引擎", html)
@@ -265,9 +265,13 @@ class WorkbenchHtmlTests(unittest.TestCase):
 
             self.assertIn("档案校对工作台", html)
             self.assertIn("结果清单", html)
-            self.assertIn("出处页", html)
+            self.assertIn("workspace-shell", html)
+            self.assertIn("detail-pane detail-pane-b2", html)
+            self.assertIn("viewer-grid viewer-grid-b2", html)
+            self.assertIn("detail-strip", html)
+            self.assertIn("detail-bottom-bar", html)
+            self.assertIn("出处页预览", html)
             self.assertIn("截取小图", html)
-            self.assertIn("校对结论", html)
             self.assertNotIn("验证状态", html)
             self.assertNotIn("OCR 引擎", html)
 
@@ -289,9 +293,14 @@ class WorkbenchHtmlTests(unittest.TestCase):
             self.assertIn("function renderResultsList()", html)
             self.assertIn("function selectOccurrence(", html)
             self.assertIn("function goToNextPending()", html)
+            self.assertIn("function zoomViewer(", html)
+            self.assertIn("function resetViewer(", html)
+            self.assertIn("function syncViewersFromPrimary(", html)
+            self.assertIn("function openImmersivePreview(", html)
             self.assertIn("上一条", html)
             self.assertIn("下一条", html)
             self.assertIn("下一条待处理", html)
+            self.assertIn("重新居中", html)
 
     def test_build_html_includes_local_review_persistence_and_export(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -313,6 +322,8 @@ class WorkbenchHtmlTests(unittest.TestCase):
             self.assertIn("loadReviewState", html)
             self.assertIn("export-review", html)
             self.assertIn("导出校对记录", html)
+            self.assertIn("toggle-note-editor", html)
+            self.assertIn("查看来源详情", html)
 
     def test_build_html_excludes_loading_feedback_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -399,7 +410,10 @@ class WorkbenchHtmlTests(unittest.TestCase):
             self.assertNotIn("待人工复核", html)
             self.assertNotIn("处理失败文件", html)
             self.assertNotIn("执行报告", html)
-            self.assertNotIn("viewer", html)
+            self.assertIn("viewer-shell", html)
+            self.assertIn("view-toolbar", html)
+            self.assertIn("result-meta-row", html)
+            self.assertIn("result-context-line", html)
 
 
 class MergeExistingReportsTests(unittest.TestCase):

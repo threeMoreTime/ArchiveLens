@@ -764,7 +764,7 @@ class ReportPipeline:
                   margin: 0 auto;
                   padding: 18px;
                 }
-                .hero, .toolbar, .workspace {
+                .hero, .toolbar, .workspace, .workspace-shell {
                   background: rgba(255, 250, 240, 0.9);
                   border: 1px solid var(--line);
                   border-radius: 22px;
@@ -877,18 +877,47 @@ class ReportPipeline:
                   color: #6d2d04;
                   font-weight: 700;
                 }
-                .workspace {
+                .workspace-shell {
                   margin-top: 16px;
                   padding: 16px;
+                  height: calc(100vh - 210px);
+                  min-height: 720px;
+                }
+                .workspace {
+                  height: 100%;
+                  min-height: 0;
                   display: grid;
                   grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.28fr);
                   gap: 16px;
-                  min-height: 820px;
+                }
+                .results-pane,
+                .detail-pane {
+                  min-height: 0;
+                  height: 100%;
                 }
                 .results-pane {
                   border-right: 1px solid var(--line-soft);
                   padding-right: 14px;
                   min-width: 0;
+                  display: grid;
+                  grid-template-rows: auto auto 1fr;
+                  gap: 12px;
+                }
+                .detail-pane.detail-pane-b2 {
+                  position: relative;
+                  min-width: 0;
+                }
+                .detail-scroll {
+                  height: 100%;
+                  min-height: 0;
+                  padding: 16px;
+                  border: 1px solid var(--line-soft);
+                  border-radius: 20px;
+                  background: rgba(255, 253, 248, 0.78);
+                  display: grid;
+                  grid-template-rows: auto auto auto auto auto;
+                  gap: 12px;
+                  overflow: auto;
                 }
                 .pane-head {
                   display: flex;
@@ -928,12 +957,12 @@ class ReportPipeline:
                 .results-list {
                   display: grid;
                   gap: 10px;
-                  max-height: 710px;
+                  min-height: 0;
                   overflow: auto;
                   padding-right: 4px;
                 }
                 .result-card {
-                  padding: 14px;
+                  padding: 12px;
                   border-radius: 18px;
                   border: 1px solid var(--line-soft);
                   background: var(--panel);
@@ -945,10 +974,11 @@ class ReportPipeline:
                   box-shadow: inset 0 0 0 1px rgba(208, 141, 80, 0.18);
                 }
                 .result-card h3 {
-                  margin: 0 0 8px;
-                  font-size: 16px;
+                  margin: 0;
+                  font-size: 15px;
+                  line-height: 1.45;
                 }
-                .status-row, .chip-row, .action-row, .decision-row, .nav-row {
+                .status-row, .chip-row, .action-row, .decision-row, .nav-row, .result-meta-row, .toolbar-row {
                   display: flex;
                   gap: 8px;
                   flex-wrap: wrap;
@@ -956,7 +986,19 @@ class ReportPipeline:
                 .status-row {
                   align-items: center;
                   justify-content: space-between;
-                  margin-bottom: 8px;
+                }
+                .result-meta-row {
+                  align-items: center;
+                  justify-content: space-between;
+                  margin: 8px 0 6px;
+                  color: var(--muted);
+                  font-size: 12px;
+                }
+                .result-context-line {
+                  margin-top: 6px;
+                  color: var(--muted);
+                  font-size: 13px;
+                  line-height: 1.55;
                 }
                 .status-badge, .evidence-chip, .count-chip {
                   display: inline-flex;
@@ -971,18 +1013,15 @@ class ReportPipeline:
                 .status-confirmed { color: var(--ok); }
                 .status-needs_review { color: var(--warn); }
                 .status-rejected { color: var(--bad); }
-                .detail-pane {
-                  position: relative;
-                  display: grid;
-                  grid-template-rows: auto auto auto auto auto 1fr;
-                  gap: 14px;
-                  min-width: 0;
-                }
                 .detail-block, details {
                   border: 1px solid var(--line-soft);
                   border-radius: 18px;
                   background: var(--panel);
                   padding: 16px;
+                }
+                .detail-strip {
+                  display: grid;
+                  gap: 10px;
                 }
                 .detail-summary {
                   display: flex;
@@ -1000,20 +1039,90 @@ class ReportPipeline:
                   gap: 12px;
                   margin-bottom: 12px;
                 }
-                .page-stage {
+                .detail-kicker {
+                  display: flex;
+                  gap: 8px;
+                  flex-wrap: wrap;
+                }
+                .detail-main-line {
+                  display: flex;
+                  align-items: start;
+                  justify-content: space-between;
+                  gap: 12px;
+                }
+                .detail-title-group {
+                  display: grid;
+                  gap: 6px;
+                  min-width: 0;
+                }
+                .detail-title-group h2 {
+                  font-size: 24px;
+                  line-height: 1.2;
+                }
+                .detail-subline {
+                  color: var(--muted);
+                  font-size: 13px;
+                  line-height: 1.55;
+                }
+                .viewer-grid {
+                  display: grid;
+                  gap: 12px;
+                }
+                .viewer-grid-b2 {
+                  grid-template-columns: minmax(0, 1.18fr) minmax(280px, 0.82fr);
+                }
+                .viewer-shell {
+                  display: grid;
+                  grid-template-rows: auto 1fr;
+                  min-height: 0;
+                }
+                .view-toolbar {
+                  display: flex;
+                  align-items: center;
+                  justify-content: space-between;
+                  gap: 10px;
+                  margin-bottom: 10px;
+                }
+                .toolbar-row {
+                  align-items: center;
+                }
+                .toolbar-row button {
+                  width: auto;
+                  min-width: 42px;
+                }
+                .viewer-stage {
                   position: relative;
-                  min-height: 360px;
-                  overflow: auto;
+                  min-height: 420px;
+                  overflow: hidden;
                   border-radius: 14px;
                   background: linear-gradient(180deg, #fffef9 0%, #f7ecd6 100%);
                   border: 1px solid rgba(124, 93, 53, 0.14);
-                  display: grid;
-                  place-items: center;
+                  cursor: grab;
                 }
-                .page-stage img {
+                .viewer-stage.is-dragging {
+                  cursor: grabbing;
+                }
+                .viewer-stage crop-stage {
+                  min-height: 320px;
+                }
+                .viewer-canvas {
+                  position: absolute;
+                  inset: 0;
+                  overflow: hidden;
+                }
+                .viewer-asset {
+                  position: absolute;
+                  left: 0;
+                  top: 0;
+                  transform-origin: top left;
+                  will-change: transform;
+                }
+                .viewer-image {
                   display: block;
-                  max-width: 100%;
+                  width: 100%;
                   height: auto;
+                  user-select: none;
+                  -webkit-user-drag: none;
                 }
                 .hit-box {
                   position: absolute;
@@ -1021,19 +1130,42 @@ class ReportPipeline:
                   background: rgba(255, 220, 86, 0.28);
                   box-shadow: 0 0 0 6px rgba(255, 203, 0, 0.1);
                 }
-                .crop-stage {
-                  min-height: 240px;
-                  border-radius: 14px;
-                  background: linear-gradient(180deg, #fffef8 0%, #f8ecd4 100%);
-                  border: 1px solid rgba(124, 93, 53, 0.14);
+                .viewer-caption {
+                  color: var(--muted);
+                  font-size: 12px;
+                  line-height: 1.5;
+                }
+                .detail-bottom-bar {
+                  display: grid;
+                  gap: 12px;
+                }
+                .decision-row button,
+                .nav-row button {
+                  width: auto;
+                }
+                .note-editor[hidden] {
+                  display: none;
+                }
+                .note-editor {
+                  display: grid;
+                  gap: 8px;
+                }
+                .more-grid {
+                  display: grid;
+                  gap: 8px;
+                  margin-top: 12px;
+                }
+                .more-grid div {
+                  color: var(--muted);
+                  line-height: 1.6;
+                }
+                .viewer-empty {
+                  height: 100%;
                   display: grid;
                   place-items: center;
-                  overflow: hidden;
-                }
-                .crop-stage img {
-                  max-width: 100%;
-                  max-height: 280px;
-                  display: block;
+                  color: var(--muted);
+                  text-align: center;
+                  padding: 24px;
                 }
                 .empty-image {
                   color: var(--muted);
@@ -1051,14 +1183,38 @@ class ReportPipeline:
                   cursor: pointer;
                   font-weight: 700;
                 }
-                .more-grid {
-                  display: grid;
-                  gap: 8px;
-                  margin-top: 12px;
+                .immersive-preview {
+                  position: fixed;
+                  inset: 0;
+                  z-index: 30;
+                  padding: 28px;
+                  background: rgba(32, 21, 12, 0.82);
+                  display: none;
                 }
-                .more-grid div {
-                  color: var(--muted);
-                  line-height: 1.6;
+                .immersive-preview.open {
+                  display: block;
+                }
+                .immersive-dialog {
+                  height: 100%;
+                  display: grid;
+                  grid-template-rows: auto 1fr;
+                  gap: 12px;
+                  padding: 16px;
+                  border-radius: 24px;
+                  background: rgba(255, 249, 239, 0.98);
+                  border: 1px solid rgba(214, 187, 142, 0.88);
+                }
+                .immersive-stage {
+                  min-height: 0;
+                  height: 100%;
+                }
+                .immersive-stage .viewer-shell {
+                  height: 100%;
+                  grid-template-rows: 1fr;
+                }
+                .immersive-stage .viewer-stage {
+                  height: 100%;
+                  min-height: 100%;
                 }
                 .empty-state {
                   border: 1px dashed var(--line);
@@ -1069,7 +1225,7 @@ class ReportPipeline:
                   text-align: center;
                 }
                 @media (max-width: 1200px) {
-                  .hero, .workspace, .filters {
+                  .hero, .workspace, .filters, .viewer-grid-b2 {
                     grid-template-columns: 1fr;
                   }
                   .results-pane {
@@ -1077,6 +1233,18 @@ class ReportPipeline:
                     border-bottom: 1px solid var(--line-soft);
                     padding-right: 0;
                     padding-bottom: 14px;
+                  }
+                  .workspace-shell {
+                    height: auto;
+                    min-height: auto;
+                  }
+                  .detail-scroll {
+                    padding: 0;
+                    border: 0;
+                    background: transparent;
+                  }
+                  .viewer-stage {
+                    min-height: 320px;
                   }
                 }
               </style>
@@ -1117,34 +1285,57 @@ class ReportPipeline:
                     <button id="export-review" class="primary-button">导出校对记录</button>
                   </div>
                 </section>
-                <section class="workspace">
-                  <aside class="results-pane">
-                    <div class="pane-head">
-                      <div>
-                        <h2>结果清单</h2>
-                        <small>按文档顺序与页码顺序排列，适合连续校对。</small>
+                <section class="workspace-shell">
+                  <section class="workspace">
+                    <aside class="results-pane">
+                      <div class="pane-head">
+                        <div>
+                          <h2>结果清单</h2>
+                          <small>按文档顺序与页码顺序排列，适合连续校对。</small>
+                        </div>
+                        <div id="result-count" class="count-chip"></div>
                       </div>
-                      <div id="result-count" class="count-chip"></div>
-                    </div>
-                    <div class="scope-switches">
-                      <button class="scope-switch active" data-scope="all">全部结果</button>
-                      <button class="scope-switch" data-scope="pending">只看待处理</button>
-                      <button class="scope-switch" data-scope="confirmed">只看已确认</button>
-                    </div>
-                    <div id="results-list" class="results-list"></div>
-                  </aside>
-                  <main class="detail-pane">
-                    <section id="detail-summary" class="detail-block"></section>
-                    <section id="detail-page" class="detail-block"></section>
-                    <section id="detail-crop" class="detail-block"></section>
-                    <section id="detail-context" class="detail-block"></section>
-                    <section id="detail-actions" class="detail-block"></section>
-                    <details id="detail-more">
-                      <summary>更多信息</summary>
-                      <div id="detail-more-body" class="more-grid"></div>
-                    </details>
-                  </main>
+                      <div class="scope-switches">
+                        <button class="scope-switch active" data-scope="all">全部结果</button>
+                        <button class="scope-switch" data-scope="pending">只看待处理</button>
+                        <button class="scope-switch" data-scope="confirmed">只看已确认</button>
+                      </div>
+                      <div id="results-list" class="results-list"></div>
+                    </aside>
+                    <main class="detail-pane detail-pane-b2">
+                      <div id="detail-scroll" class="detail-scroll">
+                        <section id="detail-summary" class="detail-block detail-strip"></section>
+                        <section class="viewer-grid viewer-grid-b2">
+                          <section id="detail-page" class="detail-block viewer-shell"></section>
+                          <section id="detail-crop" class="detail-block viewer-shell"></section>
+                        </section>
+                        <section id="detail-context" class="detail-block"></section>
+                        <section id="detail-actions" class="detail-block detail-bottom-bar"></section>
+                        <details id="detail-more">
+                          <summary>查看来源详情</summary>
+                          <div id="detail-more-body" class="more-grid"></div>
+                        </details>
+                      </div>
+                    </main>
+                  </section>
                 </section>
+              </div>
+              <div id="immersive-preview" class="immersive-preview" aria-hidden="true">
+                <div class="immersive-dialog">
+                  <div class="view-toolbar">
+                    <div>
+                      <h2 id="immersive-title">预览</h2>
+                      <p class="viewer-caption">滚轮缩放，拖动平移，双击重置，按 Esc 关闭。</p>
+                    </div>
+                    <div class="toolbar-row">
+                      <button class="action-button" data-zoom="immersive:-1">-</button>
+                      <button class="action-button" data-reset-viewer="immersive">100%</button>
+                      <button class="action-button" data-zoom="immersive:1">+</button>
+                      <button class="primary-button" data-close-preview="immersive">关闭</button>
+                    </div>
+                  </div>
+                  <section id="immersive-stage" class="immersive-stage"></section>
+                </div>
               </div>
               <script>
                 window.REPORT_DATA = __DATA_JSON__;
@@ -1163,7 +1354,13 @@ class ReportPipeline:
                 let filtered = [];
                 let currentOccurrenceId = null;
                 let scopeMode = "all";
-                let isInitialLoading = true;
+                let activeDetailItem = null;
+                let detailUiState = { noteOpen: false };
+                const viewerState = {
+                  page: { scale: 1, panX: null, panY: null, minScale: 1, maxScale: 6, targetX: 0.5, targetY: 0.5, dragging: null },
+                  crop: { scale: 1, panX: null, panY: null, minScale: 1, maxScale: 6, targetX: 0.5, targetY: 0.5, dragging: null },
+                  immersive: { scale: 1, panX: null, panY: null, minScale: 1, maxScale: 8, targetX: 0.5, targetY: 0.5, dragging: null, source: null },
+                };
 
                 function escapeHtml(value) {
                   return String(value ?? "").replace(/[&<>"']/g, char => ({
@@ -1187,6 +1384,169 @@ class ReportPipeline:
                   const url = URL.createObjectURL(blob);
                   window.__assetCache[assetKey] = url;
                   return url;
+                }
+
+                function clamp(value, min, max) {
+                  return Math.min(Math.max(value, min), max);
+                }
+
+                function getHitTarget(item) {
+                  if (!item) return { x: 0.5, y: 0.5 };
+                  const x = (Number(item.normalized_x0) + Number(item.normalized_x1)) / 2;
+                  const y = (Number(item.normalized_y0) + Number(item.normalized_y1)) / 2;
+                  return {
+                    x: Number.isFinite(x) ? x : 0.5,
+                    y: Number.isFinite(y) ? y : 0.5,
+                  };
+                }
+
+                function getViewerConfig(kind) {
+                  if (kind === "page" && activeDetailItem) {
+                    const page = pageMap[activeDetailItem.page_image_id];
+                    return {
+                      stage: document.getElementById("page-stage"),
+                      asset: document.getElementById("page-asset"),
+                      width: Number(page?.page_width || activeDetailItem.source_page_width || 0),
+                      height: Number(page?.page_height || activeDetailItem.source_page_height || 0),
+                    };
+                  }
+                  if (kind === "crop") {
+                    return {
+                      stage: document.getElementById("crop-stage"),
+                      asset: document.getElementById("crop-asset"),
+                    };
+                  }
+                  if (kind === "immersive") {
+                    return {
+                      stage: document.getElementById("immersive-viewer-stage"),
+                      asset: document.getElementById("immersive-asset"),
+                    };
+                  }
+                  return { stage: null, asset: null };
+                }
+
+                function getViewerDimensions(kind) {
+                  const config = getViewerConfig(kind);
+                  const stage = config.stage;
+                  const asset = config.asset;
+                  if (!stage || !asset) return null;
+                  const stageWidth = Math.max(stage.clientWidth, 1);
+                  const stageHeight = Math.max(stage.clientHeight, 1);
+                  let contentWidth = Number(config.width || asset.dataset.width || asset.querySelector("img")?.naturalWidth || 0);
+                  let contentHeight = Number(config.height || asset.dataset.height || asset.querySelector("img")?.naturalHeight || 0);
+                  if (!contentWidth || !contentHeight) {
+                    return null;
+                  }
+                  return { stage, asset, stageWidth, stageHeight, contentWidth, contentHeight };
+                }
+
+                function updateViewerTargetFromPan(kind) {
+                  const dims = getViewerDimensions(kind);
+                  if (!dims) return;
+                  const state = viewerState[kind];
+                  const fitScale = Math.min(dims.stageWidth / dims.contentWidth, dims.stageHeight / dims.contentHeight);
+                  const totalScale = fitScale * state.scale;
+                  state.targetX = clamp((dims.stageWidth / 2 - state.panX) / (dims.contentWidth * totalScale), 0, 1);
+                  state.targetY = clamp((dims.stageHeight / 2 - state.panY) / (dims.contentHeight * totalScale), 0, 1);
+                }
+
+                function applyViewerTransform(kind) {
+                  const dims = getViewerDimensions(kind);
+                  if (!dims) return;
+                  const state = viewerState[kind];
+                  const fitScale = Math.min(dims.stageWidth / dims.contentWidth, dims.stageHeight / dims.contentHeight);
+                  const totalScale = fitScale * state.scale;
+                  const renderedWidth = dims.contentWidth * totalScale;
+                  const renderedHeight = dims.contentHeight * totalScale;
+                  const centeredX = dims.stageWidth / 2 - state.targetX * renderedWidth;
+                  const centeredY = dims.stageHeight / 2 - state.targetY * renderedHeight;
+                  const minX = renderedWidth <= dims.stageWidth ? (dims.stageWidth - renderedWidth) / 2 : dims.stageWidth - renderedWidth;
+                  const maxX = renderedWidth <= dims.stageWidth ? minX : 0;
+                  const minY = renderedHeight <= dims.stageHeight ? (dims.stageHeight - renderedHeight) / 2 : dims.stageHeight - renderedHeight;
+                  const maxY = renderedHeight <= dims.stageHeight ? minY : 0;
+                  const desiredPanX = Number.isFinite(state.panX) ? state.panX : centeredX;
+                  const desiredPanY = Number.isFinite(state.panY) ? state.panY : centeredY;
+                  state.panX = clamp(desiredPanX, minX, maxX);
+                  state.panY = clamp(desiredPanY, minY, maxY);
+                  dims.asset.style.width = `${dims.contentWidth}px`;
+                  dims.asset.style.height = `${dims.contentHeight}px`;
+                  dims.asset.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${totalScale})`;
+                }
+
+                function syncViewersFromPrimary(kind) {
+                  if (kind === "page" && activeDetailItem) {
+                    const hit = getHitTarget(activeDetailItem);
+                    viewerState.page.targetX = hit.x;
+                    viewerState.page.targetY = hit.y;
+                  }
+                  if (kind === "page" || kind === "crop") {
+                    viewerState.crop.targetX = 0.5;
+                    viewerState.crop.targetY = 0.5;
+                  }
+                  applyViewerTransform("page");
+                  applyViewerTransform("crop");
+                }
+
+                function resetViewer(kind) {
+                  const state = viewerState[kind];
+                  state.scale = 1;
+                  state.panX = null;
+                  state.panY = null;
+                  state.dragging = null;
+                  if (kind === "page" && activeDetailItem) {
+                    const hit = getHitTarget(activeDetailItem);
+                    state.targetX = hit.x;
+                    state.targetY = hit.y;
+                  } else {
+                    state.targetX = 0.5;
+                    state.targetY = 0.5;
+                  }
+                  if (kind === "immersive") {
+                    applyViewerTransform("immersive");
+                    return;
+                  }
+                  syncViewersFromPrimary(kind);
+                }
+
+                function zoomViewer(kind, delta) {
+                  const state = viewerState[kind];
+                  state.scale = clamp(state.scale * (delta > 0 ? 1.18 : 1 / 1.18), state.minScale, state.maxScale);
+                  applyViewerTransform(kind);
+                }
+
+                function recenterHit() {
+                  resetViewer("page");
+                }
+
+                function openImmersivePreview(kind) {
+                  const sourceHtml = kind === "page" ? document.getElementById("detail-page").innerHTML : document.getElementById("detail-crop").innerHTML;
+                  const stage = document.getElementById("immersive-stage");
+                  const overlay = document.getElementById("immersive-preview");
+                  const title = document.getElementById("immersive-title");
+                  if (!stage || !overlay || !sourceHtml) return;
+                  title.textContent = kind === "page" ? "出处页预览" : "截取小图预览";
+                  stage.innerHTML = `
+                    <section class="viewer-shell">
+                      <div class="viewer-stage" id="immersive-viewer-stage"></div>
+                    </section>
+                  `;
+                  const originalAsset = document.getElementById(kind === "page" ? "page-asset" : "crop-asset");
+                  if (!originalAsset) return;
+                  const clone = originalAsset.cloneNode(true);
+                  clone.id = "immersive-asset";
+                  document.getElementById("immersive-viewer-stage").appendChild(clone);
+                  viewerState.immersive.source = kind;
+                  overlay.classList.add("open");
+                  overlay.setAttribute("aria-hidden", "false");
+                  resetViewer("immersive");
+                }
+
+                function closeImmersivePreview() {
+                  const overlay = document.getElementById("immersive-preview");
+                  if (!overlay.classList.contains("open")) return;
+                  overlay.classList.remove("open");
+                  overlay.setAttribute("aria-hidden", "true");
+                  document.getElementById("immersive-stage").innerHTML = "";
                 }
 
                 function getDecision(item) {
@@ -1363,7 +1723,6 @@ class ReportPipeline:
                     renderEmptyDetail();
                   } finally {
                     saveReviewState();
-                    isInitialLoading = false;
                   }
                 }
 
@@ -1377,10 +1736,14 @@ class ReportPipeline:
                     <article class="result-card ${item.occurrence_id === currentOccurrenceId ? "active" : ""}" data-select="${item.occurrence_id}">
                       <div class="status-row">
                         <span class="status-badge status-${getDecision(item)}">${escapeHtml(getDecisionLabel(item))}</span>
-                        <span class="count-chip">第 ${item.page_occurrence_index} 处</span>
+                        <span class="count-chip">${escapeHtml(item.matched_character || "命中")} · 第 ${item.page_occurrence_index} 处</span>
                       </div>
                       <h3>${escapeHtml(item.result_title)}</h3>
-                      <p class="context-line">上下文：${escapeHtml(item.context_preview || item.context_full || "")}</p>
+                      <div class="result-meta-row">
+                        <span>${escapeHtml(item.relative_path || item.file_name || "")}</span>
+                        <span>第 ${item.page_number} 页</span>
+                      </div>
+                      <p class="result-context-line">${escapeHtml(item.context_preview || item.context_full || "")}</p>
                       <div class="chip-row">
                         ${(item.evidence_badges || []).map(label => `<span class="evidence-chip">${escapeHtml(label)}</span>`).join("")}
                       </div>
@@ -1389,6 +1752,7 @@ class ReportPipeline:
                 }
 
                 function renderEmptyDetail() {
+                  activeDetailItem = null;
                   const emptyHtml = '<div class="empty-state">从左侧结果清单选择一条记录后，这里会显示出处页、截取小图和校对动作。</div>';
                   ["detail-summary", "detail-page", "detail-crop", "detail-context", "detail-actions"].forEach(id => {
                     document.getElementById(id).innerHTML = emptyHtml;
@@ -1398,10 +1762,17 @@ class ReportPipeline:
 
                 function renderDetailSummary(item) {
                   document.getElementById("detail-summary").innerHTML = `
-                    <div class="detail-summary">
-                      <div>
+                    <div class="detail-kicker">
+                      <span class="status-badge status-${getDecision(item)}">${escapeHtml(getDecisionLabel(item))}</span>
+                      <span class="evidence-chip">第 ${item.page_number} 页</span>
+                      <span class="evidence-chip">${escapeHtml(item.location_method || "来源未标注")}</span>
+                      ${(item.evidence_badges || []).map(label => `<span class="evidence-chip">${escapeHtml(label)}</span>`).join("")}
+                    </div>
+                    <div class="detail-main-line">
+                      <div class="detail-title-group">
                         <h2>${escapeHtml(item.result_title)}</h2>
-                        <p class="helper">校对结论：${escapeHtml(getDecisionLabel(item))}</p>
+                        <div class="detail-subline">${escapeHtml(item.relative_path || item.file_name || "")}</div>
+                        <div class="detail-subline">${escapeHtml(item.context_preview || item.context_full || "")}</div>
                       </div>
                       <div class="action-row">
                         <button class="action-button" data-copy-path="${item.occurrence_id}">复制路径</button>
@@ -1416,37 +1787,66 @@ class ReportPipeline:
                   const assetUrl = page ? loadAsset(page.image_asset_key) : "";
                   const pageHtml = assetUrl
                     ? `
-                      <div class="page-stage" id="page-stage">
-                        <img src="${assetUrl}" alt="出处页">
-                        <div id="current-hit" class="hit-box" style="
-                          left:${item.normalized_x0 * 100}%;
-                          top:${item.normalized_y0 * 100}%;
-                          width:${(item.normalized_x1 - item.normalized_x0) * 100}%;
-                          height:${(item.normalized_y1 - item.normalized_y0) * 100}%;
-                        "></div>
+                      <div class="view-toolbar">
+                        <div>
+                          <h2>出处页预览</h2>
+                          <p class="viewer-caption">滚轮缩放，拖动平移，双击重置。</p>
+                        </div>
+                        <div class="toolbar-row">
+                          <button class="action-button" data-zoom="page:-1">-</button>
+                          <button class="action-button" data-reset-viewer="page">100%</button>
+                          <button class="action-button" id="recenter-hit">重新居中</button>
+                          <button class="action-button" data-zoom="page:1">+</button>
+                          <button class="action-button" data-preview="page">预览</button>
+                        </div>
+                      </div>
+                      <div class="viewer-stage" id="page-stage" data-viewer-kind="page">
+                        <div class="viewer-canvas">
+                          <div class="viewer-asset" id="page-asset" data-width="${Number(page?.page_width || item.source_page_width || 0)}" data-height="${Number(page?.page_height || item.source_page_height || 0)}">
+                            <img class="viewer-image" src="${assetUrl}" alt="出处页">
+                            <div id="current-hit" class="hit-box" style="
+                              left:${item.normalized_x0 * 100}%;
+                              top:${item.normalized_y0 * 100}%;
+                              width:${(item.normalized_x1 - item.normalized_x0) * 100}%;
+                              height:${(item.normalized_y1 - item.normalized_y0) * 100}%;
+                            "></div>
+                          </div>
+                        </div>
                       </div>
                     `
-                    : '<div class="page-stage"><div class="empty-image">这条记录没有可显示的出处页图片。</div></div>';
+                    : '<div class="viewer-empty">这条记录没有可显示的出处页图片。</div>';
                   document.getElementById("detail-page").innerHTML = `
-                    <div class="detail-block-head">
-                      <h2>出处页</h2>
-                      <div class="action-row">
-                        <button class="action-button" data-focus-page="${item.occurrence_id}">在本页定位</button>
-                        <button class="action-button" data-open-page="${item.occurrence_id}">单独查看出处页</button>
-                      </div>
-                    </div>
                     ${pageHtml}
+                    <div class="toolbar-row" style="margin-top: 10px;">
+                      <button class="action-button" data-focus-page="${item.occurrence_id}">在本页定位</button>
+                      <button class="action-button" data-open-page="${item.occurrence_id}">单独查看出处页</button>
+                    </div>
                   `;
                 }
 
                 function renderDetailCrop(item) {
                   const assetUrl = loadAsset(item.crop_asset_key);
                   document.getElementById("detail-crop").innerHTML = `
-                    <div class="detail-block-head">
-                      <h2>截取小图</h2>
+                    <div class="view-toolbar">
+                      <div>
+                        <h2>截取小图</h2>
+                        <p class="viewer-caption">可单独放大查看字符细节。</p>
+                      </div>
+                      <div class="toolbar-row">
+                        <button class="action-button" data-zoom="crop:-1">-</button>
+                        <button class="action-button" data-reset-viewer="crop">100%</button>
+                        <button class="action-button" data-zoom="crop:1">+</button>
+                        <button class="action-button" data-preview="crop">预览</button>
+                      </div>
                     </div>
-                    <div class="crop-stage">
-                      ${assetUrl ? `<img src="${assetUrl}" alt="截取小图">` : '<div class="empty-image">这条记录没有可显示的截取小图。</div>'}
+                    <div class="viewer-stage" id="crop-stage" data-viewer-kind="crop">
+                      <div class="viewer-canvas">
+                        ${assetUrl ? `
+                          <div class="viewer-asset" id="crop-asset">
+                            <img class="viewer-image" src="${assetUrl}" alt="截取小图">
+                          </div>
+                        ` : '<div class="viewer-empty">这条记录没有可显示的截取小图。</div>'}
+                      </div>
                     </div>
                   `;
                 }
@@ -1454,30 +1854,31 @@ class ReportPipeline:
                 function renderDetailContext(item) {
                   document.getElementById("detail-context").innerHTML = `
                     <div class="detail-block-head">
-                      <h2>上下文</h2>
+                      <h2>上下文与判断参考</h2>
+                      <span class="count-chip">识别把握 ${escapeHtml(item.ocr_confidence ?? "未提供")}</span>
                     </div>
                     <div class="detail-text">${escapeHtml(item.context_full || "")}</div>
                   `;
                 }
 
                 function renderDetailActions(item) {
+                  const note = getNote(item);
+                  const noteHidden = !detailUiState.noteOpen && !note;
                   document.getElementById("detail-actions").innerHTML = `
-                    <div class="detail-block-head">
-                      <h2>校对结论</h2>
-                    </div>
                     <div class="decision-row">
                       <button class="primary-button" data-decision="confirmed">已确认</button>
                       <button class="action-button" data-decision="needs_review">待判断</button>
                       <button class="action-button" data-decision="rejected">排除</button>
+                      <button class="action-button" id="toggle-note-editor">备注</button>
                     </div>
-                    <div style="margin-top:12px;">
-                      <label for="note-input">备注</label>
-                      <textarea id="note-input" placeholder="写下你的判断依据或后续线索。">${escapeHtml(getNote(item))}</textarea>
-                    </div>
-                    <div class="nav-row" style="margin-top:12px;">
+                    <div class="nav-row">
                       <button class="action-button" data-nav="prev">上一条</button>
                       <button class="action-button" data-nav="next">下一条</button>
                       <button class="primary-button" data-nav="pending">下一条待处理</button>
+                    </div>
+                    <div id="note-editor" class="note-editor" ${noteHidden ? "hidden" : ""}>
+                      <label for="note-input">备注</label>
+                      <textarea id="note-input" placeholder="写下你的判断依据或后续线索。">${escapeHtml(note)}</textarea>
                     </div>
                   `;
                 }
@@ -1497,16 +1898,22 @@ class ReportPipeline:
                     renderEmptyDetail();
                     return;
                   }
+                  activeDetailItem = item;
                   renderDetailSummary(item);
                   renderDetailPage(item);
                   renderDetailCrop(item);
                   renderDetailContext(item);
                   renderDetailActions(item);
                   renderMoreInfoPanel(item);
+                  requestAnimationFrame(() => {
+                    resetViewer("page");
+                    resetViewer("crop");
+                  });
                 }
 
                 function selectOccurrence(occurrenceId) {
                   currentOccurrenceId = occurrenceId;
+                  detailUiState.noteOpen = false;
                   renderResultsList();
                   try {
                     renderDetailPane(occurrenceMap[occurrenceId]);
@@ -1570,7 +1977,7 @@ class ReportPipeline:
                 }
 
                 function focusCurrentPage() {
-                  document.getElementById("current-hit")?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+                  recenterHit();
                 }
 
                 document.addEventListener("click", event => {
@@ -1582,6 +1989,10 @@ class ReportPipeline:
                   const openPage = getClosestActionValue(event, "data-open-page");
                   const focusPage = getClosestActionValue(event, "data-focus-page");
                   const scope = getClosestActionValue(event, "data-scope");
+                  const zoom = getClosestActionValue(event, "data-zoom");
+                  const resetViewerTarget = getClosestActionValue(event, "data-reset-viewer");
+                  const preview = getClosestActionValue(event, "data-preview");
+                  const closePreview = getClosestActionValue(event, "data-close-preview");
                   if (selectId) selectOccurrence(selectId);
                   if (decision) applyDecision(decision);
                   if (nav === "prev") moveSelection("prev");
@@ -1594,6 +2005,19 @@ class ReportPipeline:
                   if (openFile) openOriginalFile(openFile);
                   if (openPage) openCurrentPage(openPage);
                   if (focusPage) focusCurrentPage();
+                  if (zoom) {
+                    const [kind, delta] = zoom.split(":");
+                    zoomViewer(kind, Number(delta));
+                  }
+                  if (resetViewerTarget) resetViewer(resetViewerTarget);
+                  if (event.target.id === "toggle-note-editor") {
+                    detailUiState.noteOpen = !detailUiState.noteOpen;
+                    renderDetailActions(activeDetailItem);
+                  }
+                  if (event.target.id === "recenter-hit") recenterHit();
+                  if (preview) openImmersivePreview(preview);
+                  if (closePreview) closeImmersivePreview();
+                  if (event.target.id === "immersive-preview") closeImmersivePreview();
                   if (scope) {
                     scopeMode = scope;
                     document.querySelectorAll("[data-scope]").forEach(button => {
@@ -1607,6 +2031,70 @@ class ReportPipeline:
                   if (event.target.id === "note-input") {
                     updateNote(event.target.value);
                   }
+                });
+
+                document.addEventListener("load", event => {
+                  if (!(event.target instanceof HTMLImageElement)) return;
+                  const asset = event.target.closest(".viewer-asset");
+                  if (asset && !asset.dataset.width) asset.dataset.width = String(event.target.naturalWidth || 0);
+                  if (asset && !asset.dataset.height) asset.dataset.height = String(event.target.naturalHeight || 0);
+                  requestAnimationFrame(() => {
+                    if (asset?.id === "page-asset") applyViewerTransform("page");
+                    if (asset?.id === "crop-asset") applyViewerTransform("crop");
+                    if (asset?.id === "immersive-asset") applyViewerTransform("immersive");
+                  });
+                }, true);
+
+                document.addEventListener("wheel", event => {
+                  if (!(event.target instanceof Element)) return;
+                  const stage = event.target.closest("[data-viewer-kind]");
+                  if (!stage) return;
+                  event.preventDefault();
+                  zoomViewer(stage.getAttribute("data-viewer-kind"), event.deltaY < 0 ? 1 : -1);
+                }, { passive: false });
+
+                document.addEventListener("dblclick", event => {
+                  if (!(event.target instanceof Element)) return;
+                  const stage = event.target.closest("[data-viewer-kind]");
+                  if (!stage) return;
+                  resetViewer(stage.getAttribute("data-viewer-kind"));
+                });
+
+                document.addEventListener("pointerdown", event => {
+                  if (!(event.target instanceof Element)) return;
+                  const stage = event.target.closest("[data-viewer-kind]");
+                  if (!stage) return;
+                  const kind = stage.getAttribute("data-viewer-kind");
+                  const state = viewerState[kind];
+                  state.dragging = { x: event.clientX, y: event.clientY, panX: state.panX, panY: state.panY };
+                  stage.classList.add("is-dragging");
+                });
+
+                document.addEventListener("pointermove", event => {
+                  ["page", "crop", "immersive"].forEach(kind => {
+                    const state = viewerState[kind];
+                    if (!state.dragging) return;
+                    state.panX = state.dragging.panX + (event.clientX - state.dragging.x);
+                    state.panY = state.dragging.panY + (event.clientY - state.dragging.y);
+                    applyViewerTransform(kind);
+                    updateViewerTargetFromPan(kind);
+                  });
+                });
+
+                document.addEventListener("pointerup", () => {
+                  ["page", "crop", "immersive"].forEach(kind => {
+                    const state = viewerState[kind];
+                    state.dragging = null;
+                  });
+                  document.querySelectorAll(".viewer-stage").forEach(stage => stage.classList.remove("is-dragging"));
+                });
+
+                document.addEventListener("keydown", event => {
+                  if (event.key === "Escape") closeImmersivePreview();
+                });
+
+                window.addEventListener("resize", () => {
+                  ["page", "crop", "immersive"].forEach(applyViewerTransform);
                 });
 
                 ["doc-filter", "page-range-start", "page-range-end"].forEach(id => {
