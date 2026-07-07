@@ -54,6 +54,8 @@ export function resolveEngineCommand(): EngineCommand | null {
     // 强制 UTF-8，避免 Windows 默认 GBK 导致中文日志/协议乱码。
     PYTHONUNBUFFERED: "1",
     PYTHONIOENCODING: "utf-8",
+    // Engine 工作目录（任务/DB/导出），由 Main 决定为 userData/engine。
+    AL_WORKSPACE_ROOT: join(app.getPath("userData"), "engine"),
   };
 
   const devPython = process.env.AL_ENGINE_DEV;
