@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "noEmit": true,
+    "paths": {
+      "@renderer/*": ["./src/renderer/src/*"],
+      "@shared/*": ["../../packages/ipc-schema/src/*"]
+    }
+  },
+  "include": ["src/renderer/**/*"]
+}
+

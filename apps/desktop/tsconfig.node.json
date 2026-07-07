@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "noEmit": true,
+    "paths": {
+      "@shared/*": ["../../packages/ipc-schema/src/*"]
+    }
+  },
+  "include": ["src/main/**/*", "src/preload/**/*"]
+}
+

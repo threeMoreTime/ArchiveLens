@@ -1,0 +1,22 @@
+{
+  "name": "archivelens",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ArchiveLens — 本地档案 OCR 检索与校对桌面工具（PDF / DJVU / DJV 中定位“约/約”）",
+  "license": "MIT",
+  "author": "ArchiveLens",
+  "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @archivelens/desktop dev",
+    "build": "pnpm --filter @archivelens/desktop build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "build:engine": "powershell -ExecutionPolicy Bypass -File scripts/build-engine.ps1",
+    "build:installer": "pnpm --filter @archivelens/desktop dist",
+    "smoke:unpacked": "powershell -ExecutionPolicy Bypass -File scripts/smoke-unpacked.ps1"
+  }
+}

@@ -1,0 +1,102 @@
+/*
+ * ArchiveLens 基础样式。
+ * Design Tokens（颜色/间距/字号）将在 Phase 4 系统化为 Fluent UI 主题，
+ * 此处仅保证 Phase 2 骨架可读。
+ */
+:root {
+  --bg: #f4efe7;
+  --card: #fffdf8;
+  --line: #dccfbb;
+  --ink: #241b12;
+  --muted: #6b5c4a;
+  --accent: #c46916;
+  --ok: #2f7d4a;
+  --warn: #c57d10;
+  --fail: #c0392b;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(180deg, #efe6d4, #fbf8f2);
+  color: var(--ink);
+}
+
+.al-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+.al-shell h1 {
+  font-size: 28px;
+  margin: 0 0 4px;
+}
+
+.al-subtitle {
+  color: var(--muted);
+  margin: 0 0 24px;
+}
+
+.al-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.al-card h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.al-checks {
+  display: grid;
+  gap: 8px;
+}
+
+.al-check {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.al-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.al-badge-PASS {
+  background: #e8f6ec;
+  color: var(--ok);
+}
+
+.al-badge-WARN {
+  background: #fff1d8;
+  color: var(--warn);
+}
+
+.al-badge-FAIL {
+  background: #fbe7e5;
+  color: var(--fail);
+}
+
+.al-error {
+  color: var(--fail);
+  font-size: 14px;
+}
+
+.al-meta {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
