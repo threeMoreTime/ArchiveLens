@@ -62,9 +62,11 @@ class PdfiumBackend:
         except Exception as exc:  # noqa: BLE001
             raise DocumentBackendError("PAGE_RENDER_FAILED", f"PDF 渲染失败：{exc}", {"page": page_index}) from exc
 
-        out = Path(tempfile.mkstemp(suffix=".png", prefix="al-pdf-")[1])
-        pil_image.save(out, "PNG")
-        return out
+        import os
+        fd, name = tempfile.mkstemp(suffix=".png", prefix="al-pdf-")
+        os.close(fd)  # 必须关闭 fd，否则 Windows 下后续 unlink 触发 WinError 32
+        pil_image.save(name, "PNG")
+        return Path(name)
 
 
 class DjvuLibreBackend:

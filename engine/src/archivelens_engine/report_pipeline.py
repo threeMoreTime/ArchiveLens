@@ -73,6 +73,7 @@ class ReportPipeline:
         end_page_index_exclusive: int | None = None,
         config: EngineConfig | None = None,
         task_control: TaskControl | None = None,
+        ocr_engine: Any = None,
     ) -> None:
         # Phase 1 预留实例配置入口；Phase 3 起 Sidecar 将按任务注入打包内路径。
         self.config = config or DEFAULT_CONFIG
@@ -94,7 +95,7 @@ class ReportPipeline:
         self.db_path = self.run_dir / "report.db"
         self.json_path = self.run_dir / "report.json"
         self.started_at = datetime.now()
-        self.ocr_engine = RapidOCR()
+        self.ocr_engine = ocr_engine or RapidOCR()
         pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
         self._ensure_dirs()
         self.conn = sqlite3.connect(self.db_path)

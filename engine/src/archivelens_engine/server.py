@@ -70,6 +70,14 @@ class Server:
         self._task_controls: dict[str, TaskControl] = {}
         # SlowFake 测试模式（任务 §十二）：AL_SLOWFAKE_PAGES>0 时用慢速假处理器替代真实 OCR。
         self.slowfake_pages = int(os.environ.get("AL_SLOWFAKE_PAGES", "0") or "0")
+        # 主线程预初始化 RapidOCR：打包冻结环境下后台线程内 onnxruntime InferenceSession
+        # 创建会死锁（diag2 实证 task.started 后卡 90s）。主线程 init 后注入避免该问题。
+        if self.slowfake_pages == 0:
+            from rapidocr_onnxruntime import RapidOCR
+
+            self.ocr_engine: Any = RapidOCR()
+        else:
+            self.ocr_engine = None
         self._register_defaults()
 
     # ---- 输出 ----
@@ -237,6 +245,7 @@ class Server:
                 workspace_dir=scan_workspace,
                 config=self.config,
                 task_control=tc,
+                ocr_engine=self.ocr_engine,
             )
             try:
                 report = pipeline.run()
