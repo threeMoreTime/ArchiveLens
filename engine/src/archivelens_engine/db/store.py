@@ -111,7 +111,9 @@ class TaskStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False：server 后台扫描线程与 IPC handler 线程共用 store。
+        # 当前为单扫描线程 + 主线程查询，短事务，可接受；后续高并发需加锁。
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._init_schema()

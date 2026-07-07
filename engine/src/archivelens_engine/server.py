@@ -68,6 +68,8 @@ class Server:
         self._seq_lock = threading.Lock()
         self._scan_threads: dict[str, threading.Thread] = {}
         self._task_controls: dict[str, TaskControl] = {}
+        # SlowFake 测试模式（任务 §十二）：AL_SLOWFAKE_PAGES>0 时用慢速假处理器替代真实 OCR。
+        self.slowfake_pages = int(os.environ.get("AL_SLOWFAKE_PAGES", "0") or "0")
         self._register_defaults()
 
     # ---- 输出 ----
@@ -170,6 +172,44 @@ class Server:
         self._scan_threads[task_id] = thread
         thread.start()
 
+    def _run_slowfake(self, task_id: str, tc: TaskControl) -> None:
+        """慢速假处理器（任务 §十二 E2E）：N 页，每页 150~300ms，可 pause/resume/cancel。
+
+        用于证明 TaskControl 在真实 Sidecar/线程下：pause 期间页数不增长、resume 继续、
+        cancel 唤醒 paused 线程，且每页恰好处理一次。
+        """
+        import random
+        import time as _time
+
+        total = self.slowfake_pages
+        self.store.update_task(task_id, total_pages=total)
+        processed = 0
+        for page_index in range(total):
+            if tc.should_cancel():
+                break
+            if tc.is_paused():
+                # 协作式：当前页已完成后真正进入 paused，再发 task.paused（避免假暂停）
+                self.store.update_task(task_id, status="paused", processed_pages=processed)
+                self.emit_task_event("task.paused", task_id, {"processed_pages": processed})
+                tc.wait_if_paused()
+                if tc.should_cancel():
+                    break
+                self.store.update_task(task_id, status="running")
+            _time.sleep(random.uniform(0.15, 0.3))
+            processed += 1
+            self.store.update_task(task_id, processed_pages=processed)
+            self.emit_task_event(
+                "task.progress",
+                task_id,
+                {"processed_pages": processed, "total_pages": total, "page_index": page_index},
+            )
+        if tc.should_cancel():
+            self.store.update_task(task_id, status="cancelled", finished_at=now_iso())
+            self.emit_task_event("task.cancelled", task_id, {})
+        else:
+            self.store.update_task(task_id, status="completed", processed_pages=total, finished_at=now_iso())
+            self.emit_task_event("task.completed", task_id, {"processed_pages": total})
+
     def _run_scan(self, task_id: str) -> None:
         """在后台线程跑 ReportPipeline 并把结果导入 TaskStore。
 
@@ -182,6 +222,9 @@ class Server:
         tc = TaskControl()
         self._task_controls[task_id] = tc
         self.emit_task_event("task.started", task_id, {"source_dir": task["source_dir"]})
+        if self.slowfake_pages > 0:
+            self._run_slowfake(task_id, tc)
+            return
         try:
             from .report_pipeline import ReportPipeline  # 延迟导入（重依赖）
 
@@ -322,15 +365,14 @@ def _h_tasks_pause(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     tc = server._task_controls.get(task_id)
     if tc is not None:
-        tc.request_pause()  # 真正请求管线在当前页边界后暂停
+        # 协作式：请求暂停；扫描线程在当前页完成后发 task.paused（真正暂停）
+        tc.request_pause()
     try:
         server._transition(task_id, "pausing")
     except ProtocolError:
         pass
     server.emit_task_event("task.pausing", task_id, {})
-    server._transition(task_id, "paused")
-    server.emit_task_event("task.paused", task_id, {})
-    return {"task_id": task_id, "status": "paused"}
+    return {"task_id": task_id, "status": "pausing"}
 
 
 def _h_tasks_resume(server: Server, params: dict) -> dict:
