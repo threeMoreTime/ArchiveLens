@@ -36,6 +36,24 @@ from .runtime.task_state import LEGAL_TRANSITIONS, TaskStateConflict
 Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
 
 
+class ThreadSafeRapidOCR:
+    """单 RapidOCR 实例 + inference RLock（任务 §十一）。
+
+    保守策略：未经明确并发安全实证前，多个调用串行进入 ONNX Session，
+    避免多 Worker 同时推理导致崩溃/死锁。shutdown 时正在推理的调用会先完成。
+    """
+
+    def __init__(self) -> None:
+        from rapidocr_onnxruntime import RapidOCR
+
+        self._engine = RapidOCR()
+        self._lock = threading.RLock()
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return self._engine(*args, **kwargs)
+
+
 def _require(params: dict[str, Any], key: str, typ: type) -> Any:
     if key not in params:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, f"缺少参数：{key}")
@@ -73,9 +91,7 @@ class Server:
         # 主线程预初始化 RapidOCR：打包冻结环境下后台线程内 onnxruntime InferenceSession
         # 创建会死锁（diag2 实证 task.started 后卡 90s）。主线程 init 后注入避免该问题。
         if self.slowfake_pages == 0:
-            from rapidocr_onnxruntime import RapidOCR
-
-            self.ocr_engine: Any = RapidOCR()
+            self.ocr_engine: Any = ThreadSafeRapidOCR()
         else:
             self.ocr_engine = None
         self._register_defaults()

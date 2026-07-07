@@ -1,20 +1,25 @@
-"""全局任务存储。
+"""全局任务存储（并发安全版，任务 §九）。
 
 承载桌面级多任务管理：``tasks`` / ``occurrences`` / ``review_records`` /
 ``exports``。Engine 独占写；Renderer 经分页 API 查询。
 
-设计要点（任务 §七.5）：
+并发模型：
 
-* 所有写入走事务；
-* 状态更新与事件尽量同事务（调用方在 commit 后再发事件）；
-* ``schema_meta`` + ``PRAGMA user_version`` 支持迁移；
-* 校对结果持久化到 SQLite，不只 localStorage。
+* 扫描线程（写 occurrence/progress）与 IPC handler 线程（查询/校对）共用
+  同一 :class:`TaskStore`；
+* ``check_same_thread=False`` 允许跨线程，但**不代表 connection 可无锁并发**；
+* 因此统一用 :class:`threading.RLock` 串行化所有 cursor/commit/rollback，
+  避免并发写竞争与 ``database is locked``；
+* 配合 ``PRAGMA journal_mode=WAL`` + ``busy_timeout=5000`` 提升并发与容错。
+
+设计要点（任务 §七.5）：写入走短事务；异常 rollback；状态更新与事件同事务
+（调用方 commit 后再 emit）；schema_meta + user_version 支持迁移。
 """
 
 from __future__ import annotations
 
-import json
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,17 +111,20 @@ def new_id(prefix: str = "") -> str:
 
 
 class TaskStore:
-    """全局任务/结果/校对/导出 的 SQLite 存储。"""
+    """全局任务/结果/校对/导出 的 SQLite 存储（线程安全）。"""
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False：server 后台扫描线程与 IPC handler 线程共用 store。
-        # 当前为单扫描线程 + 主线程查询，短事务，可接受；后续高并发需加锁。
+        # check_same_thread=False 允许跨线程；所有访问仍经 _lock 串行化（见各方法）。
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
-        self._init_schema()
+        self._lock = threading.RLock()
+        with self._lock:
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA busy_timeout = 5000")
+            self.conn.execute("PRAGMA foreign_keys = ON")
+            self._init_schema()
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
@@ -141,37 +149,40 @@ class TaskStore:
     ) -> str:
         task_id = new_id("task_")
         created = now_iso()
-        self.conn.execute(
-            """INSERT INTO tasks
-               (task_id, name, source_dir, output_dir, workspace_dir, status,
-                is_demo, file_count, total_pages, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                task_id, name, source_dir, output_dir, workspace_dir, status,
-                1 if is_demo else 0, file_count, total_pages, created, created,
-            ),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """INSERT INTO tasks
+                   (task_id, name, source_dir, output_dir, workspace_dir, status,
+                    is_demo, file_count, total_pages, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    task_id, name, source_dir, output_dir, workspace_dir, status,
+                    1 if is_demo else 0, file_count, total_pages, created, created,
+                ),
+            )
+            self.conn.commit()
         return task_id
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
-        row = self.conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         return dict(row) if row else None
 
     def list_tasks(
         self, *, limit: int = 50, offset: int = 0, status: str | None = None
     ) -> list[dict[str, Any]]:
-        if status:
-            cur = self.conn.execute(
-                "SELECT * FROM tasks WHERE status=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (status, limit, offset),
-            )
-        else:
-            cur = self.conn.execute(
-                "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            )
-        return [dict(r) for r in cur.fetchall()]
+        with self._lock:
+            if status:
+                cur = self.conn.execute(
+                    "SELECT * FROM tasks WHERE status=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (status, limit, offset),
+                )
+            else:
+                cur = self.conn.execute(
+                    "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
+            return [dict(r) for r in cur.fetchall()]
 
     def update_task(self, task_id: str, **fields: Any) -> None:
         if not fields:
@@ -179,8 +190,9 @@ class TaskStore:
         fields.setdefault("updated_at", now_iso())
         cols = ", ".join(f"{k}=?" for k in fields)
         vals = list(fields.values()) + [task_id]
-        self.conn.execute(f"UPDATE tasks SET {cols} WHERE task_id=?", vals)
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(f"UPDATE tasks SET {cols} WHERE task_id=?", vals)
+            self.conn.commit()
 
     # ---- occurrences ----
     def add_occurrence(self, task_id: str, occ: dict[str, Any]) -> None:
@@ -197,26 +209,37 @@ class TaskStore:
             "page_image_width", "page_image_height",
         ]
         record = {"occurrence_id": new_id("occ_"), "task_id": task_id}
-        # 只用 occ 提供的字段覆盖；task_id / occurrence_id 由本方法保证，不被 None 覆盖。
         record.update(
             {k: v for k, v in occ.items() if k in cols and k not in ("occurrence_id", "task_id")}
         )
         placeholders = ", ".join("?" for _ in cols)
-        self.conn.execute(
-            f"INSERT OR REPLACE INTO occurrences ({', '.join(cols)}) VALUES ({placeholders})",
-            [record.get(c) for c in cols],
-        )
+        # RLock 可重入：add_occurrences 持锁时本方法同线程可再进入
+        with self._lock:
+            self.conn.execute(
+                f"INSERT OR REPLACE INTO occurrences ({', '.join(cols)}) VALUES ({placeholders})",
+                [record.get(c) for c in cols],
+            )
 
     def add_occurrences(self, task_id: str, items: Iterable[dict[str, Any]]) -> int:
         count = 0
-        with self.conn:
-            for occ in items:
-                self.add_occurrence(task_id, occ)
-                count += 1
-        self.update_task(task_id, occurrence_count=self._count_occurrences(task_id))
+        with self._lock:
+            try:
+                with self.conn:  # 显式事务
+                    for occ in items:
+                        self.add_occurrence(task_id, occ)
+                        count += 1
+                self.conn.execute(
+                    "UPDATE tasks SET occurrence_count=?, updated_at=? WHERE task_id=?",
+                    (self._count_occurrences(task_id), now_iso(), task_id),
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
         return count
 
     def _count_occurrences(self, task_id: str) -> int:
+        # 调用方持锁；不再单独 with（RLock 可重入也行，但避免重复）
         row = self.conn.execute(
             "SELECT COUNT(*) AS n FROM occurrences WHERE task_id=?", (task_id,)
         ).fetchone()
@@ -248,31 +271,33 @@ class TaskStore:
             where.append("o.context_full LIKE ?")
             params.append(f"%{search}%")
         clause = " AND ".join(where)
-        total = self.conn.execute(
-            f"SELECT COUNT(*) AS n FROM occurrences AS o WHERE {clause}", params
-        ).fetchone()["n"]
-        rows = self.conn.execute(
-            f"""SELECT o.*, r.decision AS review_decision, r.note AS review_note
-                FROM occurrences o
-                LEFT JOIN review_records r
-                  ON r.task_id = o.task_id AND r.occurrence_id = o.occurrence_id
-                WHERE {clause}
-                ORDER BY o.file_name, o.page_number, o.page_occurrence_index
-                LIMIT ? OFFSET ?""",
-            params + [limit, offset],
-        ).fetchall()
+        with self._lock:
+            total = self.conn.execute(
+                f"SELECT COUNT(*) AS n FROM occurrences AS o WHERE {clause}", params
+            ).fetchone()["n"]
+            rows = self.conn.execute(
+                f"""SELECT o.*, r.decision AS review_decision, r.note AS review_note
+                    FROM occurrences o
+                    LEFT JOIN review_records r
+                      ON r.task_id = o.task_id AND r.occurrence_id = o.occurrence_id
+                    WHERE {clause}
+                    ORDER BY o.file_name, o.page_number, o.page_occurrence_index
+                    LIMIT ? OFFSET ?""",
+                params + [limit, offset],
+            ).fetchall()
         return int(total), [dict(r) for r in rows]
 
     def get_occurrence_detail(self, task_id: str, occurrence_id: str) -> dict[str, Any] | None:
-        row = self.conn.execute(
-            """SELECT o.*, r.decision AS review_decision, r.note AS review_note,
-                      r.updated_at AS review_updated_at
-               FROM occurrences o
-               LEFT JOIN review_records r
-                 ON r.task_id = o.task_id AND r.occurrence_id = o.occurrence_id
-               WHERE o.task_id=? AND o.occurrence_id=?""",
-            (task_id, occurrence_id),
-        ).fetchone()
+        with self._lock:
+            row = self.conn.execute(
+                """SELECT o.*, r.decision AS review_decision, r.note AS review_note,
+                          r.updated_at AS review_updated_at
+                   FROM occurrences o
+                   LEFT JOIN review_records r
+                     ON r.task_id = o.task_id AND r.occurrence_id = o.occurrence_id
+                   WHERE o.task_id=? AND o.occurrence_id=?""",
+                (task_id, occurrence_id),
+            ).fetchone()
         return dict(row) if row else None
 
     # ---- review ----
@@ -285,58 +310,66 @@ class TaskStore:
         note: str | None = None,
     ) -> str:
         updated = now_iso()
-        existing = self.conn.execute(
-            "SELECT 1 FROM review_records WHERE task_id=? AND occurrence_id=?",
-            (task_id, occurrence_id),
-        ).fetchone()
-        if existing:
-            sets: list[str] = ["updated_at=?"]
-            vals: list[Any] = [updated]
-            if decision is not None:
-                sets.append("decision=?")
-                vals.append(decision)
-            if note is not None:
-                sets.append("note=?")
-                vals.append(note)
-            vals.extend([task_id, occurrence_id])
-            self.conn.execute(
-                f"UPDATE review_records SET {', '.join(sets)} WHERE task_id=? AND occurrence_id=?",
-                vals,
-            )
-        else:
-            self.conn.execute(
-                """INSERT INTO review_records
-                   (task_id, occurrence_id, decision, note, reviewed_at, updated_at)
-                   VALUES (?,?,?,?,?,?)""",
-                (task_id, occurrence_id, decision, note or "", updated, updated),
-            )
-        self.conn.commit()
+        with self._lock:
+            try:
+                existing = self.conn.execute(
+                    "SELECT 1 FROM review_records WHERE task_id=? AND occurrence_id=?",
+                    (task_id, occurrence_id),
+                ).fetchone()
+                if existing:
+                    sets: list[str] = ["updated_at=?"]
+                    vals: list[Any] = [updated]
+                    if decision is not None:
+                        sets.append("decision=?")
+                        vals.append(decision)
+                    if note is not None:
+                        sets.append("note=?")
+                        vals.append(note)
+                    vals.extend([task_id, occurrence_id])
+                    self.conn.execute(
+                        f"UPDATE review_records SET {', '.join(sets)} WHERE task_id=? AND occurrence_id=?",
+                        vals,
+                    )
+                else:
+                    self.conn.execute(
+                        """INSERT INTO review_records
+                           (task_id, occurrence_id, decision, note, reviewed_at, updated_at)
+                           VALUES (?,?,?,?,?,?)""",
+                        (task_id, occurrence_id, decision, note or "", updated, updated),
+                    )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
         return updated
 
     def list_reviews(self, task_id: str) -> list[dict[str, Any]]:
-        rows = self.conn.execute(
-            "SELECT * FROM review_records WHERE task_id=? ORDER BY updated_at DESC",
-            (task_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM review_records WHERE task_id=? ORDER BY updated_at DESC",
+                (task_id,),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     # ---- exports ----
     def add_export(self, *, task_id: str, kind: str, path: str) -> str:
         export_id = new_id("exp_")
-        self.conn.execute(
-            "INSERT INTO exports (export_id, task_id, kind, path, created_at) VALUES (?,?,?,?,?)",
-            (export_id, task_id, kind, path, now_iso()),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO exports (export_id, task_id, kind, path, created_at) VALUES (?,?,?,?,?)",
+                (export_id, task_id, kind, path, now_iso()),
+            )
+            self.conn.commit()
         return export_id
 
     # ---- lifecycle ----
     def close(self) -> None:
-        try:
-            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except sqlite3.Error:
-            pass
-        self.conn.close()
+        with self._lock:
+            try:
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.Error:
+                pass
+            self.conn.close()
 
 
 __all__ = ["TaskStore", "SCHEMA_VERSION", "SCHEMA_SQL", "now_iso", "new_id"]
