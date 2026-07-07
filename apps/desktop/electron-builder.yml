@@ -29,10 +29,10 @@ win:
       arch: [x64]
     - target: portable
       arch: [x64]
-  artifactName: ${productName}-${version}-${arch}-${target}.${ext}
 
 # NSIS 安装器（任务 §二十八）：per-user、可卸载、默认保留用户数据
 nsis:
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
   oneClick: false
   perMachine: false
   allowElevation: true
