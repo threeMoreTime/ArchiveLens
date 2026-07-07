@@ -88,4 +88,15 @@ pnpm --filter @archivelens/desktop dist
 
 ## 许可证
 
-MIT（见 [LICENSE](LICENSE)，第三方组件清单待补 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）。
+MIT（见 [LICENSE](LICENSE)）。第三方组件清单见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+⚠️ **PyMuPDF (AGPL) 与 DjVuLibre (GPL) 的许可证合规是发布前阻塞**，原生 OCR 依赖本轮未随包分发（见 [docs/native-dependencies.md](docs/native-dependencies.md)）。
+
+## Alpha 限制（必读）
+
+- 版本 `0.1.0-alpha.2`，**非稳定版**，仅供早期试用与反馈；
+- 安装包**未签名**，Windows SmartScreen 可能提示「未知发布者」，需手动「仍要运行」；
+- 仅支持 Windows 10/11 x64；
+- 原生 OCR 依赖（Tesseract / DjVuLibre / 语言包）**当前需宿主已安装**，未随包分发（许可证阻塞）；
+- userData 位于 `%APPDATA%\ArchiveLens`（安装版与 portable 共用）；
+- 卸载默认保留 userData（任务历史 / 校对 / 数据库）；
+- 已知未完成：真实大规模 OCR 验证、clean clone、远程 CI、完整历史/设置/诊断、关闭保护与恢复。
