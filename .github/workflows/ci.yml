@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+jobs:
+  engine:
+    name: Python Engine
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements-lock.txt
+      - name: Compile
+        run: python -m compileall -q src
+      - name: Unit & integration tests
+        env:
+          PYTHONPATH: src;.
+        working-directory: .
+        run: python -m unittest discover -s engine/tests -t engine
+
+  desktop:
+    name: Desktop Unit & Build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: |
+          pnpm --filter @archivelens/desktop exec tsc -p tsconfig.node.json --noEmit
+          pnpm --filter @archivelens/desktop exec tsc -p tsconfig.web.json --noEmit
+      - name: Build
+        run: pnpm --filter @archivelens/desktop build
+      - name: Upload renderer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-out
+          path: apps/desktop/out
+
+  ipc-contract:
+    name: IPC Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "TODO: 同一 fixture 同时校验 TS Zod schema 与 Python dataclass（见 tests/ipc-contract）"

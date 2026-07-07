@@ -1,0 +1,43 @@
+appId: io.archivelens.desktop
+productName: ArchiveLens
+copyright: Copyright © 2026 ArchiveLens
+
+directories:
+  output: release
+  buildResources: resources
+
+# 主进程 / preload / renderer 构建产物
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.{ts,tsx,map}"
+
+# Python Engine（PyInstaller one-folder）随包分发，运行时经 process.resourcesPath 定位
+extraResources:
+  - from: ../../dist/engine/win-x64
+    to: engine/win-x64
+    filter: ["**/*"]
+
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}-${target}.${ext}
+
+# NSIS 安装器（任务 §二十八）：per-user、可卸载、默认保留用户数据
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ArchiveLens
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: ${productName}-${version}-${arch}-portable.exe
