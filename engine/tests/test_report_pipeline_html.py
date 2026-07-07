@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from report_pipeline import (
+from archivelens_engine.report_pipeline import (
     ReportPipeline,
     build_file_url,
     discover_worker_report_paths,

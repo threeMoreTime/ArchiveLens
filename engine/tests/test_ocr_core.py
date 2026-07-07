@@ -2,9 +2,9 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from report_pipeline import DocumentRecord, ReportPipeline, discover_worker_report_paths
+from archivelens_engine.report_pipeline import DocumentRecord, ReportPipeline, discover_worker_report_paths
 
-from ocr_core import (
+from archivelens_engine.ocr_core import (
     assign_occurrence_indexes,
     build_context_fields,
     classify_verification_status,

@@ -22,7 +22,8 @@ import pytesseract
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 
-from ocr_core import (
+from .config import DEFAULT_CONFIG, EngineConfig, TARGET_CHARS
+from .ocr_core import (
     assign_occurrence_indexes,
     build_context_fields,
     classify_verification_status,
@@ -32,17 +33,18 @@ from ocr_core import (
 )
 
 
-TARGET_CHARS = {"约": ("simplified", "U+7EA6"), "約": ("traditional", "U+7D04")}
 STATUS_LABELS = {
     "confirmed": "已确认",
     "needs_review": "待判断",
     "rejected": "排除",
 }
-TESSERACT_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-DJVU_BIN_DIR = Path(r"C:\Program Files (x86)\DjVuLibre")
-DEFAULT_RENDER_DPI = 144
+# 原生工具路径与默认参数的单一真相源位于 .config.EngineConfig。
+# 下列别名仅为兼容本模块内部既有引用而保留；新代码请直接使用 EngineConfig 实例。
+TESSERACT_CMD = str(DEFAULT_CONFIG.tesseract_cmd)
+DJVU_BIN_DIR = DEFAULT_CONFIG.djvu_bin_dir
+DEFAULT_RENDER_DPI = DEFAULT_CONFIG.render_dpi
 SCRIPT_DIR = Path(__file__).resolve().parent
-TESSDATA_DIR = SCRIPT_DIR / "tessdata"
+TESSDATA_DIR = DEFAULT_CONFIG.tessdata_dir or (SCRIPT_DIR / "tessdata")
 
 
 @dataclass
@@ -68,7 +70,10 @@ class ReportPipeline:
         include_paths: set[str] | None = None,
         start_page_index: int | None = None,
         end_page_index_exclusive: int | None = None,
+        config: EngineConfig | None = None,
     ) -> None:
+        # Phase 1 预留实例配置入口；Phase 3 起 Sidecar 将按任务注入打包内路径。
+        self.config = config or DEFAULT_CONFIG
         self.root_dir = root_dir
         self.output_html = output_html
         self.workspace_dir = workspace_dir

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from progress_dashboard import build_progress_html, collect_progress_snapshot
+from archivelens_engine.progress_dashboard import build_progress_html, collect_progress_snapshot
 
 
 class ProgressDashboardTests(unittest.TestCase):
