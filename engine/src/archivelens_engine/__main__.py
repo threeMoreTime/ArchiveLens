@@ -14,13 +14,13 @@ import sys
 def cli_main() -> None:
     args = sys.argv[1:]
     if args and args[0] == "serve":
-        from .server import run_server
+        from archivelens_engine.server import run_server
 
         run_server()
         return
 
     # 传统 CLI 模式：保留原 report_pipeline.main 的全部参数与行为。
-    from .report_pipeline import main
+    from archivelens_engine.report_pipeline import main
 
     main()
 
