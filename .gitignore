@@ -25,6 +25,8 @@ release/
 # 打包产物（Engine / Desktop）
 engine/dist/
 engine/build/
+build/
+*.spec
 apps/desktop/out/
 apps/desktop/dist/
 apps/desktop/release/
