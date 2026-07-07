@@ -1,0 +1,86 @@
+{
+  "_comment": "ArchiveLens 依赖许可证清单（任务 §七）。精确版本与许可证；发布前需逐项到官方来源最终核实。",
+  "bundled": {
+    "pypdfium2": {
+      "version": "5.11.0",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/pypdfium2/pypdfium2",
+      "distribution": "bundled",
+      "role": "PDF 渲染（替代 PyMuPDF）",
+      "sha256_note": "发布前对 wheel 与内含 PDFium 二进制记录 SHA-256"
+    },
+    "pdfium": {
+      "version": "随 pypdfium2 分发",
+      "license": "BSD-3-Clause",
+      "source": "https://pdfium.googlesource.com/pdfium/",
+      "distribution": "bundled-in-pypdfium2",
+      "role": "PDF 渲染内核"
+    },
+    "rapidocr-onnxruntime": {
+      "version": "1.4.4",
+      "license": "Apache-2.0",
+      "source": "https://github.com/RapidAI/RapidOCR",
+      "distribution": "bundled",
+      "role": "主 OCR 识别",
+      "model_license_note": "模型文件许可证需单独核实（通常 Apache-2.0）"
+    },
+    "onnxruntime": {
+      "version": "1.24.4",
+      "license": "MIT",
+      "source": "https://onnxruntime.ai/",
+      "distribution": "bundled",
+      "role": "模型推理运行时"
+    },
+    "Pillow": {
+      "version": "12.1.1",
+      "license": "HPND-like (CMU License)",
+      "source": "https://python-pillow.org/",
+      "distribution": "bundled",
+      "role": "图像处理"
+    },
+    "pytesseract": {
+      "version": "0.3.13",
+      "license": "Apache-2.0",
+      "source": "https://github.com/madmaze/pytesseract",
+      "distribution": "bundled",
+      "role": "Tesseract Python 封装（可选二次复核）"
+    }
+  },
+  "optional_not_bundled": {
+    "tesseract": {
+      "license": "Apache-2.0",
+      "source": "https://github.com/tesseract-ocr/tesseract",
+      "distribution": "optional-not-bundled",
+      "strategy": "缺失时二次复核 skipped_unavailable，不阻断主 OCR（任务 §4.2）",
+      "path_resolution": "打包资源(待) → 用户配置 → 环境变量 → PATH → 常见安装目录"
+    },
+    "tessdata": {
+      "files": ["chi_sim.traineddata", "chi_tra.traineddata", "chi_sim_vert.traineddata", "chi_tra_vert.traineddata"],
+      "license": "Apache-2.0",
+      "source": "https://github.com/tesseract-ocr/tessdata",
+      "distribution": "optional-not-bundled",
+      "strategy": "需固定 commit + SHA-256 后随 resources/tessdata/ 分发（下一迭代）"
+    },
+    "djvulibre": {
+      "license": "GPL-2.0",
+      "source": "https://djvu.sourceforge.net/",
+      "distribution": "optional-external",
+      "strategy": "默认不随包；检测到外部安装后 DJVU 可用；PDF 不受影响（任务 §4.3）"
+    }
+  },
+  "removed": {
+    "PyMuPDF": {
+      "version": "was 1.27.2.2",
+      "license": "AGPL-3.0",
+      "distribution": "removed",
+      "reason": "AGPL 传染性；已迁移到 pypdfium2 (BSD-3)。门禁 test_no_pymupdf 阻止回归。",
+      "alternatives": ["AGPL 合规（源码披露）", "商业授权", "pypdfium2（已采纳）"]
+    }
+  },
+  "pending_legal_review": [
+    "pypdfium2 对 PDFium 二进制的再分发条款（BSD-3，需保留版权声明）",
+    "RapidOCR 模型文件独立许可证",
+    "tessdata 来源与版本固定（commit + SHA-256）",
+    "ArchiveLens 项目根许可证（未决，见 docs/adr/0001）"
+  ]
+}

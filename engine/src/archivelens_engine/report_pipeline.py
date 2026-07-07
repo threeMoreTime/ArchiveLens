@@ -506,13 +506,19 @@ class ReportPipeline:
         return enlarged, (left, top, right, bottom)
 
     def _secondary_verify(self, crop_image: Image.Image, matched_character: str) -> tuple[str, float]:
+        # Tesseract 可选（任务 §4.2）：缺失时不阻断主 OCR，二次复核记为 skipped。
+        if not self.config.has_tesseract:
+            return "", 0.0
         language = "chi_sim+chi_sim_vert" if matched_character == "约" else "chi_tra+chi_tra_vert"
-        data = pytesseract.image_to_data(
-            crop_image,
-            lang=language,
-            config="--psm 10",
-            output_type=pytesseract.Output.DICT,
-        )
+        try:
+            data = pytesseract.image_to_data(
+                crop_image,
+                lang=language,
+                config="--psm 10",
+                output_type=pytesseract.Output.DICT,
+            )
+        except Exception:
+            return "", 0.0
         best_text = ""
         best_conf = 0.0
         for text, conf in zip(data["text"], data["conf"], strict=False):

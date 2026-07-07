@@ -26,6 +26,7 @@ try {
     --onedir `
     --collect-all rapidocr_onnxruntime `
     --collect-all onnxruntime `
+    --collect-all pypdfium2 `
     --hidden-import pytesseract `
     --distpath "$Root/dist/engine/_build" `
     --workpath "$Root/build/engine" `
