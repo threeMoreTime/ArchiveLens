@@ -74,6 +74,8 @@ export const EventSchema = z.object({
   protocol_version: z.literal(PROTOCOL_VERSION),
   event: z.string(),
   task_id: z.string().nullable().default(null),
+  sequence: z.number().int().nonnegative().optional(),
+  timestamp: z.string().optional(),
   payload: z.record(z.string(), z.unknown()).default({}),
 });
 export type Event = z.infer<typeof EventSchema>;
