@@ -23,6 +23,11 @@ const api: ArchiveLensApi = {
       ipcRenderer.on("archiveLens:engineExit", handler);
       return () => ipcRenderer.off("archiveLens:engineExit", handler);
     },
+    onRecoverable: (cb: (tasks: unknown[]) => void) => {
+      const handler = (_: unknown, payload: unknown[]) => cb(payload);
+      ipcRenderer.on("archiveLens:recoverable", handler);
+      return () => ipcRenderer.off("archiveLens:recoverable", handler);
+    },
   },
   tasks: {
     create: (p) => ipcRenderer.invoke("tasks.create", p),

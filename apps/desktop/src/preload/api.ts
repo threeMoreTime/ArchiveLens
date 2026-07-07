@@ -86,6 +86,7 @@ export interface ArchiveLensApi {
   subscribe: {
     onEvent(cb: (event: Event) => void): () => void;
     onEngineExit(cb: (info: EngineExitInfo) => void): () => void;
+    onRecoverable(cb: (tasks: unknown[]) => void): () => void;
   };
   tasks: {
     create(p: {

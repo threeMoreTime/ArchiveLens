@@ -1,10 +1,20 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import Welcome from "./pages/Welcome";
 import NewScan from "./pages/NewScan";
 import TaskPage from "./pages/TaskPage";
 import ReviewPage from "./pages/ReviewPage";
 
 export default function App() {
+  const nav = useNavigate();
+  const [recoverable, setRecoverable] = useState(0);
+  useEffect(() => {
+    const off = window.archiveLens.subscribe.onRecoverable((tasks: unknown[]) =>
+      setRecoverable(Array.isArray(tasks) ? tasks.length : 0),
+    );
+    return off;
+  }, []);
+
   return (
     <div className="al-app">
       <aside className="al-sidebar">
@@ -17,6 +27,12 @@ export default function App() {
             新建扫描
           </NavLink>
         </nav>
+        {recoverable > 0 && (
+          <div className="al-recoverable">
+            发现 {recoverable} 个未完成任务
+            <button onClick={() => nav("/tasks/current")}>查看</button>
+          </div>
+        )}
       </aside>
       <main className="al-main">
         <Routes>
