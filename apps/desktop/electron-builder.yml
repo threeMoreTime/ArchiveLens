@@ -20,6 +20,9 @@ extraResources:
 
 asar: true
 
+# 用本地已下载的 Electron dist，避免 app-builder 走系统代理从 github 重新下载。
+electronDist: "node_modules/electron/dist"
+
 win:
   target:
     - target: nsis
