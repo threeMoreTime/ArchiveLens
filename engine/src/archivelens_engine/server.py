@@ -30,6 +30,7 @@ from .protocol import (
     require_protocol_version,
     safe_parse,
 )
+from .runtime.task_control import TaskControl
 from .runtime.task_state import LEGAL_TRANSITIONS, TaskStateConflict
 
 Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
@@ -66,6 +67,7 @@ class Server:
         self._seq = 0
         self._seq_lock = threading.Lock()
         self._scan_threads: dict[str, threading.Thread] = {}
+        self._task_controls: dict[str, TaskControl] = {}
         self._register_defaults()
 
     # ---- 输出 ----
@@ -171,12 +173,14 @@ class Server:
     def _run_scan(self, task_id: str) -> None:
         """在后台线程跑 ReportPipeline 并把结果导入 TaskStore。
 
-        协作式 pause/cancel 受限于 ReportPipeline 当前无中途钩子；
-        本轮以「完成/失败 + 事件」为最小可用，深度 pause 改造延后。
+        通过 TaskControl 实现协作式 pause/resume/cancel：管线在每个页面边界
+        检查 should_cancel / wait_if_paused（任务 §十二）。
         """
         task = self.store.get_task(task_id)
         if task is None:
             return
+        tc = TaskControl()
+        self._task_controls[task_id] = tc
         self.emit_task_event("task.started", task_id, {"source_dir": task["source_dir"]})
         try:
             from .report_pipeline import ReportPipeline  # 延迟导入（重依赖）
@@ -189,6 +193,7 @@ class Server:
                 output_html=output_html,
                 workspace_dir=scan_workspace,
                 config=self.config,
+                task_control=tc,
             )
             try:
                 report = pipeline.run()
@@ -315,7 +320,9 @@ def _h_tasks_list(server: Server, params: dict) -> dict:
 
 def _h_tasks_pause(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
-    # 协作式：状态先转 pausing→paused（实际管线暂停深度改造延后）
+    tc = server._task_controls.get(task_id)
+    if tc is not None:
+        tc.request_pause()  # 真正请求管线在当前页边界后暂停
     try:
         server._transition(task_id, "pausing")
     except ProtocolError:
@@ -328,6 +335,9 @@ def _h_tasks_pause(server: Server, params: dict) -> dict:
 
 def _h_tasks_resume(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
+    tc = server._task_controls.get(task_id)
+    if tc is not None:
+        tc.request_resume()
     server._transition(task_id, "running")
     server.emit_task_event("task.resumed", task_id, {})
     return {"task_id": task_id, "status": "running"}
@@ -335,6 +345,9 @@ def _h_tasks_resume(server: Server, params: dict) -> dict:
 
 def _h_tasks_cancel(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
+    tc = server._task_controls.get(task_id)
+    if tc is not None:
+        tc.request_cancel()
     server.emit_task_event("task.cancelling", task_id, {})
     server.store.update_task(task_id, status="cancelled", finished_at=now_iso())
     server.emit_task_event("task.cancelled", task_id, {})

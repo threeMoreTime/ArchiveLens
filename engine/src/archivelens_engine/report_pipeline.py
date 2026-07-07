@@ -23,6 +23,7 @@ from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 
 from .config import DEFAULT_CONFIG, EngineConfig, TARGET_CHARS
+from .runtime.task_control import TaskControl
 from .ocr_core import (
     assign_occurrence_indexes,
     build_context_fields,
@@ -71,9 +72,11 @@ class ReportPipeline:
         start_page_index: int | None = None,
         end_page_index_exclusive: int | None = None,
         config: EngineConfig | None = None,
+        task_control: TaskControl | None = None,
     ) -> None:
         # Phase 1 预留实例配置入口；Phase 3 起 Sidecar 将按任务注入打包内路径。
         self.config = config or DEFAULT_CONFIG
+        self.task_control = task_control
         self.root_dir = root_dir
         self.output_html = output_html
         self.workspace_dir = workspace_dir
@@ -292,6 +295,11 @@ class ReportPipeline:
         start_page_index, page_stop = self._page_range_for_document(document, checkpoint=checkpoint)
         page_indexes = range(start_page_index, page_stop)
         for page_index in page_indexes:
+            if self.task_control is not None:
+                if self.task_control.should_cancel():
+                    print(f"[cancel] file={document.relative_path} page={page_index}", flush=True)
+                    break
+                self.task_control.wait_if_paused()
             if page_index % 25 == 0:
                 print(
                     f"[page] file={document.relative_path} page={page_index + 1}/{document.page_count}",
