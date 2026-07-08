@@ -31,13 +31,13 @@ def find(pattern: str) -> Path:
 
 commit = cmd(["git", "-C", str(ROOT), "rev-parse", "HEAD"])
 manifest = {
-    "version": "0.1.0-alpha.7",
+    "version": "0.1.0-alpha.8",
     "git_commit": commit,
     "build_time": datetime.now(timezone.utc).isoformat(),
     "engine_sha256": sha256(ENGINE),
     "desktop_sha256": sha256(UNPACKED) if UNPACKED.exists() else None,
-    "setup_sha256": sha256(find("*alpha.7*x64-setup.exe")),
-    "portable_sha256": sha256(find("*alpha.7*x64-portable.exe")),
+    "setup_sha256": sha256(find("*alpha.8*x64-setup.exe")),
+    "portable_sha256": sha256(find("*alpha.8*x64-portable.exe")),
     "python_version": platform.python_version(),
     "node_version": cmd(["node", "--version"]),
     "electron_version": "31.4.0",
