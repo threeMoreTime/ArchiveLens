@@ -471,7 +471,10 @@ def _h_shutdown(server: Server, params: dict) -> dict:
         return {"status": "shutting_down", "already": True}
     server._shutting_down = True
     # 唤醒所有 paused/正在处理的任务（协作式退出）
-    for tc in server._task_controls.values():
+    for task_id, tc in server._task_controls.items():
+        task = server.store.get_task(task_id)
+        if task is not None and task.get("status") == "paused":
+            continue
         tc.request_cancel()
     server.emit_event("engine.shutdown", payload={"reason": "requested"})
     return {"status": "shutting_down"}

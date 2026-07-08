@@ -68,14 +68,29 @@ class ShutdownTests(unittest.TestCase):
         self.assertTrue(msg["result"].get("already"))
 
     def test_shutdown_cancels_active_task_controls(self) -> None:
+        task_id = self.server.store.create_task(source_dir="X", output_dir="Y", workspace_dir="Z", name="running")
+        self.server.store.update_task(task_id, status="running")
         tc = TaskControl()
-        self.server._task_controls["task_x"] = tc
+        self.server._task_controls[task_id] = tc
         tc.request_pause()
         self.assertTrue(tc.is_paused())
         _capture(self.server, self._req("app.shutdown", "s1"))
         # cancel 唤醒 paused
         self.assertTrue(tc.should_cancel())
         self.assertFalse(tc.is_paused())
+
+    def test_shutdown_does_not_cancel_already_paused_tasks(self) -> None:
+        task_id = self.server.store.create_task(source_dir="X", output_dir="Y", workspace_dir="Z", name="paused")
+        self.server.store.update_task(task_id, status="paused")
+        tc = TaskControl()
+        self.server._task_controls[task_id] = tc
+        tc.request_pause()
+        self.assertTrue(tc.is_paused())
+
+        _capture(self.server, self._req("app.shutdown", "s1"))
+
+        self.assertFalse(tc.should_cancel())
+        self.assertTrue(tc.is_paused())
 
     def test_engine_shutdown_event_emitted(self) -> None:
         buf = io.StringIO()
