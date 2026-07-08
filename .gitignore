@@ -30,6 +30,7 @@ build/
 apps/desktop/out/
 apps/desktop/dist/
 apps/desktop/release/
+apps/desktop/app.info.json
 
 # 测试产物
 playwright-report/
@@ -40,4 +41,3 @@ coverage/
 .vscode/
 .idea/
 *.log
-

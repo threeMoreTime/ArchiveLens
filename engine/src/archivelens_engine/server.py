@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import PROTOCOL_VERSION, __version__
+from .build_info import load_build_info
 from .config import DEFAULT_CONFIG, EngineConfig
 from .db.store import TaskStore, now_iso
 from .diagnostics import detect_all
@@ -83,6 +84,7 @@ class Server:
         (self.workspace_root / "tasks").mkdir(parents=True, exist_ok=True)
         self.store = TaskStore(db_path or (self.workspace_root / "archivelens.db"))
         self.store.reconcile_incomplete_tasks(reason="ENGINE_PROCESS_EXITED")
+        self.build_info = load_build_info()
 
         self.handlers: dict[str, Handler] = {}
         self._stdout_lock = threading.Lock()
@@ -452,6 +454,7 @@ def _h_app_info(server: Server, params: dict) -> dict:
         "engine_version": __version__,
         "protocol_version": PROTOCOL_VERSION,
         "python_executable": sys.executable,
+        "build_metadata": server.build_info,
     }
 
 

@@ -1,6 +1,6 @@
 {
   "name": "@archivelens/desktop",
-  "version": "0.1.0-alpha.8",
+  "version": "0.1.0-alpha.9",
   "private": true,
   "description": "ArchiveLens 桌面应用",
   "author": "ArchiveLens",
@@ -9,12 +9,13 @@
     "dev": "electron-vite dev",
     "test": "vitest run",
     "test:contract": "vitest run tests/contract.spec.ts",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node ../../scripts/write-build-metadata.mjs desktop apps/desktop/out/main/app.info.json apps/desktop/app.info.json",
+    "lint": "pnpm run typecheck",
     "preview": "electron-vite preview",
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
     "typecheck": "pnpm run /typecheck:/",
-    "dist": "electron-vite build && electron-builder"
+    "dist": "pnpm run build && electron-builder"
   },
   "dependencies": {
     "@archivelens/ipc-schema": "workspace:*",

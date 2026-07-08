@@ -1,48 +1,101 @@
-"""生成 build-manifest.json（任务 §二十五，同一候选 SHA 的证据链）。"""
+"""生成 release manifest / SHA256SUMS。"""
+
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import platform
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[1]
-ENGINE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
-RELEASE = ROOT / "apps" / "desktop" / "release"
-UNPACKED = RELEASE / "win-unpacked" / "ArchiveLens.exe"
+DEFAULT_RELEASE_DIR = ROOT / "apps" / "desktop" / "release"
+DEFAULT_ENGINE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
+DEFAULT_DESKTOP = DEFAULT_RELEASE_DIR / "win-unpacked" / "ArchiveLens.exe"
 
 
-def sha256(p: Path) -> str:
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def cmd(c: list[str]) -> str:
-    return subprocess.run(c, capture_output=True, text=True).stdout.strip()
+def cmd(args: list[str]) -> str:
+    return subprocess.run(args, capture_output=True, text=True, check=True).stdout.strip()
 
 
-def find(pattern: str) -> Path:
-    matches = sorted(RELEASE.glob(pattern))
-    if not matches:
-        raise FileNotFoundError(pattern)
-    return matches[0]
+def resolve_existing(path: Path) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return path
 
 
-commit = cmd(["git", "-C", str(ROOT), "rev-parse", "HEAD"])
-manifest = {
-    "version": "0.1.0-alpha.8",
-    "git_commit": commit,
-    "build_time": datetime.now(timezone.utc).isoformat(),
-    "engine_sha256": sha256(ENGINE),
-    "desktop_sha256": sha256(UNPACKED) if UNPACKED.exists() else None,
-    "setup_sha256": sha256(find("*alpha.8*x64-setup.exe")),
-    "portable_sha256": sha256(find("*alpha.8*x64-portable.exe")),
-    "python_version": platform.python_version(),
-    "node_version": cmd(["node", "--version"]),
-    "electron_version": "31.4.0",
-    "protocol_version": 1,
-}
-out = RELEASE / "build-manifest.json"
-out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-print(json.dumps(manifest, ensure_ascii=False, indent=2))
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--candidate-sha")
+    parser.add_argument("--release-dir", type=Path, default=DEFAULT_RELEASE_DIR)
+    parser.add_argument("--engine", type=Path, default=DEFAULT_ENGINE)
+    parser.add_argument("--desktop", type=Path, default=DEFAULT_DESKTOP)
+    parser.add_argument("--setup", type=Path)
+    parser.add_argument("--portable", type=Path)
+    parser.add_argument("--output", type=Path, default=DEFAULT_RELEASE_DIR / "release-manifest.json")
+    parser.add_argument("--sha256sums", type=Path, default=DEFAULT_RELEASE_DIR / "SHA256SUMS.txt")
+    parser.add_argument("--test-summary-json", type=Path)
+    args = parser.parse_args()
+
+    candidate_sha = args.candidate_sha or cmd(["git", "-C", str(ROOT), "rev-parse", "HEAD"])
+    release_dir = args.release_dir.resolve()
+    engine = resolve_existing(args.engine.resolve())
+    desktop = resolve_existing(args.desktop.resolve())
+    setup = resolve_existing(
+        (args.setup or (release_dir / f"ArchiveLens-{args.version}-x64-setup.exe")).resolve()
+    )
+    portable = resolve_existing(
+        (args.portable or (release_dir / f"ArchiveLens-{args.version}-x64-portable.exe")).resolve()
+    )
+
+    test_summary: dict[str, object] = {}
+    if args.test_summary_json and args.test_summary_json.exists():
+        test_summary = json.loads(args.test_summary_json.read_text(encoding="utf-8"))
+
+    manifest = {
+        "version": args.version,
+        "git_commit": candidate_sha,
+        "engine_sha256": sha256(engine),
+        "desktop_sha256": sha256(desktop),
+        "setup_sha256": sha256(setup),
+        "portable_sha256": sha256(portable),
+        "build_environment": {
+            "platform": platform.platform(),
+            "python_version": platform.python_version(),
+            "node_version": cmd(["node", "--version"]),
+            "electron_version": json.loads((ROOT / "apps" / "desktop" / "package.json").read_text(encoding="utf-8"))[
+                "devDependencies"
+            ]["electron"].lstrip("^"),
+            "protocol_version": 1,
+        },
+        "test_summary": test_summary,
+    }
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    sha_lines = [
+        f"{manifest['engine_sha256']}  {engine.name}",
+        f"{manifest['desktop_sha256']}  {desktop.name}",
+        f"{manifest['setup_sha256']}  {setup.name}",
+        f"{manifest['portable_sha256']}  {portable.name}",
+    ]
+    args.sha256sums.write_text("\n".join(sha_lines) + "\n", encoding="utf-8")
+
+    print(json.dumps({"manifest": str(args.output), "sha256sums": str(args.sha256sums), "data": manifest}, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -41,6 +41,10 @@ try {
   $exe = Join-Path $OutDir "archivelens-engine.exe"
   if (-not (Test-Path $exe)) { throw "未找到产物：$exe" }
 
+  $pythonVersion = (& python -c "import platform; print(platform.python_version())").Trim()
+  node "$Root/scripts/write-build-metadata.mjs" engine "$OutDir/app.info.json" --python-version $pythonVersion
+  if ($LASTEXITCODE -ne 0) { throw "写入 engine app.info 失败（exit $LASTEXITCODE）" }
+
   $sizeMb = [math]::Round((Get-ChildItem $OutDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
   Write-Host "==> Engine 构建完成：$exe ($sizeMb MB)" -ForegroundColor Green
 }

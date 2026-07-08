@@ -41,25 +41,22 @@ pnpm --filter @archivelens/desktop dist
 - portable；
 - `extraResources`：`dist/engine/win-x64` → `engine/win-x64`（Engine 随包分发）。
 
-### 已知阻塞（本地）
+### 当前发布闭环要求
 
-在本仓库的 pnpm 环境下，`electron-builder` 调用的 `app-builder`（Go 辅助）尝试重新下载 Electron 二进制失败（pnpm 的 symlink 结构 + 国内 mirror 兼容性）。**这不是配置错误**，`electron-builder.yml` 正确无误。
-
-推荐执行环境：
-
-- **CI（`windows-latest`）**：GitHub 直连 npm / Electron 发布源，`ci.yml` 已配置；
-- 或本地用 `npm`（hoisted `node_modules`）替代 pnpm；
-- 或预置 Electron 缓存后离线构建。
+- 开发 worktree 全量回归通过后，才允许升级版本并冻结候选 SHA；
+- clean worktree 必须重新安装依赖、重跑测试、重建 Engine / win-unpacked；
+- 仅在 clean Engine、clean OCR、clean lifecycle E2E 全部通过后，才允许生成 Setup / Portable；
+- 最终交付必须附带 `release-manifest.json`、`SHA256SUMS.txt` 与 `verify-release-chain.ps1` 输出。
 
 ### 安装包产物（目标）
 
 ```
-ArchiveLens-0.1.0-x64-setup.exe       (NSIS)
-ArchiveLens-0.1.0-x64-portable.exe    (portable)
+ArchiveLens-0.1.0-alpha.9-x64-setup.exe       (NSIS)
+ArchiveLens-0.1.0-alpha.9-x64-portable.exe    (portable)
 SHA256SUMS.txt
 ```
 
-> v0.1.0 未签名：EXE 属性已含产品名 / 版本，但无代码签名证书。架构上 `cscLink` / `cscKeyPassword` 已预留（任务 §二十八），不得将私钥提交仓库。
+> v0.1.0-alpha.9 未签名：EXE 属性已含产品名 / 版本，但无代码签名证书。架构上 `cscLink` / `cscKeyPassword` 已预留，不得将私钥提交仓库。
 
 ## 发布前检查清单（任务 §三十四）
 

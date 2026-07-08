@@ -2,6 +2,7 @@ import { app, dialog, ipcMain, shell, BrowserWindow } from "electron";
 import type { SidecarManager } from "../sidecar/manager";
 import { AppInfoResultSchema, DiagnosticsResultSchema } from "@shared/index";
 import { logger } from "../logging/logger";
+import { loadDesktopBuildInfo } from "../buildInfo";
 
 /**
  * 应用级 IPC handler（任务 §8.2 Preload API 对应）。
@@ -10,8 +11,12 @@ import { logger } from "../logging/logger";
  */
 export function registerAppHandlers(sidecar: SidecarManager): void {
   ipcMain.handle("app.getInfo", async () => {
-    const info = await sidecar.call("app.info", {});
-    return AppInfoResultSchema.parse(info);
+    const info = AppInfoResultSchema.parse(await sidecar.call("app.info", {}));
+    return AppInfoResultSchema.parse({
+      ...info,
+      app_version: app.getVersion(),
+      desktop_metadata: loadDesktopBuildInfo(),
+    });
   });
 
   ipcMain.handle("app.getEnvironment", async () => {

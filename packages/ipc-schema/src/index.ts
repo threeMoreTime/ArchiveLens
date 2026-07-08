@@ -115,10 +115,24 @@ export type MethodName = z.infer<typeof MethodNameSchema>;
 // --------------------------------------------------------------------------- //
 // 结果 schema（已实现的方法）
 // --------------------------------------------------------------------------- //
+export const BuildMetadataSchema = z.object({
+  version: z.string(),
+  git_commit: z.string(),
+  build_time: z.string(),
+  python_version: z.string(),
+  node_version: z.string(),
+  electron_version: z.string(),
+  protocol_version: z.number(),
+});
+export type BuildMetadata = z.infer<typeof BuildMetadataSchema>;
+
 export const AppInfoResultSchema = z.object({
   engine_version: z.string(),
   protocol_version: z.number(),
   python_executable: z.string(),
+  app_version: z.string().optional(),
+  build_metadata: BuildMetadataSchema.nullable().optional(),
+  desktop_metadata: BuildMetadataSchema.nullable().optional(),
 });
 export type AppInfoResult = z.infer<typeof AppInfoResultSchema>;
 

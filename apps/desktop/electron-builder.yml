@@ -14,6 +14,9 @@ files:
 
 # Python Engine（PyInstaller one-folder）随包分发，运行时经 process.resourcesPath 定位
 extraResources:
+  - from: app.info.json
+    to: app.info.json
+    filter: ["app.info.json"]
   - from: ../../dist/engine/win-x64
     to: engine/win-x64
     filter: ["**/*"]

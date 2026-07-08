@@ -1,7 +1,8 @@
 # ArchiveLens Portable 启动 smoke（任务 §七）。
 # 验证：双击等效启动 → Sidecar ready → 主窗口 → 无残留进程。
 param(
-  [string]$Portable = (Resolve-Path "$PSScriptRoot/..\apps\desktop\release\ArchiveLens-0.1.0-alpha.1-x64-portable.exe").Path,
+  [string]$Version = "0.1.0-alpha.9",
+  [string]$Portable = (Resolve-Path "$PSScriptRoot/..\apps\desktop\release\ArchiveLens-$Version-x64-portable.exe").Path,
   [string]$UserData = "C:\al-port-smoke"
 )
 $ErrorActionPreference = "Stop"
@@ -9,7 +10,11 @@ Push-Location "$PSScriptRoot/.."
 try {
   Remove-Item -Recurse -Force $UserData -ErrorAction SilentlyContinue
   Write-Host "==> 启动 portable：$Portable"
-  $proc = Start-Process -FilePath $Portable -ArgumentList "--user-data-dir=$UserData" -PassThru
+  $previousUserData = $env:ARCHIVELENS_USER_DATA_DIR
+  $env:ARCHIVELENS_USER_DATA_DIR = $UserData
+  $proc = Start-Process -FilePath $Portable -PassThru
+  if ($null -eq $previousUserData) { Remove-Item Env:ARCHIVELENS_USER_DATA_DIR -ErrorAction SilentlyContinue }
+  else { $env:ARCHIVELENS_USER_DATA_DIR = $previousUserData }
   $logFile = Join-Path $UserData "logs\app.log"
   $ok = $false
   for ($i = 0; $i -lt 45; $i++) {

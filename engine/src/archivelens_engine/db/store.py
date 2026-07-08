@@ -160,14 +160,34 @@ class TaskStore:
             self._init_schema()
 
     def _init_schema(self) -> None:
-        self.conn.executescript(SCHEMA_SQL)
-        self._migrate_schema()
-        self.conn.execute(
-            "INSERT INTO schema_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            ("schema_version", str(SCHEMA_VERSION)),
-        )
-        self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        self.conn.commit()
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self._execute_schema_sql(SCHEMA_SQL)
+            self._migrate_schema()
+            self.conn.execute(
+                "INSERT INTO schema_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ("schema_version", str(SCHEMA_VERSION)),
+            )
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def _execute_schema_sql(self, script: str) -> None:
+        statement_lines: list[str] = []
+        for line in script.splitlines():
+            if not line.strip():
+                continue
+            statement_lines.append(line)
+            candidate = "\n".join(statement_lines).strip()
+            if sqlite3.complete_statement(candidate):
+                self.conn.execute(candidate)
+                statement_lines.clear()
+        if statement_lines:
+            candidate = "\n".join(statement_lines).strip()
+            if candidate:
+                self.conn.execute(candidate)
 
     def _migrate_schema(self) -> None:
         current = int(

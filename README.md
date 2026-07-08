@@ -8,20 +8,20 @@
 
 ## 当前状态
 
-本仓库正在 `feat/electron-desktop-v0.1` 分支上进行 **v0.1.0 Desktop Preview** 改造。已落地的实质能力：
+本仓库正在 `feat/electron-desktop-v0.1` 分支上推进 **v0.1.0-alpha.9 Desktop Alpha** 的可复现发布闭环。已落地的实质能力：
 
 | 能力 | 状态 | 证据 |
 | --- | --- | --- |
 | Python Engine 项目化（`engine/`） | ✅ | 正式包 + pyproject + lock |
-| JSONL Sidecar IPC（TS↔Python） | ✅ | 80 项 engine 测试 + Zod 契约 |
-| Electron Main/Preload/Renderer 安全骨架 | ✅ | typecheck + build + 端到端 smoke |
+| JSONL Sidecar IPC（TS↔Python） | ✅ | 134 项 engine 测试 + Zod 契约 |
+| Electron Main/Preload/Renderer 安全骨架 | ✅ | typecheck + build + 生命周期 E2E |
 | Sidecar 端到端握手 | ✅ | `engine.ready` + `app.info` + 主窗口 |
-| Worker/Task 真实状态机（修复残留 checkpoint 误判） | ✅ | 80 项测试含三态回归 |
+| Worker/Task 真实状态机（修复残留 checkpoint 误判） | ✅ | checkpoint / sequence / migration 回归 |
 | Engine PyInstaller one-folder 打包 | ✅ | 355MB exe 独立 serve 通过 |
-| 完整桌面 UI（首页/扫描/校对/历史/设置/诊断） | ⏳ 进行中 | 骨架验证，完整页面待续 |
-| 校对工作台 React 化（report-viewer 共享包） | ⏳ 进行中 | 旧 B2 工作台仍可用 |
-| electron-builder 安装包/portable | ⚠️ 受阻 | 配置就绪，本地受 app-builder 下载阻塞，CI 可完成 |
-| Playwright E2E / 打包 smoke | ⏳ 待续 | — |
+| 生命周期关闭/恢复自动化 | ✅ | 14 个 Playwright lifecycle/recovery E2E |
+| HTML 离线导出 smoke | ✅ | 本地真实 OCR fixtures 回归 |
+| electron-builder 安装包/portable | ⏳ 收尾中 | clean rebuild / Setup / Portable 完整验收待完成 |
+| 正式发布证据链 | ⏳ 收尾中 | clean worktree / hash / manifest / smoke 待完成 |
 
 详见 [docs/architecture.md](docs/architecture.md) 与最终阶段报告。
 
@@ -93,10 +93,10 @@ MIT（见 [LICENSE](LICENSE)）。第三方组件清单见 [THIRD_PARTY_NOTICES.
 
 ## Alpha 限制（必读）
 
-- 版本 `0.1.0-alpha.2`，**非稳定版**，仅供早期试用与反馈；
+- 版本 `0.1.0-alpha.9`，**非稳定版**，仅供早期试用与反馈；
 - 安装包**未签名**，Windows SmartScreen 可能提示「未知发布者」，需手动「仍要运行」；
 - 仅支持 Windows 10/11 x64；
 - 原生 OCR 依赖（Tesseract / DjVuLibre / 语言包）**当前需宿主已安装**，未随包分发（许可证阻塞）；
 - userData 位于 `%APPDATA%\ArchiveLens`（安装版与 portable 共用）；
 - 卸载默认保留 userData（任务历史 / 校对 / 数据库）；
-- 已知未完成：真实大规模 OCR 验证、clean clone、远程 CI、完整历史/设置/诊断、关闭保护与恢复。
+- 已知未完成：clean worktree 重建、Setup/Portable 完整 smoke、旧库 migration 正式包验证、远程 CI。

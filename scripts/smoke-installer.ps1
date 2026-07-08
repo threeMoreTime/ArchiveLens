@@ -1,7 +1,8 @@
 # ArchiveLens NSIS 安装/卸载 smoke（任务 §八）。
 # 流程：静默安装 → 验证目录/快捷方式 → 启动 → Sidecar ready → 卸载 → 验证清除。
 param(
-  [string]$Setup = (Resolve-Path "$PSScriptRoot/..\apps\desktop\release\ArchiveLens-0.1.0-alpha.1-x64-setup.exe").Path,
+  [string]$Version = "0.1.0-alpha.9",
+  [string]$Setup = (Resolve-Path "$PSScriptRoot/..\apps\desktop\release\ArchiveLens-$Version-x64-setup.exe").Path,
   [string]$InstallDir = "C:\al-install-test",
   [string]$UserData = "C:\al-install-ud"
 )
@@ -31,7 +32,11 @@ try {
 
   # 启动安装后应用
   Write-Host "==> 启动安装后应用"
-  Start-Process -FilePath $exe -ArgumentList "--user-data-dir=$UserData"
+  $previousUserData = $env:ARCHIVELENS_USER_DATA_DIR
+  $env:ARCHIVELENS_USER_DATA_DIR = $UserData
+  Start-Process -FilePath $exe
+  if ($null -eq $previousUserData) { Remove-Item Env:ARCHIVELENS_USER_DATA_DIR -ErrorAction SilentlyContinue }
+  else { $env:ARCHIVELENS_USER_DATA_DIR = $previousUserData }
   $logFile = Join-Path $UserData "logs\app.log"
   $ok = $false
   for ($i = 0; $i -lt 35; $i++) {

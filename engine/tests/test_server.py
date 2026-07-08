@@ -43,6 +43,52 @@ class ServerDispatchTests(unittest.TestCase):
         self.assertEqual(msg["request_id"], "r1")
         self.assertEqual(msg["result"]["protocol_version"], PROTOCOL_VERSION)
         self.assertEqual(msg["result"]["engine_version"], __version__)
+        self.assertIn("build_metadata", msg["result"])
+
+    def test_app_info_includes_embedded_build_metadata_when_present(self) -> None:
+        tmp = tempfile.mkdtemp()
+        metadata_path = Path(tmp) / "app.info.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "version": __version__,
+                    "git_commit": "deadbeef" * 5,
+                    "build_time": "2026-07-08T12:00:00+00:00",
+                    "python_version": "3.11.9",
+                    "node_version": "v24.3.0",
+                    "electron_version": "31.4.0",
+                    "protocol_version": PROTOCOL_VERSION,
+                }
+            ),
+            encoding="utf-8",
+        )
+        previous = os.environ.get("AL_APP_INFO_PATH")
+        os.environ["AL_APP_INFO_PATH"] = str(metadata_path)
+        try:
+            server = Server()
+            try:
+                msgs = _capture(
+                    server,
+                    json.dumps(
+                        {
+                            "protocol_version": PROTOCOL_VERSION,
+                            "request_id": "r1-meta",
+                            "method": "app.info",
+                            "params": {},
+                        }
+                    ),
+                )
+                build_metadata = msgs[0]["result"]["build_metadata"]
+                self.assertEqual(build_metadata["git_commit"], "deadbeef" * 5)
+                self.assertEqual(build_metadata["protocol_version"], PROTOCOL_VERSION)
+            finally:
+                server.store.close()
+        finally:
+            if previous is None:
+                os.environ.pop("AL_APP_INFO_PATH", None)
+            else:
+                os.environ["AL_APP_INFO_PATH"] = previous
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_unknown_method_returns_error(self) -> None:
         line = json.dumps(
