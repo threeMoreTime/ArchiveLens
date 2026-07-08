@@ -102,6 +102,41 @@ class RecoveryHandlerTests(unittest.TestCase):
         self.assertEqual([event["event_type"] for event in state["events"]], ["task.created", "task.started", "task.progress"])
         self.assertEqual(len(state["occurrence_ids"]), 1)
 
+    def test_inspect_state_derives_real_source_id_without_explicit_param(self) -> None:
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src)})
+        task_id = created["task_id"]
+        source_id = "long-real-ocr.pdf"
+        self.server.store.record_page_completion(
+            task_id=task_id,
+            source_id=source_id,
+            page_no=1,
+            worker_generation=2,
+            occurrences=[
+                {
+                    "occurrence_id": "occ-real-1",
+                    "document_id": source_id,
+                    "source_id": source_id,
+                    "file_name": source_id,
+                    "relative_path": source_id,
+                    "page_number": 1,
+                    "page_index": 0,
+                    "page_occurrence_index": 1,
+                    "matched_character": "约",
+                    "character_variant": "simplified",
+                    "bbox_hash": "bbox-real-1",
+                    "verification_status": "confirmed",
+                    "context_full": "page-1",
+                }
+            ],
+        )
+
+        state = self.server.handlers["tasks.inspectState"](self.server, {"task_id": task_id})
+
+        self.assertEqual(state["source_id"], source_id)
+        self.assertEqual(state["processed_page_ids"], [1])
+        self.assertIsNotNone(state["checkpoint"])
+        self.assertEqual(state["checkpoint"]["source_id"], source_id)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -613,10 +613,16 @@ def _h_tasks_cancel(server: Server, params: dict) -> dict:
 
 def _h_tasks_inspect_state(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
-    source_id = params.get("source_id") or SLOWFAKE_SOURCE_ID
+    requested_source_id = params.get("source_id")
     task = server.store.get_task(task_id)
     if task is None:
         raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    if requested_source_id:
+        source_id = requested_source_id
+    elif server.slowfake_pages > 0:
+        source_id = SLOWFAKE_SOURCE_ID
+    else:
+        source_id = server.store.resolve_task_source_id(task_id)
     total, items = server.store.query_occurrences(task_id=task_id, limit=10**9, offset=0)
     return {
         "task": task,

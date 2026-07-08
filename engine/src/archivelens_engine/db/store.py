@@ -391,6 +391,58 @@ class TaskStore:
                 "updated_at": row["updated_at"],
             }
 
+    def resolve_task_source_id(self, task_id: str) -> str:
+        with self._lock:
+            queries = [
+                (
+                    """
+                    SELECT source_id
+                    FROM task_checkpoints
+                    WHERE task_id=? AND source_id <> ''
+                    ORDER BY last_completed_page DESC, worker_generation DESC, updated_at DESC, source_id ASC
+                    LIMIT 1
+                    """,
+                    (task_id,),
+                ),
+                (
+                    """
+                    SELECT source_id
+                    FROM task_processed_pages
+                    WHERE task_id=? AND source_id <> ''
+                    GROUP BY source_id
+                    ORDER BY MAX(page_no) DESC, MAX(created_at) DESC, source_id ASC
+                    LIMIT 1
+                    """,
+                    (task_id,),
+                ),
+                (
+                    """
+                    SELECT source_id
+                    FROM occurrences
+                    WHERE task_id=? AND source_id <> ''
+                    GROUP BY source_id
+                    ORDER BY MAX(page_number) DESC, COUNT(*) DESC, source_id ASC
+                    LIMIT 1
+                    """,
+                    (task_id,),
+                ),
+                (
+                    """
+                    SELECT source_id
+                    FROM task_events
+                    WHERE task_id=? AND source_id <> ''
+                    ORDER BY worker_generation DESC, sequence DESC
+                    LIMIT 1
+                    """,
+                    (task_id,),
+                ),
+            ]
+            for sql, params in queries:
+                row = self.conn.execute(sql, params).fetchone()
+                if row is not None and row["source_id"]:
+                    return str(row["source_id"])
+            return ""
+
     def list_task_events(self, task_id: str) -> list[dict[str, Any]]:
         with self._lock:
             rows = self.conn.execute(
