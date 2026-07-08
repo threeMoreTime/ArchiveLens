@@ -20,6 +20,14 @@ describe("taskStore 事件归并", () => {
     expect(t.processed_pages).toBe(50); // 旧 seq=3 被忽略
   });
 
+  it("相同 sequence 也不得覆盖当前状态", () => {
+    const s = useTaskStore.getState();
+    s.applyEvent({ event: "task.progress", task_id: "t1", sequence: 5, payload: { processed_pages: 50 } });
+    s.applyEvent({ event: "task.progress", task_id: "t1", sequence: 5, payload: { processed_pages: 10 } });
+    const t = useTaskStore.getState().tasks.t1;
+    expect(t.processed_pages).toBe(50);
+  });
+
   it("completed 后旧 progress 不改回 running", () => {
     const s = useTaskStore.getState();
     s.applyEvent({ event: "task.started", task_id: "t1", sequence: 1 });

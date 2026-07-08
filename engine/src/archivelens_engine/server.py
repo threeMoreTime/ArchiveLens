@@ -34,6 +34,7 @@ from .runtime.task_control import TaskControl
 from .runtime.task_state import LEGAL_TRANSITIONS, TaskStateConflict
 
 Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
+SLOWFAKE_SOURCE_ID = "source-main"
 
 
 class ThreadSafeRapidOCR:
@@ -75,19 +76,27 @@ class Server:
         self.config = config or DEFAULT_CONFIG
         if workspace_root is None:
             # 默认临时目录（测试友好）；生产由 Main 传入 userData/engine。
-            workspace_root = Path(tempfile.mkdtemp(prefix="archivelens-engine-"))
+            workspace_root = os.environ.get("AL_WORKSPACE_ROOT") or Path(
+                tempfile.mkdtemp(prefix="archivelens-engine-")
+            )
         self.workspace_root = Path(workspace_root)
         (self.workspace_root / "tasks").mkdir(parents=True, exist_ok=True)
         self.store = TaskStore(db_path or (self.workspace_root / "archivelens.db"))
+        self.store.reconcile_incomplete_tasks(reason="ENGINE_PROCESS_EXITED")
 
         self.handlers: dict[str, Handler] = {}
         self._stdout_lock = threading.Lock()
-        self._seq = 0
-        self._seq_lock = threading.Lock()
         self._scan_threads: dict[str, threading.Thread] = {}
         self._task_controls: dict[str, TaskControl] = {}
         # SlowFake 测试模式（任务 §十二）：AL_SLOWFAKE_PAGES>0 时用慢速假处理器替代真实 OCR。
         self.slowfake_pages = int(os.environ.get("AL_SLOWFAKE_PAGES", "0") or "0")
+        self.slowfake_page_delay_ms = int(os.environ.get("AL_SLOWFAKE_PAGE_DELAY_MS", "0") or "0")
+        self.slowfake_inter_page_delay_ms = int(
+            os.environ.get("AL_SLOWFAKE_INTER_PAGE_DELAY_MS", "0") or "0"
+        )
+        self.slowfake_pause_transition_delay_ms = int(
+            os.environ.get("AL_SLOWFAKE_PAUSE_TRANSITION_DELAY_MS", "0") or "0"
+        )
         # 主线程预初始化 RapidOCR：打包冻结环境下后台线程内 onnxruntime InferenceSession
         # 创建会死锁（diag2 实证 task.started 后卡 90s）。主线程 init 后注入避免该问题。
         if self.slowfake_pages == 0:
@@ -106,18 +115,33 @@ class Server:
     def emit_event(self, event: str, task_id: str | None = None, payload: dict | None = None) -> None:
         self.emit(make_event(event, task_id, payload))
 
-    def emit_task_event(self, event: str, task_id: str, payload: dict | None = None) -> None:
-        """带 sequence + timestamp 的事件（任务 §六.8）。"""
-        with self._seq_lock:
-            self._seq += 1
-            seq = self._seq
+    def emit_task_event(
+        self,
+        event: str,
+        task_id: str,
+        payload: dict | None = None,
+        *,
+        source_id: str = "",
+        worker_generation: int = 0,
+    ) -> dict[str, Any]:
+        event_row = self.store.append_task_event(
+            task_id=task_id,
+            event_type=event,
+            payload=payload or {},
+            source_id=source_id,
+            worker_generation=worker_generation,
+        )
+        self.emit_task_event_row(event_row)
+        return event_row
+
+    def emit_task_event_row(self, event_row: dict[str, Any]) -> None:
         msg = {
             "protocol_version": PROTOCOL_VERSION,
-            "event": event,
-            "task_id": task_id,
-            "sequence": seq,
-            "timestamp": now_iso(),
-            "payload": payload or {},
+            "event": event_row["event_type"],
+            "task_id": event_row["task_id"],
+            "sequence": event_row["sequence"],
+            "timestamp": event_row["created_at"],
+            "payload": event_row["payload"],
         }
         self.emit(json.dumps(msg, ensure_ascii=False))
 
@@ -155,8 +179,13 @@ class Server:
             "engine.ready",
             payload={"engine_version": __version__, "protocol_version": PROTOCOL_VERSION},
         )
-        for line in sys.stdin:
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
             self.handle_line(line)
+            if self._shutting_down:
+                break
 
     # ---- handler 注册 ----
     def _register_defaults(self) -> None:
@@ -172,6 +201,7 @@ class Server:
                 "tasks.pause": _h_tasks_pause,
                 "tasks.resume": _h_tasks_resume,
                 "tasks.cancel": _h_tasks_cancel,
+                "tasks.inspectState": _h_tasks_inspect_state,
                 "demo.create": _h_demo_create,
                 "results.query": _h_results_query,
                 "results.getDetail": _h_results_detail,
@@ -198,12 +228,25 @@ class Server:
         self.store.update_task(task_id, status=target)
 
     # ---- 扫描线程 ----
-    def start_scan_thread(self, task_id: str) -> None:
-        thread = threading.Thread(target=self._run_scan, args=(task_id,), daemon=True)
+    def start_scan_thread(self, task_id: str, *, entry_event: str = "task.started") -> int:
+        generation = self.store.allocate_worker_generation(task_id)
+        task = self.store.get_task(task_id)
+        payload: dict[str, Any] = {"worker_generation": generation}
+        if task is not None:
+            payload["source_dir"] = task["source_dir"]
+        self.emit_task_event(
+            entry_event,
+            task_id,
+            payload,
+            source_id=SLOWFAKE_SOURCE_ID if self.slowfake_pages > 0 else "",
+            worker_generation=generation,
+        )
+        thread = threading.Thread(target=self._run_scan, args=(task_id, generation), daemon=True)
         self._scan_threads[task_id] = thread
         thread.start()
+        return generation
 
-    def _run_slowfake(self, task_id: str, tc: TaskControl) -> None:
+    def _run_slowfake(self, task_id: str, tc: TaskControl, worker_generation: int) -> None:
         """慢速假处理器（任务 §十二 E2E）：N 页，每页 150~300ms，可 pause/resume/cancel。
 
         用于证明 TaskControl 在真实 Sidecar/线程下：pause 期间页数不增长、resume 继续、
@@ -213,35 +256,104 @@ class Server:
         import time as _time
 
         total = self.slowfake_pages
-        self.store.update_task(task_id, total_pages=total)
-        processed = 0
-        for page_index in range(total):
+        checkpoint = self.store.get_task_checkpoint(task_id, SLOWFAKE_SOURCE_ID)
+        processed_page_ids = self.store.list_processed_page_ids(task_id, SLOWFAKE_SOURCE_ID)
+        processed = len(processed_page_ids)
+        next_page = checkpoint["next_page"] if checkpoint is not None else 1
+        self.store.update_task(
+            task_id,
+            total_pages=total,
+            processed_pages=processed,
+            worker_generation=worker_generation,
+        )
+        for page_no in range(next_page, total + 1):
             if tc.should_cancel():
                 break
             if tc.is_paused():
+                if self.slowfake_pause_transition_delay_ms > 0:
+                    remaining_seconds = self.slowfake_pause_transition_delay_ms / 1000.0
+                    while remaining_seconds > 0 and tc.is_paused() and not tc.should_cancel():
+                        slice_seconds = min(0.05, remaining_seconds)
+                        _time.sleep(slice_seconds)
+                        remaining_seconds -= slice_seconds
+                    if tc.should_cancel():
+                        break
+                    if not tc.is_paused():
+                        self.store.update_task(task_id, status="running")
+                        continue
                 # 协作式：当前页已完成后真正进入 paused，再发 task.paused（避免假暂停）
                 self.store.update_task(task_id, status="paused", processed_pages=processed)
-                self.emit_task_event("task.paused", task_id, {"processed_pages": processed})
+                self.emit_task_event(
+                    "task.paused",
+                    task_id,
+                    {
+                        "processed_pages": processed,
+                        "checkpoint": self.store.get_task_checkpoint(task_id, SLOWFAKE_SOURCE_ID),
+                    },
+                    source_id=SLOWFAKE_SOURCE_ID,
+                    worker_generation=worker_generation,
+                )
                 tc.wait_if_paused()
                 if tc.should_cancel():
                     break
                 self.store.update_task(task_id, status="running")
-            _time.sleep(random.uniform(0.15, 0.3))
-            processed += 1
-            self.store.update_task(task_id, processed_pages=processed)
-            self.emit_task_event(
-                "task.progress",
-                task_id,
-                {"processed_pages": processed, "total_pages": total, "page_index": page_index},
+            page_delay_seconds = (
+                self.slowfake_page_delay_ms / 1000.0
+                if self.slowfake_page_delay_ms > 0
+                else random.uniform(0.15, 0.3)
             )
+            _time.sleep(page_delay_seconds)
+            outcome = self.store.record_page_completion(
+                task_id=task_id,
+                source_id=SLOWFAKE_SOURCE_ID,
+                page_no=page_no,
+                worker_generation=worker_generation,
+                occurrences=[self._build_slowfake_occurrence(page_no)],
+            )
+            processed_page_ids = outcome["processed_page_ids"]
+            processed = len(processed_page_ids)
+            outcome["event"]["payload"]["total_pages"] = total
+            self.emit_task_event_row(outcome["event"])
+            if self.slowfake_inter_page_delay_ms > 0 and page_no < total:
+                _time.sleep(self.slowfake_inter_page_delay_ms / 1000.0)
         if tc.should_cancel():
             self.store.update_task(task_id, status="cancelled", finished_at=now_iso())
-            self.emit_task_event("task.cancelled", task_id, {})
+            self.emit_task_event(
+                "task.cancelled",
+                task_id,
+                {"reason": "cancelled"},
+                source_id=SLOWFAKE_SOURCE_ID,
+                worker_generation=worker_generation,
+            )
         else:
             self.store.update_task(task_id, status="completed", processed_pages=total, finished_at=now_iso())
-            self.emit_task_event("task.completed", task_id, {"processed_pages": total})
+            self.emit_task_event(
+                "task.completed",
+                task_id,
+                {"processed_pages": total, "total_pages": total},
+                source_id=SLOWFAKE_SOURCE_ID,
+                worker_generation=worker_generation,
+            )
 
-    def _run_scan(self, task_id: str) -> None:
+    def _build_slowfake_occurrence(self, page_no: int) -> dict[str, Any]:
+        matched_character = "约" if page_no % 2 == 1 else "約"
+        return {
+            "occurrence_id": f"occ-{page_no}",
+            "document_id": SLOWFAKE_SOURCE_ID,
+            "source_id": SLOWFAKE_SOURCE_ID,
+            "file_name": "slowfake.pdf",
+            "relative_path": "slowfake.pdf",
+            "page_number": page_no,
+            "page_index": page_no - 1,
+            "page_occurrence_index": 1,
+            "matched_character": matched_character,
+            "character_variant": "simplified" if matched_character == "约" else "traditional",
+            "bbox_hash": f"bbox-{page_no}-{matched_character}",
+            "verification_status": "confirmed",
+            "context_full": f"page-{page_no}-{matched_character}",
+        }
+
+    def _run_scan(self, task_id: str, worker_generation: int) -> None:
         """在后台线程跑 ReportPipeline 并把结果导入 TaskStore。
 
         通过 TaskControl 实现协作式 pause/resume/cancel：管线在每个页面边界
@@ -252,9 +364,9 @@ class Server:
             return
         tc = TaskControl()
         self._task_controls[task_id] = tc
-        self.emit_task_event("task.started", task_id, {"source_dir": task["source_dir"]})
         if self.slowfake_pages > 0:
-            self._run_slowfake(task_id, tc)
+            self._run_slowfake(task_id, tc, worker_generation)
+            self._task_controls.pop(task_id, None)
             return
         try:
             from .report_pipeline import ReportPipeline  # 延迟导入（重依赖）
@@ -283,12 +395,28 @@ class Server:
                 occurrence_count=self.store._count_occurrences(task_id),
                 finished_at=now_iso(),
             )
-            self.emit_task_event("task.completed", task_id, {"occurrence_count": self.store._count_occurrences(task_id)})
+            self.emit_task_event(
+                "task.completed",
+                task_id,
+                {"occurrence_count": self.store._count_occurrences(task_id)},
+                worker_generation=worker_generation,
+            )
         except Exception as exc:  # noqa: BLE001
             self.store.update_task(
-                task_id, status="failed", finished_at=now_iso(), error_message=str(exc)
+                task_id,
+                status="failed",
+                finished_at=now_iso(),
+                error_code="TASK_RECOVERABLE" if self.store.get_task(task_id)["processed_pages"] > 0 else None,
+                error_message=str(exc),
             )
-            self.emit_task_event("task.failed", task_id, {"error": str(exc)})
+            self.emit_task_event(
+                "task.failed",
+                task_id,
+                {"error": str(exc)},
+                worker_generation=worker_generation,
+            )
+        finally:
+            self._task_controls.pop(task_id, None)
 
     def _import_report(self, task_id: str, task_workspace: Path, scan_workspace: Path, report: dict) -> None:
         pages_by_id = {p.get("page_image_id"): p for p in report.get("pages", [])}
@@ -388,7 +516,7 @@ def _h_tasks_start(server: Server, params: dict) -> dict:
     server._transition(task_id, "starting")
     server._transition(task_id, "running")
     server.store.update_task(task_id, started_at=now_iso())
-    server.start_scan_thread(task_id)
+    server.start_scan_thread(task_id, entry_event="task.started")
     return {"task_id": task_id, "status": "running"}
 
 
@@ -418,29 +546,82 @@ def _h_tasks_pause(server: Server, params: dict) -> dict:
         server._transition(task_id, "pausing")
     except ProtocolError:
         pass
-    server.emit_task_event("task.pausing", task_id, {})
+    task = server.store.get_task(task_id)
+    server.emit_task_event(
+        "task.pausing",
+        task_id,
+        {},
+        source_id=SLOWFAKE_SOURCE_ID if server.slowfake_pages > 0 else "",
+        worker_generation=int(task["worker_generation"] if task else 0),
+    )
     return {"task_id": task_id, "status": "pausing"}
 
 
 def _h_tasks_resume(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     tc = server._task_controls.get(task_id)
+    server._transition(task_id, "running")
+    task = server.store.get_task(task_id)
     if tc is not None:
         tc.request_resume()
-    server._transition(task_id, "running")
-    server.emit_task_event("task.resumed", task_id, {})
+        server.emit_task_event(
+            "task.resumed",
+            task_id,
+            {},
+            source_id=SLOWFAKE_SOURCE_ID if server.slowfake_pages > 0 else "",
+            worker_generation=int(task["worker_generation"] if task else 0),
+        )
+    else:
+        server.start_scan_thread(task_id, entry_event="task.resumed")
     return {"task_id": task_id, "status": "running"}
 
 
 def _h_tasks_cancel(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     tc = server._task_controls.get(task_id)
+    task = server.store.get_task(task_id)
     if tc is not None:
         tc.request_cancel()
-    server.emit_task_event("task.cancelling", task_id, {})
+        try:
+            server._transition(task_id, "stopping")
+        except ProtocolError:
+            pass
+        server.emit_task_event(
+            "task.cancelling",
+            task_id,
+            {},
+            source_id=SLOWFAKE_SOURCE_ID if server.slowfake_pages > 0 else "",
+            worker_generation=int(task["worker_generation"] if task else 0),
+        )
+        return {"task_id": task_id, "status": "stopping"}
     server.store.update_task(task_id, status="cancelled", finished_at=now_iso())
-    server.emit_task_event("task.cancelled", task_id, {})
+    server.emit_task_event(
+        "task.cancelled",
+        task_id,
+        {"reason": "cancelled"},
+        source_id=SLOWFAKE_SOURCE_ID if server.slowfake_pages > 0 else "",
+        worker_generation=int(task["worker_generation"] if task else 0),
+    )
     return {"task_id": task_id, "status": "cancelled"}
+
+
+def _h_tasks_inspect_state(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    source_id = params.get("source_id") or SLOWFAKE_SOURCE_ID
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    total, items = server.store.query_occurrences(task_id=task_id, limit=10**9, offset=0)
+    return {
+        "task": task,
+        "task_id": task_id,
+        "source_id": source_id,
+        "processed_page_ids": server.store.list_processed_page_ids(task_id, source_id),
+        "occurrence_ids": [item["occurrence_id"] for item in items],
+        "checkpoint": server.store.get_task_checkpoint(task_id, source_id),
+        "events": server.store.list_task_events(task_id),
+        "occurrence_count": total,
+    }
 
 
 def _h_demo_create(server: Server, params: dict) -> dict:

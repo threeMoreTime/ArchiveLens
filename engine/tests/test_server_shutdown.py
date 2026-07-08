@@ -85,6 +85,22 @@ class ShutdownTests(unittest.TestCase):
         events = [m for m in lines if m.get("event") == "engine.shutdown"]
         self.assertEqual(len(events), 1)
 
+    def test_run_stops_after_shutdown_request_without_waiting_for_eof(self) -> None:
+        import sys
+
+        original_stdin = sys.stdin
+        buf = io.StringIO()
+        try:
+            sys.stdin = io.StringIO(self._req("app.shutdown", "s1") + "\n" + self._req("app.info", "r2") + "\n")
+            with redirect_stdout(buf):
+                self.server.run()
+        finally:
+            sys.stdin = original_stdin
+        lines = [json.loads(l) for l in buf.getvalue().splitlines() if l.strip()]
+        responses = [m for m in lines if "ok" in m]
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0]["request_id"], "s1")
+
 
 if __name__ == "__main__":
     unittest.main()

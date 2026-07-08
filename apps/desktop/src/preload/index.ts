@@ -60,4 +60,34 @@ const api: ArchiveLensApi = {
   },
 };
 
+if (process.env["ARCHIVELENS_E2E"] === "1") {
+  api.test = {
+    lifecycle: {
+      requestClose: () => ipcRenderer.invoke("test.lifecycle.requestClose"),
+      selectCloseAction: (action) => ipcRenderer.invoke("test.lifecycle.selectCloseAction", action),
+      getState: () => ipcRenderer.invoke("test.lifecycle.getState"),
+    },
+    tray: {
+      getState: () => ipcRenderer.invoke("test.tray.getState"),
+      restoreWindow: () => ipcRenderer.invoke("test.tray.restoreWindow"),
+    },
+    window: {
+      getState: () => ipcRenderer.invoke("test.window.getState"),
+    },
+    engine: {
+      getPid: () => ipcRenderer.invoke("test.engine.getPid"),
+    },
+    sidecar: {
+      simulateCrash: () => ipcRenderer.invoke("test.sidecar.simulateCrash"),
+    },
+    task: {
+      getState: (task_id) => ipcRenderer.invoke("test.task.getState", { task_id }),
+      getProcessedPageIds: (task_id) => ipcRenderer.invoke("test.task.getProcessedPageIds", { task_id }),
+      getOccurrenceIds: (task_id) => ipcRenderer.invoke("test.task.getOccurrenceIds", { task_id }),
+      getCheckpoint: (task_id) => ipcRenderer.invoke("test.task.getCheckpoint", { task_id }),
+      getEventSequence: (task_id) => ipcRenderer.invoke("test.task.getEventSequence", { task_id }),
+    },
+  };
+}
+
 contextBridge.exposeInMainWorld("archiveLens", api);

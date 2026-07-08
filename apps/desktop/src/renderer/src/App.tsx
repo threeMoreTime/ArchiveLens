@@ -7,13 +7,18 @@ import ReviewPage from "./pages/ReviewPage";
 
 export default function App() {
   const nav = useNavigate();
-  const [recoverable, setRecoverable] = useState(0);
+  const [recoverable, setRecoverable] = useState<unknown[]>([]);
   useEffect(() => {
-    const off = window.archiveLens.subscribe.onRecoverable((tasks: unknown[]) =>
-      setRecoverable(Array.isArray(tasks) ? tasks.length : 0),
-    );
+    const off = window.archiveLens.subscribe.onRecoverable((tasks: unknown[]) => {
+      setRecoverable(Array.isArray(tasks) ? tasks : []);
+    });
     return off;
   }, []);
+
+  const firstRecoverableTask = recoverable.find(
+    (task) => typeof task === "object" && task !== null && "task_id" in task && typeof (task as any).task_id === "string",
+  ) as { task_id: string } | undefined;
+  const firstRecoverableTaskId = firstRecoverableTask?.task_id ?? null;
 
   return (
     <div className="al-app">
@@ -27,10 +32,12 @@ export default function App() {
             新建扫描
           </NavLink>
         </nav>
-        {recoverable > 0 && (
+        {recoverable.length > 0 && (
           <div className="al-recoverable">
-            发现 {recoverable} 个未完成任务
-            <button onClick={() => nav("/tasks/current")}>查看</button>
+            发现 {recoverable.length} 个未完成任务
+            <button onClick={() => firstRecoverableTaskId && nav(`/tasks/${firstRecoverableTaskId}`)} disabled={!firstRecoverableTaskId}>
+              查看
+            </button>
           </div>
         )}
       </aside>

@@ -9,11 +9,13 @@ import { logger } from "./logging/logger";
  */
 
 let tray: Tray | null = null;
+let trayWindowGetter: (() => BrowserWindow | null) | null = null;
 
 export function createTray(getWin: () => BrowserWindow | null): Tray {
   if (tray) {
     return tray;
   }
+  trayWindowGetter = getWin;
   const icon = nativeImage.createEmpty();
   tray = new Tray(icon);
   tray.setToolTip("ArchiveLens");
@@ -83,6 +85,23 @@ export function destroyTray(): void {
   if (tray) {
     tray.destroy();
     tray = null;
+    trayWindowGetter = null;
     logger.info("托盘已销毁");
   }
+}
+
+export function restoreTrayWindow(): boolean {
+  const win = trayWindowGetter?.();
+  if (!win || win.isDestroyed()) {
+    return false;
+  }
+  if (win.isMinimized() || !win.isVisible()) {
+    win.show();
+  }
+  win.focus();
+  return true;
+}
+
+export function getTrayState(): { present: boolean } {
+  return { present: tray !== null };
 }

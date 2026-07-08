@@ -103,15 +103,16 @@ class HandlersTests(unittest.TestCase):
         self.assertGreaterEqual(len(data["records"]), 1)
 
     def test_emit_task_event_has_sequence_and_timestamp(self) -> None:
+        task_id = self.server.store.create_task(source_dir="X", output_dir="Y", workspace_dir="Z", name="emit")
         buf = io.StringIO()
         with redirect_stdout(buf):
-            self.server.emit_task_event("task.progress", "t1", {"x": 1})
-            self.server.emit_task_event("task.progress", "t1", {"x": 2})
+            self.server.emit_task_event("task.progress", task_id, {"x": 1})
+            self.server.emit_task_event("task.progress", task_id, {"x": 2})
         lines = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
         self.assertEqual(lines[0]["sequence"], 1)
         self.assertEqual(lines[1]["sequence"], 2)
         self.assertIn("timestamp", lines[0])
-        self.assertEqual(lines[0]["task_id"], "t1")
+        self.assertEqual(lines[0]["task_id"], task_id)
 
 
 if __name__ == "__main__":

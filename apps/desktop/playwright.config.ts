@@ -8,6 +8,8 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   use: {
-    trace: "on-first-retry",
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
   },
 });

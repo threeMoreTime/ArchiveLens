@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { resolveEngineCommand, type EngineCommand } from "./paths";
@@ -24,10 +24,32 @@ interface Pending {
   timer: NodeJS.Timeout;
 }
 
+export type SidecarExitReason = "app_shutdown" | "forced_shutdown" | "unexpected_exit";
+
 export interface SidecarExitInfo {
   code: number | null;
   signal: NodeJS.Signals | null;
   stderrTail: string[];
+  expected: boolean;
+  reason: SidecarExitReason;
+  kind: "expected_shutdown" | "forced_shutdown" | "unexpected_exit" | "crash";
+}
+
+export function classifySidecarExit(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  requestedReason: SidecarExitReason | null,
+): Pick<SidecarExitInfo, "expected" | "reason" | "kind"> {
+  if (requestedReason === "app_shutdown" && (code === 0 || code === null) && signal === null) {
+    return { expected: true, reason: "app_shutdown", kind: "expected_shutdown" };
+  }
+  if (requestedReason === "forced_shutdown") {
+    return { expected: true, reason: "forced_shutdown", kind: "forced_shutdown" };
+  }
+  if (code === 0 && signal === null) {
+    return { expected: false, reason: "unexpected_exit", kind: "unexpected_exit" };
+  }
+  return { expected: false, reason: "unexpected_exit", kind: "crash" };
 }
 
 /**
@@ -48,6 +70,7 @@ export class SidecarManager extends EventEmitter {
   private starting: Promise<void> | null = null;
   private stderrTail: string[] = [];
   private readyWaiters: Array<() => void> = [];
+  private requestedExitReason: SidecarExitReason | null = null;
 
   get isReady(): boolean {
     return this.ready;
@@ -55,6 +78,10 @@ export class SidecarManager extends EventEmitter {
 
   get stderrTailSnapshot(): string[] {
     return [...this.stderrTail];
+  }
+
+  get pid(): number | null {
+    return this.proc?.pid ?? null;
   }
 
   async start(): Promise<void> {
@@ -207,35 +234,89 @@ export class SidecarManager extends EventEmitter {
   }
 
   private onExit(code: number | null, signal: NodeJS.Signals | null): void {
-    logger.error(`Sidecar 退出 code=${code} signal=${signal}`);
+    const classification = classifySidecarExit(code, signal, this.requestedExitReason);
+    const line = `Sidecar 退出 code=${code} signal=${signal} reason=${classification.reason} kind=${classification.kind}`;
+    if (classification.expected) {
+      logger.info(line);
+    } else if (classification.kind === "unexpected_exit") {
+      logger.warn(line);
+    } else {
+      logger.error(line);
+    }
+    this.requestedExitReason = null;
     this.ready = false;
+    this.starting = null;
+    this.proc = null;
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
       p.reject(new EngineError("ENGINE_CRASHED", `Sidecar 退出（code=${code}）`));
     }
     this.pending.clear();
-    this.emit("exit", { code, signal, stderrTail: [...this.stderrTail] } satisfies SidecarExitInfo);
+    this.emit("exit", {
+      code,
+      signal,
+      stderrTail: [...this.stderrTail],
+      expected: classification.expected,
+      reason: classification.reason,
+      kind: classification.kind,
+    } satisfies SidecarExitInfo);
   }
 
   /** 优雅停止：关闭 stdin，等待退出后强制 kill。 */
-  async stop(): Promise<void> {
+  async stop(reason: SidecarExitReason = "app_shutdown"): Promise<void> {
     const proc = this.proc;
     if (!proc) return;
     this.ready = false;
+    this.requestedExitReason = reason;
+    logger.info(`Sidecar stop begin pid=${proc.pid ?? "unknown"} reason=${reason}`);
+    if (reason === "app_shutdown" && this.proc?.stdin) {
+      try {
+        await this.call("app.shutdown", {}, 3000);
+        logger.info(`Sidecar app.shutdown acknowledged pid=${proc.pid ?? "unknown"}`);
+      } catch (error) {
+        logger.warn(`Sidecar app.shutdown failed pid=${proc.pid ?? "unknown"} error=${String(error)}`);
+      }
+    }
     try {
       proc.stdin?.end();
+      logger.info(`Sidecar stop stdin.end sent pid=${proc.pid ?? "unknown"}`);
     } catch {
       // 忽略
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        proc.kill();
-        resolve();
+      const forceKill = () => {
+        if (!proc.pid) {
+          logger.warn("Sidecar force-kill skipped because pid is missing");
+          resolve();
+          return;
+        }
+        logger.warn(`Sidecar force-kill pid=${proc.pid} reason=${reason}`);
+        if (process.platform === "win32") {
+          execFile("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { windowsHide: true }, () => undefined);
+          return;
+        }
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          resolve();
+        }
+      };
+      const forceKillTimer = setTimeout(() => {
+        forceKill();
       }, 3000);
       proc.once("exit", () => {
-        clearTimeout(timer);
+        clearTimeout(forceKillTimer);
+        logger.info(`Sidecar stop observed exit pid=${proc.pid ?? "unknown"} reason=${reason}`);
         resolve();
       });
     });
+  }
+
+  simulateCrash(): boolean {
+    if (!this.proc) {
+      return false;
+    }
+    this.requestedExitReason = null;
+    return this.proc.kill();
   }
 }

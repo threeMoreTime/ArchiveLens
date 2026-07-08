@@ -99,7 +99,7 @@ export const useTaskStore = create<TaskStoreState>((set, get) => ({
     const seq = typeof event.sequence === "number" ? event.sequence : 0;
     const last = get().lastSequence[tid] ?? 0;
     // 旧 sequence 不得覆盖新状态（防乱序）
-    if (seq < last) return;
+    if (seq <= last) return;
     set((s) => ({
       lastSequence: { ...s.lastSequence, [tid]: Math.max(last, seq) },
       tasks: { ...s.tasks, [tid]: reduceTask(s.tasks[tid], tid, event) },

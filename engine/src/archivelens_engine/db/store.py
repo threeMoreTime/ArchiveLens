@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
@@ -25,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -45,6 +46,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at TEXT,
     updated_at TEXT,
     finished_at TEXT,
+    last_event_sequence INTEGER NOT NULL DEFAULT 0,
+    worker_generation INTEGER NOT NULL DEFAULT 0,
     error_code TEXT,
     error_message TEXT
 );
@@ -58,8 +61,10 @@ CREATE TABLE IF NOT EXISTS occurrences (
     page_number INTEGER,
     page_index INTEGER,
     page_occurrence_index INTEGER,
+    source_id TEXT NOT NULL DEFAULT '',
     matched_character TEXT,
     character_variant TEXT,
+    bbox_hash TEXT NOT NULL DEFAULT '',
     unicode_codepoint TEXT,
     context_before TEXT,
     context_after TEXT,
@@ -78,6 +83,34 @@ CREATE TABLE IF NOT EXISTS occurrences (
     page_image_height INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_occ_task ON occurrences(task_id);
+CREATE TABLE IF NOT EXISTS task_processed_pages (
+    task_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    page_no INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, source_id, page_no)
+);
+CREATE TABLE IF NOT EXISTS task_checkpoints (
+    task_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    last_completed_page INTEGER NOT NULL DEFAULT 0,
+    next_page INTEGER NOT NULL DEFAULT 1,
+    processed_page_ids_json TEXT NOT NULL DEFAULT '[]',
+    worker_generation INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS task_events (
+    event_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    source_id TEXT NOT NULL DEFAULT '',
+    sequence INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    worker_generation INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_events_sequence ON task_events(task_id, sequence);
 CREATE TABLE IF NOT EXISTS review_records (
     task_id TEXT NOT NULL,
     occurrence_id TEXT NOT NULL,
@@ -98,7 +131,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 """
 
 
@@ -128,11 +161,77 @@ class TaskStore:
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
+        self._migrate_schema()
         self.conn.execute(
-            "INSERT OR IGNORE INTO schema_meta(key, value) VALUES (?, ?)",
+            "INSERT INTO schema_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             ("schema_version", str(SCHEMA_VERSION)),
         )
+        self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
+
+    def _migrate_schema(self) -> None:
+        current = int(
+            self.conn.execute("PRAGMA user_version").fetchone()[0] or 0
+        )
+        self._ensure_column("tasks", "last_event_sequence", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("tasks", "worker_generation", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("occurrences", "source_id", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("occurrences", "bbox_hash", "TEXT NOT NULL DEFAULT ''")
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_business_key "
+            "ON occurrences(task_id, source_id, page_number, matched_character, bbox_hash) "
+            "WHERE source_id <> '' AND bbox_hash <> ''"
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_processed_pages (
+                task_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                page_no INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, source_id, page_no)
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_checkpoints (
+                task_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                last_completed_page INTEGER NOT NULL DEFAULT 0,
+                next_page INTEGER NOT NULL DEFAULT 1,
+                processed_page_ids_json TEXT NOT NULL DEFAULT '[]',
+                worker_generation INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, source_id)
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_events (
+                event_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                source_id TEXT NOT NULL DEFAULT '',
+                sequence INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                worker_generation INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_task_events_sequence ON task_events(task_id, sequence)")
+        if current < SCHEMA_VERSION:
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _ensure_column(self, table: str, column: str, ddl: str) -> None:
+        cols = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in cols:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     # ---- tasks ----
     def create_task(
@@ -194,12 +293,30 @@ class TaskStore:
             self.conn.execute(f"UPDATE tasks SET {cols} WHERE task_id=?", vals)
             self.conn.commit()
 
+    def allocate_worker_generation(self, task_id: str) -> int:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT worker_generation FROM tasks WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            next_generation = int(row["worker_generation"] or 0) + 1
+            self.conn.execute(
+                "UPDATE tasks SET worker_generation=?, updated_at=? WHERE task_id=?",
+                (next_generation, now_iso(), task_id),
+            )
+            self.conn.commit()
+            return next_generation
+
     # ---- occurrences ----
     def add_occurrence(self, task_id: str, occ: dict[str, Any]) -> None:
         cols = [
             "occurrence_id", "task_id", "document_id", "file_path", "relative_path",
             "file_name", "page_number", "page_index", "page_occurrence_index",
+            "source_id",
             "matched_character", "character_variant", "unicode_codepoint",
+            "bbox_hash",
             "context_before", "context_after", "context_full", "ocr_confidence",
             "secondary_ocr_result", "verification_status", "location_method",
             "source_page_width", "source_page_height",
@@ -219,6 +336,275 @@ class TaskStore:
                 f"INSERT OR REPLACE INTO occurrences ({', '.join(cols)}) VALUES ({placeholders})",
                 [record.get(c) for c in cols],
             )
+
+    def list_processed_page_ids(self, task_id: str, source_id: str) -> list[int]:
+        with self._lock:
+            return self._list_processed_page_ids_locked(task_id, source_id)
+
+    def _list_processed_page_ids_locked(self, task_id: str, source_id: str) -> list[int]:
+        rows = self.conn.execute(
+            "SELECT page_no FROM task_processed_pages WHERE task_id=? AND source_id=? ORDER BY page_no ASC",
+            (task_id, source_id),
+        ).fetchall()
+        return [int(row["page_no"]) for row in rows]
+
+    def get_task_checkpoint(self, task_id: str, source_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT task_id, source_id, last_completed_page, next_page,
+                       processed_page_ids_json, worker_generation, updated_at
+                FROM task_checkpoints
+                WHERE task_id=? AND source_id=?
+                """,
+                (task_id, source_id),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "task_id": row["task_id"],
+                "source_id": row["source_id"],
+                "last_completed_page": int(row["last_completed_page"]),
+                "next_page": int(row["next_page"]),
+                "processed_page_ids": json.loads(row["processed_page_ids_json"]),
+                "worker_generation": int(row["worker_generation"]),
+                "updated_at": row["updated_at"],
+            }
+
+    def list_task_events(self, task_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT event_id, task_id, source_id, sequence, event_type, payload_json,
+                       worker_generation, created_at
+                FROM task_events
+                WHERE task_id=?
+                ORDER BY sequence ASC
+                """,
+                (task_id,),
+            ).fetchall()
+            return [
+                {
+                    "event_id": row["event_id"],
+                    "task_id": row["task_id"],
+                    "source_id": row["source_id"],
+                    "sequence": int(row["sequence"]),
+                    "event_type": row["event_type"],
+                    "payload": json.loads(row["payload_json"]),
+                    "worker_generation": int(row["worker_generation"]),
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ]
+
+    def append_task_event(
+        self,
+        *,
+        task_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        source_id: str = "",
+        worker_generation: int = 0,
+    ) -> dict[str, Any]:
+        with self._lock:
+            try:
+                with self.conn:
+                    return self._append_task_event_locked(
+                        task_id=task_id,
+                        event_type=event_type,
+                        payload=payload,
+                        source_id=source_id,
+                        worker_generation=worker_generation,
+                    )
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    def _append_task_event_locked(
+        self,
+        *,
+        task_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        source_id: str = "",
+        worker_generation: int = 0,
+    ) -> dict[str, Any]:
+        task = self.conn.execute(
+            "SELECT last_event_sequence, worker_generation FROM tasks WHERE task_id=?",
+            (task_id,),
+        ).fetchone()
+        if task is None:
+            raise KeyError(task_id)
+        sequence = int(task["last_event_sequence"] or 0) + 1
+        generation = max(int(task["worker_generation"] or 0), int(worker_generation or 0))
+        created_at = now_iso()
+        event_id = new_id("evt_")
+        self.conn.execute(
+            """
+            INSERT INTO task_events
+                (event_id, task_id, source_id, sequence, event_type, payload_json, worker_generation, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                task_id,
+                source_id,
+                sequence,
+                event_type,
+                json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":")),
+                generation,
+                created_at,
+            ),
+        )
+        self.conn.execute(
+            "UPDATE tasks SET last_event_sequence=?, worker_generation=?, updated_at=? WHERE task_id=?",
+            (sequence, generation, created_at, task_id),
+        )
+        return {
+            "event_id": event_id,
+            "task_id": task_id,
+            "source_id": source_id,
+            "sequence": sequence,
+            "event_type": event_type,
+            "payload": payload or {},
+            "worker_generation": generation,
+            "created_at": created_at,
+        }
+
+    def record_page_completion(
+        self,
+        *,
+        task_id: str,
+        source_id: str,
+        page_no: int,
+        worker_generation: int,
+        occurrences: Iterable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if page_no < 1:
+            raise ValueError("page_no must be >= 1")
+        occurrence_items = [dict(item) for item in occurrences]
+        for item in occurrence_items:
+            self._validate_recovery_occurrence(item, source_id=source_id, page_no=page_no)
+        with self._lock:
+            try:
+                with self.conn:
+                    for item in occurrence_items:
+                        self.add_occurrence(task_id, item)
+                    created_at = now_iso()
+                    self.conn.execute(
+                        """
+                        INSERT OR IGNORE INTO task_processed_pages(task_id, source_id, page_no, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (task_id, source_id, page_no, created_at),
+                    )
+                    processed_page_ids = self._list_processed_page_ids_locked(task_id, source_id)
+                    last_completed_page = max(processed_page_ids) if processed_page_ids else 0
+                    next_page = last_completed_page + 1
+                    self.conn.execute(
+                        """
+                        INSERT INTO task_checkpoints
+                            (task_id, source_id, last_completed_page, next_page, processed_page_ids_json,
+                             worker_generation, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(task_id, source_id) DO UPDATE SET
+                            last_completed_page=excluded.last_completed_page,
+                            next_page=excluded.next_page,
+                            processed_page_ids_json=excluded.processed_page_ids_json,
+                            worker_generation=excluded.worker_generation,
+                            updated_at=excluded.updated_at
+                        """,
+                        (
+                            task_id,
+                            source_id,
+                            last_completed_page,
+                            next_page,
+                            json.dumps(processed_page_ids, ensure_ascii=False, separators=(",", ":")),
+                            worker_generation,
+                            created_at,
+                        ),
+                    )
+                    self.conn.execute(
+                        """
+                        UPDATE tasks
+                        SET processed_pages=(
+                                SELECT COUNT(*) FROM task_processed_pages WHERE task_id=?
+                            ),
+                            occurrence_count=(
+                                SELECT COUNT(*) FROM occurrences WHERE task_id=?
+                            ),
+                            worker_generation=?,
+                            updated_at=?
+                        WHERE task_id=?
+                        """,
+                        (task_id, task_id, worker_generation, created_at, task_id),
+                    )
+                    event = self._append_task_event_locked(
+                        task_id=task_id,
+                        event_type="task.progress",
+                        payload={
+                            "page_no": page_no,
+                            "processed_pages": len(processed_page_ids),
+                            "source_id": source_id,
+                        },
+                        source_id=source_id,
+                        worker_generation=worker_generation,
+                    )
+                checkpoint = self.get_task_checkpoint(task_id, source_id)
+                assert checkpoint is not None
+                return {
+                    "processed_page_ids": processed_page_ids,
+                    "checkpoint": checkpoint,
+                    "event": event,
+                }
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    def _validate_recovery_occurrence(self, occurrence: dict[str, Any], *, source_id: str, page_no: int) -> None:
+        matched = occurrence.get("matched_character")
+        if not isinstance(matched, str) or not matched:
+            raise ValueError("matched_character is required")
+        bbox_hash = occurrence.get("bbox_hash")
+        if not isinstance(bbox_hash, str) or not bbox_hash:
+            raise ValueError("bbox_hash is required")
+        occurrence.setdefault("source_id", source_id)
+        occurrence.setdefault("page_number", page_no)
+
+    def reconcile_incomplete_tasks(self, reason: str) -> int:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT task_id, worker_generation
+                FROM tasks
+                WHERE status IN ('starting', 'running', 'pausing', 'stopping')
+                """
+            ).fetchall()
+            changed = 0
+            try:
+                with self.conn:
+                    for row in rows:
+                        task_id = row["task_id"]
+                        changed += 1
+                        updated_at = now_iso()
+                        self.conn.execute(
+                            """
+                            UPDATE tasks
+                            SET status='recoverable', error_code=?, error_message=?, updated_at=?
+                            WHERE task_id=?
+                            """,
+                            (reason, f"task interrupted: {reason}", updated_at, task_id),
+                        )
+                        self._append_task_event_locked(
+                            task_id=task_id,
+                            event_type="task.recoverable",
+                            payload={"reason": reason},
+                            worker_generation=int(row["worker_generation"] or 0),
+                        )
+            except Exception:
+                self.conn.rollback()
+                raise
+            return changed
 
     def add_occurrences(self, task_id: str, items: Iterable[dict[str, Any]]) -> int:
         count = 0

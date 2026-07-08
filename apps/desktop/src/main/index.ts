@@ -1,12 +1,19 @@
 import { app, BrowserWindow, dialog } from "electron";
+import { resolve } from "node:path";
 import { createMainWindow } from "./windows/main";
 import { sidecar, registerIpc } from "./ipc";
+import { createLifecycleController, type CloseAction } from "./lifecycle/controller";
 import { registerAssetProtocol, registerPrivilegedSchemes } from "./security/protocol";
 import { createTray, destroyTray } from "./tray";
 import { logger } from "./logging/logger";
 
 // 自定义协议必须在 app ready 之前声明为 privileged。
 registerPrivilegedSchemes();
+
+const userDataOverride = process.env["ARCHIVELENS_USER_DATA_DIR"];
+if (userDataOverride) {
+  app.setPath("userData", resolve(userDataOverride));
+}
 
 app.setAppUserModelId("io.archivelens.desktop");
 
@@ -21,6 +28,16 @@ interface TaskSummary {
 
 const ACTIVE_STATUSES = ["starting", "running", "pausing", "stopping"];
 const RECOVERABLE_STATUSES = ["paused", "recoverable", "stale", "running", "pausing", "starting"];
+const lifecycle = createLifecycleController({
+  sidecar,
+  logger,
+  getMainWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+  destroyTray,
+  appControl: { exit: (code) => app.exit(code), quit: () => app.quit() },
+  timeoutMs: Number(process.env["ARCHIVELENS_E2E_SHUTDOWN_TIMEOUT_MS"] ?? 15_000),
+  waitForTaskEvent: waitForEvent,
+  findActiveTask,
+});
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -37,7 +54,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     registerAssetProtocol();
-    registerIpc();
+    registerIpc(lifecycle);
 
     // Sidecar 启动失败不阻塞 UI；诊断页会展示降级状态。
     try {
@@ -61,57 +78,22 @@ if (!gotLock) {
     }
   });
 
-  // ---- 安全关闭协调器（任务 §七/§八/§九）----
-  let quitting = false;
-  let shutdownFlowRunning = false;
-
   app.on("before-quit", async (event) => {
-    if (quitting) {
+    if (lifecycle.getState().approvedQuit) {
       return; // 已批准真正退出
     }
     event.preventDefault();
-    if (shutdownFlowRunning) {
-      return; // 防重入
-    }
-    shutdownFlowRunning = true;
     try {
-      const active = await findActiveTask();
-      if (active) {
-        const choice = await promptShutdown(active);
-        if (choice === "minimize") {
-          const win = BrowserWindow.getAllWindows()[0];
-          if (win) {
-            win.hide();
-          }
-          shutdownFlowRunning = false;
-          return; // 留在托盘继续
-        } else if (choice === "pause") {
-          await sidecar.call("tasks.pause", { task_id: active.task_id });
-          const paused = await waitForEvent("task.paused", active.task_id, 15000);
-          if (!paused) {
-            logger.warn(`暂停等待超时（task=${active.task_id}），将强制标记 recoverable 后退出`);
-          }
-        } else if (choice === "stop") {
-          await sidecar.call("tasks.cancel", { task_id: active.task_id });
-          await waitForEvent("task.cancelled", active.task_id, 15000);
-        } else {
-          // 取消退出：应用继续，任务继续
-          shutdownFlowRunning = false;
-          return;
-        }
+      const request = await lifecycle.requestClose();
+      if (!request.requiresAction) {
+        return;
       }
-      quitting = true;
-      logger.info("应用退出，停止 Sidecar…");
-      try {
-        await sidecar.stop();
-      } catch (err) {
-        logger.warn(`Sidecar 停止异常：${(err as Error).message}`);
-      }
-      destroyTray();
-      app.exit(0);
+
+      const choice = await promptShutdown(request.activeTask ?? { task_id: "", status: "running" });
+      await lifecycle.selectCloseAction(choice);
     } catch (err) {
       logger.error(`关闭流程异常：${(err as Error).message}`);
-      shutdownFlowRunning = false;
+      lifecycle.reset();
     }
   });
 }
@@ -128,7 +110,7 @@ async function findActiveTask(): Promise<TaskSummary | null> {
   }
 }
 
-async function promptShutdown(task: TaskSummary): Promise<"minimize" | "pause" | "stop" | "cancel"> {
+async function promptShutdown(task: TaskSummary): Promise<CloseAction> {
   const win = BrowserWindow.getAllWindows()[0];
   const res = await dialog.showMessageBox(win ?? new BrowserWindow({ show: false }), {
     type: "warning",
@@ -139,7 +121,7 @@ async function promptShutdown(task: TaskSummary): Promise<"minimize" | "pause" |
     cancelId: 3,
     noLink: true,
   });
-  const choices = ["minimize", "pause", "stop", "cancel"] as const;
+  const choices = ["minimize", "pause_and_quit", "stop_and_quit", "cancel"] as const;
   return choices[res.response] ?? "cancel";
 }
 

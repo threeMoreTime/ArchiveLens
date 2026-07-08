@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
+import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 
 from archivelens_engine import PROTOCOL_VERSION, __version__
 from archivelens_engine.protocol import ErrorCode
@@ -109,6 +113,26 @@ class ServerReadyEventTests(unittest.TestCase):
         self.assertEqual(lines[0]["event"], "engine.ready")
         self.assertEqual(lines[0]["payload"]["protocol_version"], PROTOCOL_VERSION)
         self.assertTrue(lines[1]["ok"])
+
+
+class ServerWorkspaceOverrideTests(unittest.TestCase):
+    def test_workspace_root_defaults_to_al_workspace_root_env(self) -> None:
+        tmp = tempfile.mkdtemp()
+        previous = os.environ.get("AL_WORKSPACE_ROOT")
+        os.environ["AL_WORKSPACE_ROOT"] = tmp
+        try:
+            server = Server()
+            try:
+                self.assertEqual(server.workspace_root, Path(tmp))
+                self.assertEqual(server.store.db_path, Path(tmp) / "archivelens.db")
+            finally:
+                server.store.close()
+        finally:
+            if previous is None:
+                os.environ.pop("AL_WORKSPACE_ROOT", None)
+            else:
+                os.environ["AL_WORKSPACE_ROOT"] = previous
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

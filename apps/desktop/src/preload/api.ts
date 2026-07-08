@@ -138,6 +138,35 @@ export interface ArchiveLensApi {
     openFolder(path: string): Promise<{ ok: boolean }>;
     openOriginal(path: string): Promise<{ ok: boolean }>;
   };
+  test?: {
+    lifecycle: {
+      requestClose(): Promise<unknown>;
+      selectCloseAction(action: {
+        action: "minimize" | "cancel" | "pause_and_quit" | "stop_and_quit" | "continue_waiting" | "force_quit";
+      }): Promise<unknown>;
+      getState(): Promise<unknown>;
+    };
+    tray: {
+      getState(): Promise<unknown>;
+      restoreWindow(): Promise<unknown>;
+    };
+    window: {
+      getState(): Promise<unknown>;
+    };
+    engine: {
+      getPid(): Promise<unknown>;
+    };
+    sidecar: {
+      simulateCrash(): Promise<unknown>;
+    };
+    task: {
+      getState(task_id: string): Promise<unknown>;
+      getProcessedPageIds(task_id: string): Promise<unknown>;
+      getOccurrenceIds(task_id: string): Promise<unknown>;
+      getCheckpoint(task_id: string): Promise<unknown>;
+      getEventSequence(task_id: string): Promise<unknown>;
+    };
+  };
 }
 
 /** 拼接受限资源协议 URL（不暴露绝对路径）。 */
