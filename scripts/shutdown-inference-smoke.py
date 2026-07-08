@@ -16,8 +16,9 @@ import threading
 import time
 from pathlib import Path
 
-EXE = Path("F:/OCR/dist/engine/win-x64/archivelens-engine.exe")
-FX = Path("F:/OCR/tests/fixtures/ocr")
+ROOT = Path(__file__).resolve().parents[1]
+EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
+FX = ROOT / "tests" / "fixtures" / "ocr"
 
 proc = subprocess.Popen(
     [str(EXE), "serve"],
@@ -73,6 +74,20 @@ def wait_event(event: str, timeout: float = 300) -> dict | None:
     return None
 
 
+def wait_no_residual_engine(timeout: float = 10) -> bool:
+    end = time.time() + timeout
+    while time.time() < end:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq archivelens-engine.exe", "/NH", "/FO", "CSV"],
+            capture_output=True,
+            text=True,
+        )
+        if "archivelens-engine.exe" not in result.stdout or "INFO:" in result.stdout:
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def main() -> int:
     try:
         if not wait_event("engine.ready", 30):
@@ -124,11 +139,7 @@ def main() -> int:
             return 1
 
         # 无残留
-        r = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq archivelens-engine.exe", "/NH", "/FO", "CSV"],
-            capture_output=True, text=True,
-        )
-        if "archivelens-engine.exe" in r.stdout and "INFO:" not in r.stdout:
+        if not wait_no_residual_engine():
             print("FAIL: 残留 archivelens-engine.exe")
             return 1
         print("[shutdown] PASS: 真实 RapidOCR inference shutdown，进程退出，无残留")

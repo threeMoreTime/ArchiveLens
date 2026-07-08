@@ -6,8 +6,9 @@ import threading
 import time
 from pathlib import Path
 
-EXE = Path("F:/OCR/dist/engine/win-x64/archivelens-engine.exe")
-FX = Path("F:/OCR/tests/fixtures/ocr")
+ROOT = Path(__file__).resolve().parents[1]
+EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
+FX = ROOT / "tests" / "fixtures" / "ocr"
 proc = subprocess.Popen(
     [str(EXE), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
     stderr=subprocess.PIPE, text=True, encoding="utf-8",

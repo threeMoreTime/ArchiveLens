@@ -13,8 +13,9 @@ import threading
 import time
 from pathlib import Path
 
-EXE = Path("F:/OCR/dist/engine/win-x64/archivelens-engine.exe")
-FX = Path("F:/OCR/tests/fixtures/ocr")
+ROOT = Path(__file__).resolve().parents[1]
+EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
+FX = ROOT / "tests" / "fixtures" / "ocr"
 
 proc = subprocess.Popen(
     [str(EXE), "serve"],
@@ -120,7 +121,7 @@ def main() -> int:
             "has ArchiveLens": "ArchiveLens" in content,
             "no http://": "http://" not in content,
             "no https://": "https://" not in content,
-            "no F:\\OCR": "F:\\OCR" not in content and "F:/OCR" not in content,
+            "no repo source path": str(ROOT) not in content and str(ROOT).replace("\\", "/") not in content,
             "no .tmp": ".tmp" not in content,
             "has 已确认或 confirmed": "已确认" in content or "confirmed" in content.lower(),
         }

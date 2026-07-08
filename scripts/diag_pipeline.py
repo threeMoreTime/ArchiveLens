@@ -5,8 +5,11 @@ from pathlib import Path
 
 from archivelens_engine.report_pipeline import ReportPipeline
 
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURE = ROOT / "tests" / "fixtures" / "ocr" / "simplified-horizontal.pdf"
+
 src = Path(tempfile.mkdtemp())
-shutil.copy("F:/OCR/tests/fixtures/ocr/simplified-horizontal.pdf", src)
+shutil.copy(FIXTURE, src)
 ws = Path(tempfile.mkdtemp())
 p = ReportPipeline(root_dir=src, output_html=ws / "o.html", workspace_dir=ws)
 report = p.run()

@@ -2467,9 +2467,10 @@ def merge_existing_reports(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root-dir", default=r"F:\OCR")
-    parser.add_argument("--output-html", default=r"F:\OCR\约字检索报告.html")
-    parser.add_argument("--workspace-dir", default=r"F:\OCR\.tmp\work")
+    default_root_dir = Path.cwd()
+    parser.add_argument("--root-dir", default=str(default_root_dir))
+    parser.add_argument("--output-html", default=str(default_root_dir / "约字检索报告.html"))
+    parser.add_argument("--workspace-dir", default=str(default_root_dir / ".tmp" / "work"))
     parser.add_argument("--page-limit", type=int, default=None)
     parser.add_argument("--document-limit", type=int, default=None)
     parser.add_argument("--include-path", action="append", default=[])
