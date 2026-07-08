@@ -14,7 +14,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
 
 import pytesseract
@@ -74,10 +74,12 @@ class ReportPipeline:
         config: EngineConfig | None = None,
         task_control: TaskControl | None = None,
         ocr_engine: Any = None,
+        on_page_completed: Callable[..., None] | None = None,
     ) -> None:
         # Phase 1 预留实例配置入口；Phase 3 起 Sidecar 将按任务注入打包内路径。
         self.config = config or DEFAULT_CONFIG
         self.task_control = task_control
+        self.on_page_completed = on_page_completed
         self.backend_registry = DocumentBackendRegistry(self.config)
         self.root_dir = root_dir
         self.output_html = output_html
@@ -288,6 +290,9 @@ class ReportPipeline:
         start_page_index, page_stop = self._page_range_for_document(document, checkpoint=checkpoint)
         page_indexes = range(start_page_index, page_stop)
         for page_index in page_indexes:
+            page_payload: dict[str, Any] | None = None
+            page_occurrences: list[dict[str, Any]] = []
+            page_completed = False
             if self.task_control is not None:
                 if self.task_control.should_cancel():
                     print(f"[cancel] file={document.relative_path} page={page_index}", flush=True)
@@ -303,6 +308,7 @@ class ReportPipeline:
                 if page_payload is not None:
                     pages.append(page_payload)
                 occurrences.extend(page_occurrences)
+                page_completed = True
             except Exception as exc:  # noqa: BLE001
                 print(
                     f"[page:error] file={document.relative_path} page={page_index + 1} error={type(exc).__name__}: {exc}",
@@ -318,6 +324,13 @@ class ReportPipeline:
                     )
                 )
             self._save_checkpoint(document, page_index + 1, pages, occurrences, failures)
+            if page_completed and self.on_page_completed is not None:
+                self.on_page_completed(
+                    document=document,
+                    page_index=page_index,
+                    page_payload=page_payload,
+                    page_occurrences=list(page_occurrences),
+                )
         deduped = dedupe_occurrences(occurrences)
         assign_occurrence_indexes(deduped)
         self._persist_document(document, pages, deduped, failures)

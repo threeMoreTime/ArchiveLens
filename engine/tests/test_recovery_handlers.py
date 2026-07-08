@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from archivelens_engine.server import Server, _h_tasks_create, _h_tasks_resume, _h_tasks_start
@@ -136,6 +137,87 @@ class RecoveryHandlerTests(unittest.TestCase):
         self.assertEqual(state["processed_page_ids"], [1])
         self.assertIsNotNone(state["checkpoint"])
         self.assertEqual(state["checkpoint"]["source_id"], source_id)
+
+    def test_real_scan_path_persists_processed_pages_checkpoint_and_progress_events(self) -> None:
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src)})
+        task_id = created["task_id"]
+        self.server.store.update_task(task_id, status="running")
+        self.server.store.update_task(task_id, started_at="2026-07-09T00:00:00+00:00")
+        worker_generation = self.server.store.allocate_worker_generation(task_id)
+        self.server.emit_task_event(
+            "task.started",
+            task_id,
+            {"worker_generation": worker_generation},
+            worker_generation=worker_generation,
+        )
+
+        class FakeReportPipeline:
+            def __init__(self, *args, workspace_dir: Path, output_html: Path, **kwargs) -> None:
+                self.workspace_dir = workspace_dir
+                self.output_html = output_html
+                self.on_page_completed = kwargs.get("on_page_completed")
+
+            def run(self) -> dict:
+                pages_dir = self.workspace_dir / "pages"
+                crops_dir = self.workspace_dir / "crops"
+                pages_dir.mkdir(parents=True, exist_ok=True)
+                crops_dir.mkdir(parents=True, exist_ok=True)
+                doc = SimpleNamespace(document_id="real-doc.pdf", relative_path="real-doc.pdf", page_count=2)
+                for page_no, matched_character in ((1, "约"), (2, "約")):
+                    page_path = pages_dir / f"p{page_no}.png"
+                    crop_path = crops_dir / f"c{page_no}.png"
+                    page_path.write_bytes(b"page")
+                    crop_path.write_bytes(b"crop")
+                    if callable(self.on_page_completed):
+                        self.on_page_completed(
+                            document=doc,
+                            page_index=page_no - 1,
+                            page_payload={
+                                "page_image_id": f"real-doc-p{page_no}",
+                                "image_path": str(page_path),
+                                "page_width": 1000,
+                                "page_height": 1400,
+                            },
+                            page_occurrences=[
+                                {
+                                    "occurrence_id": f"occ-real-{page_no}",
+                                    "document_id": "real-doc.pdf",
+                                    "source_id": "real-doc.pdf",
+                                    "file_name": "real-doc.pdf",
+                                    "relative_path": "real-doc.pdf",
+                                    "page_number": page_no,
+                                    "page_index": page_no - 1,
+                                    "page_occurrence_index": 1,
+                                    "matched_character": matched_character,
+                                    "character_variant": "simplified" if matched_character == "约" else "traditional",
+                                    "bbox_hash": f"bbox-real-{page_no}",
+                                    "verification_status": "confirmed",
+                                    "context_full": f"page-{page_no}-{matched_character}",
+                                    "crop_image_path": str(crop_path),
+                                }
+                            ],
+                        )
+                self.output_html.parent.mkdir(parents=True, exist_ok=True)
+                self.output_html.write_text("<html>ok</html>", encoding="utf-8")
+                return {"stats": {"document_total_pages": 2}, "pages": [], "occurrences": []}
+
+            def close(self) -> None:
+                return None
+
+        with patch("archivelens_engine.report_pipeline.ReportPipeline", FakeReportPipeline):
+            self.server._run_scan(task_id, worker_generation)
+
+        state = self.server.handlers["tasks.inspectState"](self.server, {"task_id": task_id})
+        self.assertEqual(state["source_id"], "real-doc.pdf")
+        self.assertEqual(state["processed_page_ids"], [1, 2])
+        self.assertIsNotNone(state["checkpoint"])
+        self.assertEqual(state["checkpoint"]["last_completed_page"], 2)
+        self.assertEqual(state["checkpoint"]["next_page"], 3)
+        self.assertEqual(
+            [event["event_type"] for event in state["events"]],
+            ["task.created", "task.started", "task.progress", "task.progress", "task.completed"],
+        )
+        self.assertEqual(len(state["occurrence_ids"]), 2)
 
 
 if __name__ == "__main__":

@@ -355,6 +355,88 @@ class Server:
             "context_full": f"page-{page_no}-{matched_character}",
         }
 
+    def _build_store_occurrence_rows(
+        self,
+        *,
+        scan_workspace: Path,
+        page_payload: dict[str, Any] | None,
+        page_occurrences: list[dict[str, Any]],
+        source_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = []
+        page_image_path = page_payload.get("image_path") if page_payload is not None else ""
+        page_width = page_payload.get("page_width") if page_payload is not None else None
+        page_height = page_payload.get("page_height") if page_payload is not None else None
+        for occ in page_occurrences:
+            row = dict(occ)
+            row["source_id"] = source_id
+            try:
+                row["page_image_relpath"] = (
+                    str(Path(page_image_path).relative_to(scan_workspace)).replace("\\", "/")
+                    if page_image_path
+                    else ""
+                )
+            except ValueError:
+                row["page_image_relpath"] = ""
+            crop_path = row.get("crop_image_path") or ""
+            try:
+                row["crop_image_relpath"] = (
+                    str(Path(crop_path).relative_to(scan_workspace)).replace("\\", "/")
+                    if crop_path
+                    else ""
+                )
+            except ValueError:
+                row["crop_image_relpath"] = ""
+            row["page_image_width"] = page_width
+            row["page_image_height"] = page_height
+            rows.append(row)
+        return rows
+
+    def _persist_real_page_completion(
+        self,
+        *,
+        task_id: str,
+        scan_workspace: Path,
+        tc: TaskControl,
+        worker_generation: int,
+        document: Any,
+        page_index: int,
+        page_payload: dict[str, Any] | None,
+        page_occurrences: list[dict[str, Any]],
+    ) -> None:
+        source_id = str(getattr(document, "relative_path", "") or getattr(document, "document_id", "") or "")
+        if not source_id:
+            raise ValueError("real scan page completion requires a stable source_id")
+        outcome = self.store.record_page_completion(
+            task_id=task_id,
+            source_id=source_id,
+            page_no=page_index + 1,
+            worker_generation=worker_generation,
+            occurrences=self._build_store_occurrence_rows(
+                scan_workspace=scan_workspace,
+                page_payload=page_payload,
+                page_occurrences=page_occurrences,
+                source_id=source_id,
+            ),
+        )
+        outcome["event"]["payload"]["total_pages"] = int(getattr(document, "page_count", 0) or 0)
+        self.emit_task_event_row(outcome["event"])
+        if tc.is_paused():
+            self.store.update_task(task_id, status="paused")
+            self.emit_task_event(
+                "task.paused",
+                task_id,
+                {
+                    "processed_pages": len(outcome["processed_page_ids"]),
+                    "checkpoint": outcome["checkpoint"],
+                },
+                source_id=source_id,
+                worker_generation=worker_generation,
+            )
+            tc.wait_if_paused()
+            if not tc.should_cancel():
+                self.store.update_task(task_id, status="running")
+
     def _run_scan(self, task_id: str, worker_generation: int) -> None:
         """在后台线程跑 ReportPipeline 并把结果导入 TaskStore。
 
@@ -376,6 +458,7 @@ class Server:
             task_workspace = self.workspace_root / "tasks" / task_id
             scan_workspace = task_workspace / "scan"
             output_html = task_workspace / "report.html"
+            self.store.update_task(task_id, workspace_dir=str(scan_workspace))
             pipeline = ReportPipeline(
                 root_dir=Path(task["source_dir"]),
                 output_html=output_html,
@@ -383,26 +466,48 @@ class Server:
                 config=self.config,
                 task_control=tc,
                 ocr_engine=self.ocr_engine,
+                on_page_completed=lambda **kwargs: self._persist_real_page_completion(
+                    task_id=task_id,
+                    scan_workspace=scan_workspace,
+                    tc=tc,
+                    worker_generation=worker_generation,
+                    **kwargs,
+                ),
             )
             try:
                 report = pipeline.run()
             finally:
                 pipeline.close()
-            self._import_report(task_id, task_workspace, scan_workspace, report)
-            self.store.update_task(
-                task_id,
-                status="completed",
-                processed_pages=report.get("stats", {}).get("document_total_pages", 0),
-                total_pages=report.get("stats", {}).get("document_total_pages", 0),
-                occurrence_count=self.store._count_occurrences(task_id),
-                finished_at=now_iso(),
-            )
-            self.emit_task_event(
-                "task.completed",
-                task_id,
-                {"occurrence_count": self.store._count_occurrences(task_id)},
-                worker_generation=worker_generation,
-            )
+            final_total_pages = int(report.get("stats", {}).get("document_total_pages", 0) or 0)
+            final_occurrence_count = self.store._count_occurrences(task_id)
+            if tc.should_cancel():
+                self.store.update_task(task_id, status="cancelled", finished_at=now_iso())
+                self.emit_task_event(
+                    "task.cancelled",
+                    task_id,
+                    {"reason": "cancelled"},
+                    worker_generation=worker_generation,
+                )
+            else:
+                final_task = self.store.get_task(task_id) or {}
+                self.store.update_task(
+                    task_id,
+                    status="completed",
+                    processed_pages=int(final_task.get("processed_pages", final_total_pages) or final_total_pages),
+                    total_pages=final_total_pages,
+                    occurrence_count=final_occurrence_count,
+                    finished_at=now_iso(),
+                )
+                self.emit_task_event(
+                    "task.completed",
+                    task_id,
+                    {
+                        "processed_pages": int(final_task.get("processed_pages", final_total_pages) or final_total_pages),
+                        "total_pages": final_total_pages,
+                        "occurrence_count": final_occurrence_count,
+                    },
+                    worker_generation=worker_generation,
+                )
         except Exception as exc:  # noqa: BLE001
             self.store.update_task(
                 task_id,
