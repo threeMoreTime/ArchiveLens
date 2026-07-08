@@ -549,7 +549,7 @@ def _h_export_html(server: Server, params: dict) -> dict:
         "table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px 8px;font-size:13px}</style>"
         "</head><body>"
         f"<h1>ArchiveLens 检索报告</h1>"
-        f"<p>任务：{task.get('name', '')} · 来源：{task.get('source_dir', '')} · 命中：{total}</p>"
+        f"<p>任务：{task.get('name', '')} · 命中：{total}</p>"
         f"<table><thead><tr><th>#</th><th>文件</th><th>页</th><th>字</th><th>上下文</th><th>校对</th><th>备注</th></tr></thead>"
         f"<tbody>{rows}</tbody></table></body></html>"
     )
