@@ -26,6 +26,7 @@ from .runtime.task_control import TaskControl
 from .documents import DocumentBackendRegistry
 from .ocr_core import (
     assign_occurrence_indexes,
+    build_bbox_hash,
     build_context_fields,
     classify_verification_status,
     dedupe_occurrences,
@@ -467,6 +468,16 @@ class ReportPipeline:
             "document_occurrence_index": 0,
             "matched_character": matched_character,
             "character_variant": character_variant,
+            "bbox_hash": build_bbox_hash(
+                source_x0=box_fields["source_x0"],
+                source_y0=box_fields["source_y0"],
+                source_x1=box_fields["source_x1"],
+                source_y1=box_fields["source_y1"],
+                normalized_x0=box_fields["normalized_x0"],
+                normalized_y0=box_fields["normalized_y0"],
+                normalized_x1=box_fields["normalized_x1"],
+                normalized_y1=box_fields["normalized_y1"],
+            ),
             "unicode_codepoint": unicode_codepoint,
             "context_before": context_fields["context_before"],
             "context_after": context_fields["context_after"],

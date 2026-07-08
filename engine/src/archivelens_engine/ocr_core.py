@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Iterable
 
 
@@ -23,6 +24,28 @@ def normalize_bbox(
         "normalized_x1": float(x1) / float(page_width),
         "normalized_y1": float(y1) / float(page_height),
     }
+
+
+def build_bbox_hash(
+    *,
+    source_x0: float | int | str | None = None,
+    source_y0: float | int | str | None = None,
+    source_x1: float | int | str | None = None,
+    source_y1: float | int | str | None = None,
+    normalized_x0: float | int | str | None = None,
+    normalized_y0: float | int | str | None = None,
+    normalized_x1: float | int | str | None = None,
+    normalized_y1: float | int | str | None = None,
+) -> str:
+    normalized_values = (normalized_x0, normalized_y0, normalized_x1, normalized_y1)
+    source_values = (source_x0, source_y0, source_x1, source_y1)
+    if all(value is not None for value in normalized_values):
+        payload = "|".join(f"{float(value):.8f}" for value in normalized_values)
+    elif all(value is not None for value in source_values):
+        payload = "|".join(f"{float(value):.3f}" for value in source_values)
+    else:
+        raise ValueError("bbox_hash requires either normalized or source coordinates")
+    return hashlib.sha1(payload.encode("ascii")).hexdigest()
 
 
 def split_line_bbox(text: str, bbox: tuple[float, float, float, float]) -> list[tuple[float, float, float, float]]:

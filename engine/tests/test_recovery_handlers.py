@@ -219,6 +219,83 @@ class RecoveryHandlerTests(unittest.TestCase):
         )
         self.assertEqual(len(state["occurrence_ids"]), 2)
 
+    def test_real_scan_path_backfills_bbox_hash_for_report_occurrences(self) -> None:
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src)})
+        task_id = created["task_id"]
+        self.server.store.update_task(task_id, status="running")
+        worker_generation = self.server.store.allocate_worker_generation(task_id)
+        self.server.emit_task_event(
+            "task.started",
+            task_id,
+            {"worker_generation": worker_generation},
+            worker_generation=worker_generation,
+        )
+
+        class FakeReportPipeline:
+            def __init__(self, *args, workspace_dir: Path, output_html: Path, **kwargs) -> None:
+                self.workspace_dir = workspace_dir
+                self.output_html = output_html
+                self.on_page_completed = kwargs.get("on_page_completed")
+
+            def run(self) -> dict:
+                pages_dir = self.workspace_dir / "pages"
+                crops_dir = self.workspace_dir / "crops"
+                pages_dir.mkdir(parents=True, exist_ok=True)
+                crops_dir.mkdir(parents=True, exist_ok=True)
+                page_path = pages_dir / "p1.png"
+                crop_path = crops_dir / "c1.png"
+                page_path.write_bytes(b"page")
+                crop_path.write_bytes(b"crop")
+                if callable(self.on_page_completed):
+                    self.on_page_completed(
+                        document=SimpleNamespace(document_id="real-doc.pdf", relative_path="real-doc.pdf", page_count=1),
+                        page_index=0,
+                        page_payload={
+                            "page_image_id": "real-doc-p1",
+                            "image_path": str(page_path),
+                            "page_width": 1000,
+                            "page_height": 1400,
+                        },
+                        page_occurrences=[
+                            {
+                                "occurrence_id": "occ-real-1",
+                                "document_id": "real-doc.pdf",
+                                "source_id": "real-doc.pdf",
+                                "file_name": "real-doc.pdf",
+                                "relative_path": "real-doc.pdf",
+                                "page_number": 1,
+                                "page_index": 0,
+                                "page_occurrence_index": 1,
+                                "matched_character": "约",
+                                "character_variant": "simplified",
+                                "verification_status": "confirmed",
+                                "context_full": "page-1-约",
+                                "source_x0": 10.0,
+                                "source_y0": 20.0,
+                                "source_x1": 30.0,
+                                "source_y1": 40.0,
+                                "normalized_x0": 0.01,
+                                "normalized_y0": 0.02,
+                                "normalized_x1": 0.03,
+                                "normalized_y1": 0.04,
+                                "crop_image_path": str(crop_path),
+                            }
+                        ],
+                    )
+                self.output_html.parent.mkdir(parents=True, exist_ok=True)
+                self.output_html.write_text("<html>ok</html>", encoding="utf-8")
+                return {"stats": {"document_total_pages": 1}, "pages": [], "occurrences": []}
+
+            def close(self) -> None:
+                return None
+
+        with patch("archivelens_engine.report_pipeline.ReportPipeline", FakeReportPipeline):
+            self.server._run_scan(task_id, worker_generation)
+
+        total, items = self.server.store.query_occurrences(task_id=task_id, limit=10, offset=0)
+        self.assertEqual(total, 1)
+        self.assertTrue(items[0]["bbox_hash"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ from .build_info import load_build_info
 from .config import DEFAULT_CONFIG, EngineConfig
 from .db.store import TaskStore, now_iso
 from .diagnostics import detect_all
+from .ocr_core import build_bbox_hash
 from .protocol import (
     ErrorCode,
     ProtocolError,
@@ -370,6 +371,17 @@ class Server:
         for occ in page_occurrences:
             row = dict(occ)
             row["source_id"] = source_id
+            if not row.get("bbox_hash"):
+                row["bbox_hash"] = build_bbox_hash(
+                    source_x0=row.get("source_x0"),
+                    source_y0=row.get("source_y0"),
+                    source_x1=row.get("source_x1"),
+                    source_y1=row.get("source_y1"),
+                    normalized_x0=row.get("normalized_x0"),
+                    normalized_y0=row.get("normalized_y0"),
+                    normalized_x1=row.get("normalized_x1"),
+                    normalized_y1=row.get("normalized_y1"),
+                )
             try:
                 row["page_image_relpath"] = (
                     str(Path(page_image_path).relative_to(scan_workspace)).replace("\\", "/")
