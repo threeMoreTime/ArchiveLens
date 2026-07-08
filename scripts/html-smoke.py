@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -16,12 +17,41 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
 FX = ROOT / "tests" / "fixtures" / "ocr"
+MODE = os.environ.get("ARCHIVELENS_HTML_SMOKE_MODE", "auto").strip().lower()
 
-proc = subprocess.Popen(
-    [str(EXE), "serve"],
-    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    text=True, encoding="utf-8",
-)
+
+def start_engine() -> subprocess.Popen[str]:
+    packaged_available = EXE.exists()
+    use_packaged = MODE == "packaged" or (MODE == "auto" and packaged_available)
+    if use_packaged:
+        print(f"[html] launch mode: packaged ({EXE})")
+        return subprocess.Popen(
+            [str(EXE), "serve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+
+    env = {
+        **os.environ,
+        "PYTHONPATH": f"{ROOT / 'engine/src'};{ROOT / 'engine'}",
+    }
+    print(f"[html] launch mode: source ({sys.executable})")
+    return subprocess.Popen(
+        [sys.executable, "-m", "archivelens_engine", "serve"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=str(ROOT),
+    )
+
+
+proc = start_engine()
 messages: list[str] = []
 lock = threading.Lock()
 
