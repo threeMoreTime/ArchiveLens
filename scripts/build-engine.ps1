@@ -46,7 +46,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "写入 engine app.info 失败（exit $LASTEXITCODE）" }
 
   $sizeMb = [math]::Round((Get-ChildItem $OutDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-  Write-Host "==> Engine 构建完成：$exe ($sizeMb MB)" -ForegroundColor Green
+  Write-Host "==> Engine 构建完成：$exe ($($sizeMb) MB)" -ForegroundColor Green
 }
 finally {
   Pop-Location
