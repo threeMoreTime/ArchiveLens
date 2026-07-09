@@ -27,7 +27,7 @@
 
 ## 快速开始（开发）
 
-需 Python 3.11 与 Node 20+。
+需 Python 3.11 与 Node 24（最低 Node 22.13，用于兼容 `pnpm@11.10.0`）。
 
 ```bash
 # Python Engine（开发期直接用解释器，无需打包）
