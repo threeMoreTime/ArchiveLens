@@ -27,9 +27,16 @@ EXPECTED = json.loads((FIXTURES / "expected.json").read_text(encoding="utf-8"))
 EXPECTED_TOTAL = 14
 EXPECTED_COUNTS = {"约": 7, "約": 7}
 EXPECTED_FAILURE_COUNT = 0
+TASK_COMPLETION_TIMEOUT = int(os.environ.get("ARCHIVELENS_PACKAGED_OCR_TIMEOUT_SEC", "420"))
+PROGRESS_LOG_INTERVAL_SEC = 30.0
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+
     if not EXE.exists():
         print(f"[smoke] FAIL: engine exe 不存在 {EXE}")
         return 1
@@ -46,6 +53,8 @@ def main() -> int:
     )
     stdout_queue: queue.Queue[str | None] = queue.Queue()
     stderr_tail: list[str] = []
+    active_task_id: list[str | None] = [None]
+    last_progress_log_at = [0.0]
 
     counter = [0]
 
@@ -93,6 +102,25 @@ def main() -> int:
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if (
+                msg.get("event") == "task.progress"
+                and msg.get("task_id") == active_task_id[0]
+                and (time.time() - last_progress_log_at[0]) >= PROGRESS_LOG_INTERVAL_SEC
+            ):
+                payload = msg.get("payload") or {}
+                print(
+                    "[smoke] progress",
+                    json.dumps(
+                        {
+                            "task_id": msg.get("task_id"),
+                            "page_no": payload.get("page_no"),
+                            "processed_pages": payload.get("processed_pages"),
+                            "source_id": payload.get("source_id"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                last_progress_log_at[0] = time.time()
             if rid and msg.get("request_id") == rid:
                 return msg
             if event and msg.get("event") == event:
@@ -116,15 +144,29 @@ def main() -> int:
             print("[smoke] FAIL: tasks.create", resp)
             return 1
         task_id = resp["result"]["task_id"]
+        active_task_id[0] = task_id
         print(f"[smoke] task created: {task_id} files={resp['result'].get('file_count')}")
 
         rid = send("tasks.start", {"task_id": task_id})
         read_until(rid=rid, timeout=30)
 
-        completed = read_until(event="task.completed", timeout=420)
+        completed = read_until(event="task.completed", timeout=TASK_COMPLETION_TIMEOUT)
         if not completed:
             failed = read_until(event="task.failed", timeout=5)
-            print("[smoke] FAIL: 任务未完成", failed, f"stderr_tail={stderr_summary()}")
+            rid = send("tasks.get", {"task_id": task_id})
+            task_state = read_until(rid=rid, timeout=30)
+            print(
+                "[smoke] FAIL: task did not complete in time",
+                json.dumps(
+                    {
+                        "timeout_sec": TASK_COMPLETION_TIMEOUT,
+                        "task_failed_event": failed,
+                        "task_state": task_state.get("result") if task_state and task_state.get("ok") else task_state,
+                        "stderr_tail": stderr_tail[-10:],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
             return 1
         print("[smoke] task.completed")
 
