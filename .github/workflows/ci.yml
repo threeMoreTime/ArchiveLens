@@ -2,59 +2,259 @@ name: ci
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches:
+      - main
+      - "feat/**"
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  engine:
-    name: Python Engine
+  engine-tests:
+    name: Engine Tests
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: engine
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip
-      - run: pip install -r requirements-lock.txt
-      - name: Compile
-        run: python -m compileall -q src
-      - name: Unit & integration tests
-        env:
-          PYTHONPATH: src;.
-        working-directory: .
-        run: python -m unittest discover -s engine/tests -t engine
 
-  desktop:
-    name: Desktop Unit & Build
+      - name: Install engine dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r engine/requirements-lock.txt
+
+      - name: Compile engine sources
+        run: python -m compileall -q engine/src
+
+      - name: Run engine unittest suite
+        env:
+          PYTHONPATH: engine/src;.
+        run: python -m unittest discover -s engine/tests -t engine -v
+
+  desktop-tests:
+    name: Desktop Tests
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
           version: 11.10.0
-      - uses: actions/setup-node@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Typecheck
-        run: |
-          pnpm --filter @archivelens/desktop exec tsc -p tsconfig.node.json --noEmit
-          pnpm --filter @archivelens/desktop exec tsc -p tsconfig.web.json --noEmit
-      - name: Build
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Desktop typecheck
+        run: pnpm --filter @archivelens/desktop typecheck
+
+      - name: Desktop vitest
+        run: pnpm --filter @archivelens/desktop test
+
+      - name: Desktop build
         run: pnpm --filter @archivelens/desktop build
-      - name: Upload renderer artifact
+
+      - name: Upload desktop build output
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: desktop-out
           path: apps/desktop/out
+          if-no-files-found: error
+          retention-days: 7
 
   ipc-contract:
     name: IPC Contract
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - run: echo "TODO: 同一 fixture 同时校验 TS Zod schema 与 Python dataclass（见 tests/ipc-contract）"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install engine dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r engine/requirements-lock.txt
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate TS IPC contract fixtures
+        run: pnpm --filter @archivelens/desktop test:contract
+
+      - name: Validate Python IPC contract fixtures
+        env:
+          PYTHONPATH: engine/src;.
+        run: python -m unittest engine.tests.test_ipc_contract -v
+
+  lifecycle-e2e:
+    name: Lifecycle E2E
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install engine dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r engine/requirements-lock.txt
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build desktop app
+        run: pnpm --filter @archivelens/desktop build
+
+      - name: Run lifecycle Playwright suite
+        run: |
+          $env:ARCHIVELENS_E2E_PYTHON = Join-Path $env:pythonLocation "python.exe"
+          pnpm --filter @archivelens/desktop exec playwright test e2e/lifecycle.spec.ts
+
+      - name: Upload lifecycle artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-e2e-artifacts
+          path: |
+            apps/desktop/test-results
+            apps/desktop/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+  package-smoke:
+    name: Packaged Smoke
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Resolve candidate version
+        run: |
+          $version = node -p "require('./package.json').version"
+          "ARCHIVELENS_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install engine dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r engine/requirements-lock.txt
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packaged engine
+        run: powershell -ExecutionPolicy Bypass -File scripts/build-engine.ps1
+
+      - name: Build desktop app
+        run: pnpm --filter @archivelens/desktop build
+
+      - name: Build win-unpacked
+        run: pnpm --filter @archivelens/desktop exec electron-builder --dir
+
+      - name: Run packaged OCR smoke
+        run: python scripts/packaged-ocr-smoke.py
+
+      - name: Run shutdown inference smoke
+        run: python scripts/shutdown-inference-smoke.py
+
+      - name: Run HTML smoke
+        run: python scripts/html-smoke.py
+
+      - name: Generate partial release manifest
+        run: |
+          python scripts/generate-manifest.py `
+            --version $env:ARCHIVELENS_VERSION `
+            --candidate-sha $env:GITHUB_SHA `
+            --allow-partial
+
+      - name: Verify partial release chain
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/verify-release-chain.ps1 `
+            -CandidateSha $env:GITHUB_SHA `
+            -Version $env:ARCHIVELENS_VERSION `
+            -WorktreePath $PWD `
+            -EngineAppInfo (Resolve-Path 'dist/engine/win-x64/app.info.json').Path `
+            -DesktopAppInfo (Resolve-Path 'apps/desktop/release/win-unpacked/resources/app.info.json').Path `
+            -ManifestPath (Resolve-Path 'apps/desktop/release/release-manifest.json').Path `
+            -EngineExe (Resolve-Path 'dist/engine/win-x64/archivelens-engine.exe').Path `
+            -DesktopExe (Resolve-Path 'apps/desktop/release/win-unpacked/ArchiveLens.exe').Path `
+            -BundledEngineExe (Resolve-Path 'apps/desktop/release/win-unpacked/resources/engine/win-x64/archivelens-engine.exe').Path `
+          | Tee-Object -FilePath apps/desktop/release/verify-release-chain.json
+
+      - name: Upload packaged smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-smoke-artifacts
+          path: |
+            dist/engine/win-x64/app.info.json
+            apps/desktop/release/release-manifest.json
+            apps/desktop/release/SHA256SUMS.txt
+            apps/desktop/release/verify-release-chain.json
+            apps/desktop/release/win-unpacked/resources/app.info.json
+          if-no-files-found: ignore
+          retention-days: 14

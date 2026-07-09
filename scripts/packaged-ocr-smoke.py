@@ -22,6 +22,9 @@ EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
 FIXTURES = ROOT / "tests" / "fixtures" / "ocr"
 WS = ROOT / "dist" / "_ocr_ws"
 EXPECTED = json.loads((FIXTURES / "expected.json").read_text(encoding="utf-8"))
+EXPECTED_TOTAL = 14
+EXPECTED_COUNTS = {"约": 7, "約": 7}
+EXPECTED_FAILURE_COUNT = 0
 
 
 def main() -> int:
@@ -95,6 +98,13 @@ def main() -> int:
             return 1
         print("[smoke] task.completed")
 
+        rid = send("tasks.get", {"task_id": task_id})
+        task_resp = read_until(rid=rid, timeout=30)
+        if not task_resp or not task_resp.get("ok"):
+            print("[smoke] FAIL: tasks.get", task_resp)
+            return 1
+        failure_count = int(task_resp["result"].get("failure_count", -1))
+
         rid = send("results.query", {"task_id": task_id, "limit": 200})
         resp = read_until(rid=rid, timeout=30)
         items = resp["result"]["items"]
@@ -118,8 +128,20 @@ def main() -> int:
         if "约" not in chars and "約" not in chars:
             print("[smoke] FAIL: 既无“约”也无“約”")
             return 1
+        if total != EXPECTED_TOTAL:
+            print(f"[smoke] FAIL: total={total}，预期 {EXPECTED_TOTAL}")
+            return 1
+        if chars != EXPECTED_COUNTS:
+            print(f"[smoke] FAIL: chars={chars}，预期 {EXPECTED_COUNTS}")
+            return 1
+        if failure_count != EXPECTED_FAILURE_COUNT:
+            print(f"[smoke] FAIL: failure_count={failure_count}，预期 {EXPECTED_FAILURE_COUNT}")
+            return 1
 
-        print("[smoke] PASS: packaged PDF OCR 产出命中，pypdfium2 渲染，RapidOCR 识别")
+        print(
+            f"[smoke] PASS: packaged PDF OCR total={total} chars={chars} failure_count={failure_count}，"
+            "pypdfium2 渲染，RapidOCR 识别"
+        )
         return 0
     finally:
         try:

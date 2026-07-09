@@ -1,7 +1,7 @@
 # ArchiveLens NSIS 安装/卸载 smoke（任务 §八）。
 # 流程：静默安装 → 验证目录/快捷方式 → 启动 → Sidecar ready → 卸载 → 验证清除。
 param(
-  [string]$Version = "0.1.0-alpha.9",
+  [string]$Version = "0.1.0-alpha.10",
   [string]$Setup = (Resolve-Path "$PSScriptRoot/..\apps\desktop\release\ArchiveLens-$Version-x64-setup.exe").Path,
   [string]$InstallDir = "C:\al-install-test",
   [string]$UserData = "C:\al-install-ud"

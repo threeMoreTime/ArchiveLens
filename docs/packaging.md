@@ -51,12 +51,12 @@ pnpm --filter @archivelens/desktop dist
 ### 安装包产物（目标）
 
 ```
-ArchiveLens-0.1.0-alpha.9-x64-setup.exe       (NSIS)
-ArchiveLens-0.1.0-alpha.9-x64-portable.exe    (portable)
+ArchiveLens-0.1.0-alpha.10-x64-setup.exe      (NSIS)
+ArchiveLens-0.1.0-alpha.10-x64-portable.exe   (portable)
 SHA256SUMS.txt
 ```
 
-> v0.1.0-alpha.9 未签名：EXE 属性已含产品名 / 版本，但无代码签名证书。架构上 `cscLink` / `cscKeyPassword` 已预留，不得将私钥提交仓库。
+> v0.1.0-alpha.10 未签名：EXE 属性已含产品名 / 版本，但无代码签名证书。架构上 `cscLink` / `cscKeyPassword` 已预留，不得将私钥提交仓库。
 
 ## 发布前检查清单（任务 §三十四）
 

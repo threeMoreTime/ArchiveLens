@@ -8,12 +8,12 @@
 
 ## 当前状态
 
-本仓库正在 `feat/electron-desktop-v0.1` 分支上推进 **v0.1.0-alpha.9 Desktop Alpha** 的可复现发布闭环。已落地的实质能力：
+本仓库正在 `feat/electron-desktop-v0.1` 分支上推进 **v0.1.0-alpha.10 Desktop Alpha** 的可复现发布闭环。已落地的实质能力：
 
 | 能力 | 状态 | 证据 |
 | --- | --- | --- |
 | Python Engine 项目化（`engine/`） | ✅ | 正式包 + pyproject + lock |
-| JSONL Sidecar IPC（TS↔Python） | ✅ | 134 项 engine 测试 + Zod 契约 |
+| JSONL Sidecar IPC（TS↔Python） | ✅ | 139 项 engine 测试 + Zod 契约 |
 | Electron Main/Preload/Renderer 安全骨架 | ✅ | typecheck + build + 生命周期 E2E |
 | Sidecar 端到端握手 | ✅ | `engine.ready` + `app.info` + 主窗口 |
 | Worker/Task 真实状态机（修复残留 checkpoint 误判） | ✅ | checkpoint / sequence / migration 回归 |
@@ -63,7 +63,7 @@ Renderer (React)  ──window.archiveLens──▶  Preload (contextBridge)
 
 ```bash
 # Engine（Python）
-PYTHONPATH="engine/src;engine" python -m unittest discover -s engine/tests -t engine   # 80 项
+PYTHONPATH="engine/src;engine" python -m unittest discover -s engine/tests -t engine   # 139 项
 
 # Desktop（TS）
 pnpm --filter @archivelens/desktop exec tsc -p tsconfig.node.json --noEmit
@@ -93,7 +93,7 @@ MIT（见 [LICENSE](LICENSE)）。第三方组件清单见 [THIRD_PARTY_NOTICES.
 
 ## Alpha 限制（必读）
 
-- 版本 `0.1.0-alpha.9`，**非稳定版**，仅供早期试用与反馈；
+- 版本 `0.1.0-alpha.10`，**非稳定版**，仅供早期试用与反馈；
 - 安装包**未签名**，Windows SmartScreen 可能提示「未知发布者」，需手动「仍要运行」；
 - 仅支持 Windows 10/11 x64；
 - 原生 OCR 依赖（Tesseract / DjVuLibre / 语言包）**当前需宿主已安装**，未随包分发（许可证阻塞）；

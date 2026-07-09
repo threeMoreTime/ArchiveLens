@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "archivelens-engine"
-version = "0.1.0-alpha.9"
+version = "0.1.0-alpha.10"
 description = "ArchiveLens local OCR engine — retrieves 简“约”/繁“約” in PDF/DJVU archives."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"

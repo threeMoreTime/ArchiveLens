@@ -43,6 +43,7 @@ def main() -> int:
     parser.add_argument("--desktop", type=Path, default=DEFAULT_DESKTOP)
     parser.add_argument("--setup", type=Path)
     parser.add_argument("--portable", type=Path)
+    parser.add_argument("--allow-partial", action="store_true")
     parser.add_argument("--output", type=Path, default=DEFAULT_RELEASE_DIR / "release-manifest.json")
     parser.add_argument("--sha256sums", type=Path, default=DEFAULT_RELEASE_DIR / "SHA256SUMS.txt")
     parser.add_argument("--test-summary-json", type=Path)
@@ -52,12 +53,19 @@ def main() -> int:
     release_dir = args.release_dir.resolve()
     engine = resolve_existing(args.engine.resolve())
     desktop = resolve_existing(args.desktop.resolve())
-    setup = resolve_existing(
-        (args.setup or (release_dir / f"ArchiveLens-{args.version}-x64-setup.exe")).resolve()
-    )
-    portable = resolve_existing(
-        (args.portable or (release_dir / f"ArchiveLens-{args.version}-x64-portable.exe")).resolve()
-    )
+
+    def resolve_optional(path: Path) -> Path | None:
+        return path.resolve() if path.exists() else None
+
+    default_setup = (args.setup or (release_dir / f"ArchiveLens-{args.version}-x64-setup.exe")).resolve()
+    default_portable = (args.portable or (release_dir / f"ArchiveLens-{args.version}-x64-portable.exe")).resolve()
+    setup = resolve_optional(default_setup)
+    portable = resolve_optional(default_portable)
+    if not args.allow_partial:
+        if setup is None:
+            raise FileNotFoundError(default_setup)
+        if portable is None:
+            raise FileNotFoundError(default_portable)
 
     test_summary: dict[str, object] = {}
     if args.test_summary_json and args.test_summary_json.exists():
@@ -68,8 +76,6 @@ def main() -> int:
         "git_commit": candidate_sha,
         "engine_sha256": sha256(engine),
         "desktop_sha256": sha256(desktop),
-        "setup_sha256": sha256(setup),
-        "portable_sha256": sha256(portable),
         "build_environment": {
             "platform": platform.platform(),
             "python_version": platform.python_version(),
@@ -81,6 +87,10 @@ def main() -> int:
         },
         "test_summary": test_summary,
     }
+    if setup is not None:
+        manifest["setup_sha256"] = sha256(setup)
+    if portable is not None:
+        manifest["portable_sha256"] = sha256(portable)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -88,9 +98,11 @@ def main() -> int:
     sha_lines = [
         f"{manifest['engine_sha256']}  {engine.name}",
         f"{manifest['desktop_sha256']}  {desktop.name}",
-        f"{manifest['setup_sha256']}  {setup.name}",
-        f"{manifest['portable_sha256']}  {portable.name}",
     ]
+    if setup is not None:
+        sha_lines.append(f"{manifest['setup_sha256']}  {setup.name}")
+    if portable is not None:
+        sha_lines.append(f"{manifest['portable_sha256']}  {portable.name}")
     args.sha256sums.write_text("\n".join(sha_lines) + "\n", encoding="utf-8")
 
     print(json.dumps({"manifest": str(args.output), "sha256sums": str(args.sha256sums), "data": manifest}, ensure_ascii=False, indent=2))

@@ -17,7 +17,7 @@ describe("desktop build metadata loader", () => {
       writeFileSync(
         metadataPath,
         JSON.stringify({
-          version: "0.1.0-alpha.9",
+          version: "0.1.0-alpha.10",
           git_commit: "abc".repeat(13) + "a",
           build_time: "2026-07-08T12:00:00.000Z",
           python_version: "3.11.9",

@@ -1,7 +1,7 @@
 # ArchiveLens Portable 启动 smoke（任务 §七）。
 # 验证：双击等效启动 → Sidecar ready → 主窗口 → 无残留进程。
 param(
-  [string]$Version = "0.1.0-alpha.9",
+  [string]$Version = "0.1.0-alpha.10",
   [string]$Portable = (Resolve-Path "$PSScriptRoot/..\apps\desktop\release\ArchiveLens-$Version-x64-portable.exe").Path,
   [string]$UserData = "C:\al-port-smoke"
 )
