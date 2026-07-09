@@ -210,6 +210,66 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate PowerShell release scripts (Windows PowerShell)
+        shell: powershell
+        run: |
+          $scripts = @(
+            'scripts/build-engine.ps1',
+            'scripts/verify-release-chain.ps1',
+            'scripts/smoke-installer.ps1',
+            'scripts/smoke-portable.ps1',
+            'scripts/cleanup-test-artifacts.ps1'
+          )
+
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref]$tokens,
+              [ref]$errors
+            )
+
+            if ($errors.Count -gt 0) {
+              Write-Host "[FAIL] PowerShell parse errors: $script"
+              $errors | Format-List *
+              exit 1
+            }
+
+            Write-Host "[PASS] Windows PowerShell syntax: $script"
+          }
+
+      - name: Validate PowerShell release scripts (PowerShell 7)
+        shell: pwsh
+        run: |
+          $scripts = @(
+            'scripts/build-engine.ps1',
+            'scripts/verify-release-chain.ps1',
+            'scripts/smoke-installer.ps1',
+            'scripts/smoke-portable.ps1',
+            'scripts/cleanup-test-artifacts.ps1'
+          )
+
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref]$tokens,
+              [ref]$errors
+            )
+
+            if ($errors.Count -gt 0) {
+              Write-Host "[FAIL] PowerShell parse errors: $script"
+              $errors | Format-List *
+              exit 1
+            }
+
+            Write-Host "[PASS] PowerShell 7 syntax: $script"
+          }
+
       - name: Build packaged engine
         run: powershell -ExecutionPolicy Bypass -File scripts/build-engine.ps1
 
