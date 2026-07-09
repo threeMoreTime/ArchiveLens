@@ -14,7 +14,7 @@ param(
 $ErrorActionPreference = "Stop"
 Push-Location $Root
 try {
-  Write-Host "==> 构建 ArchiveLens Engine (PyInstaller one-folder)" -ForegroundColor Cyan
+  Write-Host "==> Build ArchiveLens Engine (PyInstaller one-folder)" -ForegroundColor Cyan
   Write-Host "    Root:   $Root"
   Write-Host "    Output: $OutDir"
 
@@ -31,7 +31,7 @@ try {
     --distpath "$Root/dist/engine/_build" `
     --workpath "$Root/build/engine" `
     "$Root/engine/src/archivelens_engine/__main__.py"
-  if ($LASTEXITCODE -ne 0) { throw "PyInstaller 失败（exit $LASTEXITCODE）" }
+  if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)" }
 
   # 规范化为 sidecar 期望的 win-x64 路径。
   if (Test-Path $OutDir) { Remove-Item $OutDir -Recurse -Force }
@@ -39,14 +39,14 @@ try {
   Move-Item "$Root/dist/engine/_build/archivelens-engine" $OutDir
 
   $exe = Join-Path $OutDir "archivelens-engine.exe"
-  if (-not (Test-Path $exe)) { throw "未找到产物：$exe" }
+  if (-not (Test-Path $exe)) { throw "Missing build artifact: $exe" }
 
   $pythonVersion = (& python -c "import platform; print(platform.python_version())").Trim()
   node "$Root/scripts/write-build-metadata.mjs" engine "$OutDir/app.info.json" --python-version $pythonVersion
-  if ($LASTEXITCODE -ne 0) { throw "写入 engine app.info 失败（exit $LASTEXITCODE）" }
+  if ($LASTEXITCODE -ne 0) { throw "Failed to write engine app.info (exit $LASTEXITCODE)" }
 
   $sizeMb = [math]::Round((Get-ChildItem $OutDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-  Write-Host ("==> Engine 构建完成：{0} ({1} MB)" -f $exe, $sizeMb) -ForegroundColor Green
+  Write-Host ("==> Engine build complete: {0} ({1} MB)" -f $exe, $sizeMb) -ForegroundColor Green
 }
 finally {
   Pop-Location

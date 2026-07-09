@@ -16,6 +16,8 @@ import threading
 import time
 from pathlib import Path
 
+from smoke_output import log_status, configure_console
+
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
 FX = ROOT / "tests" / "fixtures" / "ocr"
@@ -89,68 +91,65 @@ def wait_no_residual_engine(timeout: float = 10) -> bool:
 
 
 def main() -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
-    if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+    configure_console()
 
     try:
         if not wait_event("engine.ready", 30):
-            print("FAIL: engine.ready 超时")
+            log_status("FAIL", "engine.ready timeout")
             return 1
-        print("[shutdown] engine.ready")
+        log_status("INFO", "engine.ready")
 
         rid = send("tasks.create", {"source_dir": str(FX)})
         resp = take_response(rid, 30)
         if not resp or not resp.get("ok"):
-            print(f"FAIL: tasks.create {resp}")
+            log_status("FAIL", f"tasks.create {resp}")
             return 1
         tid = resp["result"]["task_id"]
-        print(f"[shutdown] task created: {tid} files={resp['result'].get('file_count')}")
+        log_status("INFO", f"task created: {tid} files={resp['result'].get('file_count')}")
 
         rid = send("tasks.start", {"task_id": tid})
         take_response(rid, 30)
         # task.started 表示 ReportPipeline 已构造（RapidOCR 主线程 init），inference 即将/正在运行
         if not wait_event("task.started", 60):
-            print("FAIL: task.started 超时（RapidOCR 未启动）")
+            log_status("FAIL", "task.started timeout")
             return 1
-        print("[shutdown] task.started — RapidOCR inference 进行中")
+        log_status("INFO", "task.started; inference running")
 
         # 推理中请求 shutdown
         rid = send("app.shutdown")
         resp = take_response(rid, 10)
         status = resp.get("result", {}).get("status") if resp else None
-        print(f"[shutdown] app.shutdown → status={status}")
+        log_status("INFO", f"app.shutdown status={status}")
         ev = wait_event("engine.shutdown", 10)
-        print(f"[shutdown] engine.shutdown event: {'✓' if ev else '✗'}")
+        log_status("PASS" if ev else "FAIL", "engine.shutdown event observed")
 
         # 新请求应返回 ENGINE_SHUTTING_DOWN
         rid = send("app.info")
         resp = take_response(rid, 5)
         if resp and not resp.get("ok") and resp["error"]["code"] == "ENGINE_SHUTTING_DOWN":
-            print("[shutdown] 新请求 ENGINE_SHUTTING_DOWN ✓")
+            log_status("PASS", "new request rejected with ENGINE_SHUTTING_DOWN")
         else:
-            print(f"[shutdown] WARN 新请求未拒绝: {resp}")
+            log_status("WARN", f"new request was not rejected as expected: {resp}")
 
         # 关 stdin 触发 run loop 退出 → 进程退出
         assert proc.stdin is not None
         proc.stdin.close()
         try:
             code = proc.wait(timeout=30)
-            print(f"[shutdown] 进程退出 code={code}")
+            log_status("INFO", f"process exit code={code}")
         except subprocess.TimeoutExpired:
-            print("FAIL: 进程 30s 未退出（死锁？）")
+            log_status("FAIL", "process did not exit within 30s")
             proc.kill()
             return 1
 
         # 无残留
         if not wait_no_residual_engine():
-            print("FAIL: 残留 archivelens-engine.exe")
+            log_status("FAIL", "residual archivelens-engine.exe detected")
             return 1
-        print("[shutdown] PASS: 真实 RapidOCR inference shutdown，进程退出，无残留")
+        log_status("PASS", "real inference shutdown completed with no residual process")
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"FAIL: {exc}")
+        log_status("FAIL", exc)
         proc.kill()
         return 1
 

@@ -14,6 +14,8 @@ import threading
 import time
 from pathlib import Path
 
+from smoke_output import configure_console, log_status
+
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
 FX = ROOT / "tests" / "fixtures" / "ocr"
@@ -102,27 +104,28 @@ def wait_event(event: str, timeout: float = 300) -> dict | None:
 
 
 def main() -> int:
+    configure_console()
     try:
         if not wait_event("engine.ready", 30):
-            print("FAIL: engine.ready 超时")
+            log_status("FAIL", "engine.ready timeout")
             return 1
-        print("[html] engine.ready")
+        log_status("INFO", "engine.ready")
 
         rid = send("tasks.create", {"source_dir": str(FX)})
         r = resp(rid, 30)
         if not r or not r.get("ok"):
-            print(f"FAIL: tasks.create {r}")
+            log_status("FAIL", f"tasks.create {r}")
             return 1
         tid = r["result"]["task_id"]
-        print(f"[html] task: {tid}")
+        log_status("INFO", f"task created: {tid}")
 
         rid = send("tasks.start", {"task_id": tid})
         resp(rid, 30)
         if not wait_event("task.completed", 300):
-            print("FAIL: task.completed 超时")
+            log_status("FAIL", "task.completed timeout")
             proc.kill()
             return 1
-        print("[html] task.completed")
+        log_status("INFO", "task.completed")
 
         # 设置 review（验证 review 在 HTML 中显示）
         rid = send("results.query", {"task_id": tid, "limit": 5})
@@ -136,11 +139,11 @@ def main() -> int:
         rid = send("export.html", {"task_id": tid})
         r = resp(rid, 30)
         if not r or not r.get("ok"):
-            print(f"FAIL: export.html {r}")
+            log_status("FAIL", f"export.html {r}")
             proc.kill()
             return 1
         html_path = Path(r["result"]["path"])
-        print(f"[html] export: {html_path} ({html_path.stat().st_size} bytes)")
+        log_status("INFO", f"export: {html_path} ({html_path.stat().st_size} bytes)")
 
         content = html_path.read_text(encoding="utf-8")
         checks = {
@@ -157,7 +160,7 @@ def main() -> int:
         }
         all_ok = True
         for k, v in checks.items():
-            print(f"  {'✓' if v else '✗'} {k}")
+            log_status("PASS" if v else "FAIL", k)
             if not v:
                 all_ok = False
 
@@ -165,14 +168,14 @@ def main() -> int:
         proc.wait(timeout=15)
 
         if all_ok:
-            print("[html] PASS: HTML 离线 smoke（真实 OCR fixtures + export.html）")
-            print("[html] 注：简化版 HTML，完整 React/B2 离线 Viewer 未完成")
+            log_status("PASS", "HTML offline smoke passed")
+            log_status("INFO", "simplified HTML export path validated; full React/B2 offline viewer still pending")
             return 0
         else:
-            print("[html] FAIL: 部分检查未通过")
+            log_status("FAIL", "HTML smoke checks failed")
             return 1
     except Exception as exc:  # noqa: BLE001
-        print(f"FAIL: {exc}")
+        log_status("FAIL", exc)
         proc.kill()
         return 1
 
