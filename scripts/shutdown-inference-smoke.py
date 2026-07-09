@@ -89,6 +89,11 @@ def wait_no_residual_engine(timeout: float = 10) -> bool:
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+
     try:
         if not wait_event("engine.ready", 30):
             print("FAIL: engine.ready 超时")
