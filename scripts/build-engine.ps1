@@ -1,4 +1,4 @@
-# 构建 Python Engine 为 PyInstaller one-folder（任务 §五.3 / §二十七）。
+﻿# 构建 Python Engine 为 PyInstaller one-folder（任务 §五.3 / §二十七）。
 #
 # 产物：dist/engine/win-x64/archivelens-engine.exe
 # 该目录由 electron-builder 放入 extraResources，运行时经 process.resourcesPath 定位。
