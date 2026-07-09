@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import textwrap
 import time
 import uuid
@@ -47,6 +48,21 @@ DJVU_BIN_DIR = DEFAULT_CONFIG.djvu_bin_dir
 DEFAULT_RENDER_DPI = DEFAULT_CONFIG.render_dpi
 SCRIPT_DIR = Path(__file__).resolve().parent
 TESSDATA_DIR = DEFAULT_CONFIG.tessdata_dir or (SCRIPT_DIR / "tessdata")
+
+
+def _emit_line(message: str, *, stream: Any = None) -> None:
+    target = stream or sys.stderr
+    try:
+        print(message, file=target, flush=True)
+    except UnicodeEncodeError:
+        buffer = getattr(target, "buffer", None)
+        encoded = (message + "\n").encode("utf-8", errors="backslashreplace")
+        if buffer is not None:
+            buffer.write(encoded)
+            buffer.flush()
+            return
+        target.write(encoded.decode("utf-8", errors="backslashreplace"))
+        target.flush()
 
 
 @dataclass
@@ -161,14 +177,13 @@ class ReportPipeline:
         documents = self._scan_documents()
         if self.document_limit is not None:
             documents = documents[: self.document_limit]
-        print(f"[run] documents={len(documents)} root={self.root_dir}", flush=True)
+        _emit_line(f"[run] documents={len(documents)} root={self.root_dir}")
         for document in documents:
-            print(
+            _emit_line(
                 f"[document:start] type={document.file_type} path={document.relative_path} pages={document.page_count}",
-                flush=True,
             )
             self._process_document(document)
-            print(f"[document:done] path={document.relative_path}", flush=True)
+            _emit_line(f"[document:done] path={document.relative_path}")
         report_data = self._collect_report_data()
         embed_assets(report_data)
         write_report_outputs(
@@ -296,13 +311,12 @@ class ReportPipeline:
             page_completed = False
             if self.task_control is not None:
                 if self.task_control.should_cancel():
-                    print(f"[cancel] file={document.relative_path} page={page_index}", flush=True)
+                    _emit_line(f"[cancel] file={document.relative_path} page={page_index}")
                     break
                 self.task_control.wait_if_paused()
             if page_index % 25 == 0:
-                print(
+                _emit_line(
                     f"[page] file={document.relative_path} page={page_index + 1}/{document.page_count}",
-                    flush=True,
                 )
             try:
                 page_payload, page_occurrences = self._process_page(document, page_index)
@@ -311,9 +325,8 @@ class ReportPipeline:
                 occurrences.extend(page_occurrences)
                 page_completed = True
             except Exception as exc:  # noqa: BLE001
-                print(
+                _emit_line(
                     f"[page:error] file={document.relative_path} page={page_index + 1} error={type(exc).__name__}: {exc}",
-                    flush=True,
                 )
                 failures.append(
                     self._make_failure(
@@ -2318,7 +2331,7 @@ def run_parallel_documents(args: argparse.Namespace) -> dict[str, Any]:
         documents = coordinator._scan_documents()
         if args.document_limit is not None:
             documents = documents[: args.document_limit]
-        print(f"[parallel] documents={len(documents)} workers={args.parallel_docs}", flush=True)
+        _emit_line(f"[parallel] documents={len(documents)} workers={args.parallel_docs}")
         worker_count = max(1, min(args.parallel_docs, len(documents) or 1))
         worker_outputs = _run_workers(args, documents, worker_count)
         merged = _merge_worker_reports(coordinator, worker_outputs)
@@ -2399,7 +2412,7 @@ def _drain_workers(running: list[dict[str, Any]], wait_all: bool = False) -> Non
             if returncode != 0:
                 err_log = (item["worker_dir"] / "worker.err.log").read_text(encoding="utf-8", errors="ignore")
                 raise RuntimeError(f"worker failed for {item['relative_path']}: {err_log}")
-            print(f"[parallel:done] {item['relative_path']}", flush=True)
+            _emit_line(f"[parallel:done] {item['relative_path']}")
             running.remove(item)
             finished_any = True
         if finished_any and not wait_all:
@@ -2514,12 +2527,12 @@ def main() -> None:
             output_json=Path(args.output_json) if args.output_json else None,
             worker_names=set(args.merge_workers) if args.merge_workers else None,
         )
-        print(json.dumps(report["stats"], ensure_ascii=False, indent=2))
+        _emit_line(json.dumps(report["stats"], ensure_ascii=False, indent=2), stream=sys.stdout)
         return
 
     if args.parallel_docs > 1 and not args.include_path:
         report = run_parallel_documents(args)
-        print(json.dumps(report["stats"], ensure_ascii=False, indent=2))
+        _emit_line(json.dumps(report["stats"], ensure_ascii=False, indent=2), stream=sys.stdout)
         return
 
     pipeline = ReportPipeline(
@@ -2534,7 +2547,7 @@ def main() -> None:
     )
     try:
         report = pipeline.run()
-        print(json.dumps(report["stats"], ensure_ascii=False, indent=2))
+        _emit_line(json.dumps(report["stats"], ensure_ascii=False, indent=2), stream=sys.stdout)
     finally:
         pipeline.close()
 
