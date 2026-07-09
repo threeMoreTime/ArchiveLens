@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -42,8 +44,26 @@ def main() -> int:
         encoding="utf-8",
         env=env,
     )
+    stdout_queue: queue.Queue[str | None] = queue.Queue()
+    stderr_tail: list[str] = []
 
     counter = [0]
+
+    def pump_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            stdout_queue.put(line)
+        stdout_queue.put(None)
+
+    def pump_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_tail.append(line.rstrip())
+            if len(stderr_tail) > 50:
+                del stderr_tail[:-50]
+
+    threading.Thread(target=pump_stdout, daemon=True).start()
+    threading.Thread(target=pump_stderr, daemon=True).start()
 
     def send(method: str, params: dict | None = None) -> str:
         counter[0] += 1
@@ -59,10 +79,15 @@ def main() -> int:
 
     def read_until(rid=None, event=None, timeout=300):
         end = time.time() + timeout
-        assert proc.stdout is not None
         while time.time() < end:
-            line = proc.stdout.readline()
-            if not line:
+            remaining = max(0.1, end - time.time())
+            try:
+                line = stdout_queue.get(timeout=min(1.0, remaining))
+            except queue.Empty:
+                if proc.poll() is not None:
+                    return None
+                continue
+            if line is None:
                 return None
             try:
                 msg = json.loads(line)
@@ -73,6 +98,11 @@ def main() -> int:
             if event and msg.get("event") == event:
                 return msg
         return None
+
+    def stderr_summary() -> str:
+        if not stderr_tail:
+            return "<stderr empty>"
+        return " | ".join(stderr_tail[-10:])
 
     try:
         if not read_until(event="engine.ready", timeout=40):
@@ -94,7 +124,7 @@ def main() -> int:
         completed = read_until(event="task.completed", timeout=420)
         if not completed:
             failed = read_until(event="task.failed", timeout=5)
-            print("[smoke] FAIL: 任务未完成", failed)
+            print("[smoke] FAIL: 任务未完成", failed, f"stderr_tail={stderr_summary()}")
             return 1
         print("[smoke] task.completed")
 
