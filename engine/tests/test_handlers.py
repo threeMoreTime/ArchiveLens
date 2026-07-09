@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -113,6 +114,36 @@ class HandlersTests(unittest.TestCase):
         self.assertEqual(lines[1]["sequence"], 2)
         self.assertIn("timestamp", lines[0])
         self.assertEqual(lines[0]["task_id"], task_id)
+
+    def test_emit_task_event_writes_utf8_when_stdout_encoding_cannot_encode_payload(self) -> None:
+        class StrictCp1252Stdout:
+            def __init__(self) -> None:
+                self.buffer = io.BytesIO()
+
+            def write(self, message: str) -> int:
+                message.encode("cp1252", errors="strict")
+                return self.buffer.write(message.encode("cp1252"))
+
+            def flush(self) -> None:
+                return None
+
+        task_id = self.server.store.create_task(source_dir="X", output_dir="Y", workspace_dir="Z", name="emit")
+        fake_stdout = StrictCp1252Stdout()
+        original_stdout = sys.stdout
+        try:
+            sys.stdout = fake_stdout
+            self.server.emit_task_event(
+                "task.progress",
+                task_id,
+                {"source_id": "中文 空格 # %.pdf", "processed_pages": 1},
+            )
+        finally:
+            sys.stdout = original_stdout
+
+        line = fake_stdout.buffer.getvalue().decode("utf-8").strip()
+        payload = json.loads(line)
+        self.assertEqual(payload["event"], "task.progress")
+        self.assertEqual(payload["payload"]["source_id"], "中文 空格 # %.pdf")
 
 
 if __name__ == "__main__":

@@ -39,6 +39,21 @@ Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
 SLOWFAKE_SOURCE_ID = "source-main"
 
 
+def _write_protocol_line(line: str) -> None:
+    try:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+    except UnicodeEncodeError:
+        payload = (line + "\n").encode("utf-8")
+        buffer = getattr(sys.stdout, "buffer", None)
+        if buffer is not None:
+            buffer.write(payload)
+            buffer.flush()
+            return
+        sys.stdout.write(payload.decode("utf-8", errors="strict"))
+        sys.stdout.flush()
+
+
 class ThreadSafeRapidOCR:
     """单 RapidOCR 实例 + inference RLock（任务 §十一）。
 
@@ -112,8 +127,7 @@ class Server:
     # ---- 输出 ----
     def emit(self, line: str) -> None:
         with self._stdout_lock:
-            sys.stdout.write(line + "\n")
-            sys.stdout.flush()
+            _write_protocol_line(line)
 
     def emit_event(self, event: str, task_id: str | None = None, payload: dict | None = None) -> None:
         self.emit(make_event(event, task_id, payload))
