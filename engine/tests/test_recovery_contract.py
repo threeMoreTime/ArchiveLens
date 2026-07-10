@@ -402,12 +402,22 @@ class RecoveryMigrationTests(unittest.TestCase):
         conn.close()
         return db_path
 
-    def _assert_schema_v2(self, store: TaskStore) -> None:
+    def _assert_schema_v3(self, store: TaskStore) -> None:
         self.assertEqual(
             store.conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0],
-            "2",
+            "3",
         )
-        self.assertEqual(store.conn.execute("PRAGMA user_version").fetchone()[0], 2)
+        self.assertEqual(store.conn.execute("PRAGMA user_version").fetchone()[0], 3)
+        self.assertTrue(
+            {"search_terms_json", "search_mode"}.issubset(
+                {row[1] for row in store.conn.execute("PRAGMA table_info(tasks)").fetchall()}
+            )
+        )
+        self.assertTrue(
+            {"matched_text", "match_start", "match_end", "unicode_sequence"}.issubset(
+                {row[1] for row in store.conn.execute("PRAGMA table_info(occurrences)").fetchall()}
+            )
+        )
         self.assertEqual(
             {
                 row[0]
@@ -422,7 +432,7 @@ class RecoveryMigrationTests(unittest.TestCase):
         db_path = self._create_legacy_db("legacy-empty.db")
         store = TaskStore(db_path)
         try:
-            self._assert_schema_v2(store)
+            self._assert_schema_v3(store)
             task_id = store.create_task(source_dir="X", output_dir="Y", workspace_dir="Z", name="migrated-empty")
             store.append_task_event(
                 task_id=task_id,
@@ -497,7 +507,7 @@ class RecoveryMigrationTests(unittest.TestCase):
         for _ in range(2):
             store = TaskStore(db_path)
             try:
-                self._assert_schema_v2(store)
+                self._assert_schema_v3(store)
                 task = store.get_task("task_completed")
                 assert task is not None
                 self.assertEqual(task["status"], "completed")
@@ -547,7 +557,7 @@ class RecoveryMigrationTests(unittest.TestCase):
         )
         store = TaskStore(db_path)
         try:
-            self._assert_schema_v2(store)
+            self._assert_schema_v3(store)
             changed = store.reconcile_incomplete_tasks("LEGACY_TASK_REQUIRES_REVIEW")
             self.assertEqual(changed, 1)
             task = store.get_task("task_unfinished")
@@ -596,7 +606,7 @@ class RecoveryMigrationTests(unittest.TestCase):
 
         store = TaskStore(db_path)
         try:
-            self._assert_schema_v2(store)
+            self._assert_schema_v3(store)
             task = store.get_task("task_rollback")
             assert task is not None
             self.assertEqual(task["name"], "rollback")

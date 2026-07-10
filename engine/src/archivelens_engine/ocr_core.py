@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import unicodedata
 from typing import Iterable
 
 
@@ -72,17 +73,45 @@ def split_line_bbox(text: str, bbox: tuple[float, float, float, float]) -> list[
     return boxes
 
 
-def build_context_fields(text: str, char_index: int, radius: int = 15) -> dict[str, str]:
-    start = max(0, char_index - radius)
-    end = min(len(text), char_index + radius + 1)
-    return {
-        "context_before": text[start:char_index],
-        "matched_character": text[char_index],
-        "context_after": text[char_index + 1 : end],
+def union_bboxes(boxes: Iterable[tuple[float, float, float, float]]) -> tuple[float, float, float, float]:
+    """合并同一词语覆盖的字符框，生成一个词语级 bbox。"""
+    values = list(boxes)
+    if not values:
+        raise ValueError("cannot union an empty bbox sequence")
+    return (
+        min(box[0] for box in values),
+        min(box[1] for box in values),
+        max(box[2] for box in values),
+        max(box[3] for box in values),
+    )
+
+
+def build_context_fields(
+    text: str,
+    match_start: int,
+    match_end: int | None = None,
+    radius: int = 15,
+) -> dict[str, str | int]:
+    """构建不拆分命中词的上下文；省略 ``match_end`` 时兼容旧单字符调用。"""
+    resolved_end = match_start + 1 if match_end is None else match_end
+    if match_start < 0 or resolved_end <= match_start or resolved_end > len(text):
+        raise ValueError("invalid match range")
+    start = max(0, match_start - radius)
+    end = min(len(text), resolved_end + radius)
+    matched_text = text[match_start:resolved_end]
+    result: dict[str, str | int] = {
+        "context_before": text[start:match_start],
+        "matched_text": matched_text,
+        "match_start": match_start,
+        "match_end": resolved_end,
+        "context_after": text[resolved_end:end],
         "context_full": text[start:end],
         "text_line": text,
         "text_block": text,
     }
+    if len(matched_text) == 1:
+        result["matched_character"] = matched_text
+    return result
 
 
 def dedupe_occurrences(items: Iterable[dict]) -> list[dict]:
@@ -116,19 +145,20 @@ def assign_occurrence_indexes(items: list[dict]) -> None:
 
 
 def classify_verification_status(
-    matched_character: str,
+    matched_text: str,
     ocr_confidence: float,
     secondary_result: str,
 ) -> tuple[str, str]:
-    if secondary_result and secondary_result not in {"约", "約"}:
-        return "rejected", "secondary_non_target"
-    if secondary_result and secondary_result != matched_character:
+    normalized_secondary = unicodedata.normalize("NFC", secondary_result)
+    if normalized_secondary and matched_text not in normalized_secondary:
+        if ocr_confidence < 0.7:
+            return "rejected", "secondary_non_target"
         return "needs_review", "secondary_mismatch"
-    if ocr_confidence >= 0.9 and secondary_result == matched_character:
+    if ocr_confidence >= 0.9 and normalized_secondary:
         return "confirmed", ""
     if ocr_confidence >= 0.7:
         return "needs_review", "confidence_between_0_70_and_0_90"
-    if secondary_result == matched_character:
+    if normalized_secondary:
         return "needs_review", "low_confidence_but_secondary_matches"
     return "rejected", "low_confidence"
 
@@ -139,9 +169,17 @@ def _find_merge_target(existing_items: list[dict], candidate: dict) -> dict | No
             continue
         if existing.get("page_number") != candidate.get("page_number"):
             continue
-        if existing.get("matched_character") != candidate.get("matched_character"):
+        if existing.get("matched_text", existing.get("matched_character")) != candidate.get(
+            "matched_text", candidate.get("matched_character")
+        ):
             continue
-        if existing.get("unicode_codepoint") != candidate.get("unicode_codepoint"):
+        if existing.get("unicode_sequence", existing.get("unicode_codepoint")) != candidate.get(
+            "unicode_sequence", candidate.get("unicode_codepoint")
+        ):
+            continue
+        existing_range = (existing.get("match_start"), existing.get("match_end"))
+        candidate_range = (candidate.get("match_start"), candidate.get("match_end"))
+        if all(value is not None for value in (*existing_range, *candidate_range)) and existing_range != candidate_range:
             continue
         if existing.get("context_full") != candidate.get("context_full"):
             continue

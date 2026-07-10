@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { resolveEngineCommand, type EngineCommand } from "./paths";
 import { JsonLineReader } from "../protocol/jsonl";
-import { WireMessageSchema, type Response, type Event } from "@shared/index";
+import { PROTOCOL_VERSION, WireMessageSchema, type Response, type Event } from "@shared/index";
 import { logger } from "../logging/logger";
 
 const READY_TIMEOUT_MS = 15_000;
@@ -219,7 +219,7 @@ export class SidecarManager extends EventEmitter {
         }
       }, timeoutMs);
       this.pending.set(request_id, { resolve, reject, timer });
-      const line = JSON.stringify({ protocol_version: 1, request_id, method, params });
+      const line = JSON.stringify({ protocol_version: PROTOCOL_VERSION, request_id, method, params });
       this.proc!.stdin!.write(line + "\n", "utf-8");
     });
   }

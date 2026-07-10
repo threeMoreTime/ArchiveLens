@@ -10,7 +10,35 @@
 import { z } from "zod";
 
 /** IPC 协议版本，必须与 Python 侧 `archivelens_engine.PROTOCOL_VERSION` 一致。 */
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
+
+export const MAX_SEARCH_TEXT_LENGTH = 32;
+
+export function normalizeSearchText(value: string): string {
+  const normalized = value.trim().normalize("NFC");
+  if (!normalized) throw new Error("请输入检索文字或词语");
+  if (Array.from(normalized).length > MAX_SEARCH_TEXT_LENGTH)
+    throw new Error(`检索词最多 ${MAX_SEARCH_TEXT_LENGTH} 个字符`);
+  if (/[\r\n]/.test(normalized)) throw new Error("检索词不能包含换行");
+  if (/\p{C}/u.test(normalized)) throw new Error("检索词不能包含控制字符");
+  return normalized;
+}
+
+export const SearchTextSchema = z.string().transform((value, context) => {
+  try {
+    return normalizeSearchText(value);
+  } catch (error) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : "检索词无效" });
+    return z.NEVER;
+  }
+});
+
+export const TaskCreateParamsSchema = z.object({
+  source_dir: z.string().min(1),
+  search_text: SearchTextSchema,
+  output_dir: z.string().optional(),
+  name: z.string().optional(),
+});
 
 // --------------------------------------------------------------------------- //
 // 错误码（与 Python protocol.ErrorCode 一一对应）

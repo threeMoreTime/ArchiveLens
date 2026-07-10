@@ -27,7 +27,7 @@ threading.Thread(target=drain, daemon=True).start()
 
 def send(m: str, p: dict) -> None:
     assert proc.stdin is not None
-    proc.stdin.write(json.dumps({"protocol_version": 1, "request_id": m, "method": m, "params": p}) + "\n")
+    proc.stdin.write(json.dumps({"protocol_version": 2, "request_id": m, "method": m, "params": p}) + "\n")
     proc.stdin.flush()
 
 
@@ -37,7 +37,7 @@ for _ in range(40):
     time.sleep(0.5)
 print("[diag2] engine.ready")
 
-send("tasks.create", {"source_dir": tempfile.mkdtemp(prefix="al-d2-")})
+send("tasks.create", {"source_dir": tempfile.mkdtemp(prefix="al-d2-"), "search_text": "约"})
 tid = None
 for _ in range(20):
     time.sleep(0.3)

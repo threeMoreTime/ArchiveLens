@@ -17,6 +17,7 @@ from archivelens_engine.protocol import (
     safe_parse,
     require_protocol_version,
 )
+from archivelens_engine.search_terms import normalize_search_text
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "tests" / "ipc-contract" / "fixtures"
 
@@ -63,6 +64,13 @@ class IpcContractPythonTests(unittest.TestCase):
         src = msg["params"]["source_dir"]
         self.assertIn("#", src)
         self.assertIn(" ", src)
+        self.assertEqual(normalize_search_text(msg["params"]["search_text"]), "档案管理")
+
+    def test_search_text_rejects_the_same_invalid_values_as_ts_contract(self) -> None:
+        for value in ("", "   ", "档\n案", "档\x00案", "档" * 33):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(ValueError):
+                    normalize_search_text(value)
 
     def test_review_update_valid_decision(self) -> None:
         msg = load("review-update.json")

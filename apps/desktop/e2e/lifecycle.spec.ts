@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const TOTAL_PAGES = 20;
+const SEARCH_TEXT = "档案";
 const SOURCE_ID = "source-main";
 const APP_DIR = path.resolve(__dirname, "..");
 const ENGINE_SRC = path.resolve(APP_DIR, "..", "..", "engine", "src");
@@ -17,6 +18,8 @@ interface TaskState {
   processed_pages: number;
   total_pages: number;
   occurrence_count: number;
+  search_terms_json?: string;
+  search_mode?: string;
   error_code?: string | null;
   error_message?: string | null;
 }
@@ -142,7 +145,7 @@ async function firstWindow(app: ElectronApplication): Promise<Page> {
 async function createSlowFakeTask(win: Page, sourceDir: string): Promise<string> {
   return win.evaluate(async (dir) => {
     const api = (window as any).archiveLens;
-    const task = await api.tasks.create({ source_dir: dir });
+    const task = await api.tasks.create({ source_dir: dir, search_text: "档案" });
     await api.tasks.start(task.task_id);
     window.location.hash = `#/tasks/${task.task_id}`;
     return task.task_id as string;
@@ -324,12 +327,12 @@ async function readPersistedTaskSnapshot(userDataDir: string, taskId: string): P
     "    return dict(row) if row is not None else None",
     "task = row_to_dict(conn.execute('SELECT * FROM tasks WHERE task_id=?', (task_id,)).fetchone())",
     "processed_page_ids = [int(r['page_no']) for r in conn.execute('SELECT page_no FROM task_processed_pages WHERE task_id=? AND source_id=? ORDER BY page_no', (task_id, source_id)).fetchall()]",
-    "occurrence_rows = conn.execute('SELECT occurrence_id, source_id, page_number, matched_character, bbox_hash FROM occurrences WHERE task_id=? ORDER BY occurrence_id', (task_id,)).fetchall()",
+    "occurrence_rows = conn.execute('SELECT occurrence_id, source_id, page_number, matched_text, bbox_hash FROM occurrences WHERE task_id=? ORDER BY occurrence_id', (task_id,)).fetchall()",
     "occurrence_ids = [r['occurrence_id'] for r in occurrence_rows]",
     "seen = set()",
     "duplicate_keys = []",
     "for row in occurrence_rows:",
-    "    key = '|'.join([str(row['source_id'] or ''), str(row['page_number'] or ''), str(row['matched_character'] or ''), str(row['bbox_hash'] or '')])",
+    "    key = '|'.join([str(row['source_id'] or ''), str(row['page_number'] or ''), str(row['matched_text'] or ''), str(row['bbox_hash'] or '')])",
     "    if key in seen and key not in duplicate_keys:",
     "        duplicate_keys.append(key)",
     "    seen.add(key)",
@@ -367,6 +370,8 @@ function assertIntegrity(snapshot: PersistedTaskSnapshot): void {
   expect(getDuplicateStrings(snapshot.occurrence_ids)).toEqual([]);
   expect(snapshot.duplicate_occurrence_keys).toEqual([]);
   expect(snapshot.occurrence_ids).toHaveLength(TOTAL_PAGES);
+  expect(snapshot.task.search_terms_json).toBe(JSON.stringify([SEARCH_TEXT]));
+  expect(snapshot.task.search_mode).toBe("exact_literal");
   assertStrictlyIncreasing(snapshot.events);
 }
 
@@ -653,7 +658,7 @@ test("Lifecycle: restart recover resumes from checkpoint without duplicates or m
     const appInfo = await secondWin.evaluate(async () => {
       return (window as any).archiveLens.app.getInfo();
     });
-    expect(appInfo.protocol_version).toBe(1);
+    expect(appInfo.protocol_version).toBe(2);
 
     const snapshot = await readPersistedTaskSnapshot(userDataDir, taskId);
     assertIntegrity(snapshot);

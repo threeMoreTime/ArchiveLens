@@ -38,6 +38,10 @@ export default function TaskPage() {
         <div className="al-task-meta">
           <Text>来源：{task.source_dir}</Text>
           <br />
+          <Text>检索词：{task.search_text}</Text>
+          <br />
+          <Text>匹配模式：{task.search_mode === "legacy_fixed_pair" ? "历史双字符匹配" : "精确匹配"}</Text>
+          <br />
           <Text>状态：<b>{task.status}</b></Text>
           <br />
           <Text>

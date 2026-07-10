@@ -248,6 +248,28 @@ class WriteReportOutputsTests(unittest.TestCase):
 
 
 class WorkbenchHtmlTests(unittest.TestCase):
+    def test_build_html_uses_dynamic_escaped_search_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"
+            root.mkdir()
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            pipeline = ReportPipeline(
+                root_dir=root,
+                output_html=root / "report.html",
+                workspace_dir=workspace,
+                search_terms=["A&B<script>"],
+            )
+            try:
+                report = make_sample_report(root / "report.html")
+                report["search_terms"] = ["A&B<script>"]
+                prepare_report_for_output(report, workspace)
+                html = pipeline._build_html(report)
+            finally:
+                pipeline.close()
+            self.assertIn("检索词：A&amp;B&lt;script&gt;", html)
+            self.assertNotIn("</script><script>", html)
+
     def test_build_html_renders_user_workbench_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "root"

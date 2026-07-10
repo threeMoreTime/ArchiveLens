@@ -1,8 +1,8 @@
 {
   "name": "archivelens",
   "private": true,
-  "version": "0.1.0-alpha.10",
-  "description": "ArchiveLens — 本地档案 OCR 检索与校对桌面工具（PDF / DJVU / DJV 中定位“约/約”）",
+  "version": "0.1.0-alpha.11",
+  "description": "ArchiveLens — 本地档案 OCR 检索与校对桌面工具（PDF / DJVU / DJV 中定位用户指定的文字或词语）",
   "license": "MIT",
   "author": "ArchiveLens",
   "packageManager": "pnpm@11.10.0",

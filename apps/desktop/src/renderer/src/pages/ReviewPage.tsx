@@ -8,8 +8,8 @@ interface Occurrence {
   occurrence_id: string;
   file_name: string;
   page_number: number;
-  matched_character: string;
-  character_variant: string;
+  matched_text: string;
+  character_variant: string | null;
   context_full: string;
   ocr_confidence: number;
   verification_status: string;
@@ -40,6 +40,7 @@ export default function ReviewPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [variantFilter, setVariantFilter] = useState<string>("");
+  const [searchMode, setSearchMode] = useState<string>("");
   const [search, setSearch] = useState("");
   const [note, setNote] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -64,6 +65,12 @@ export default function ReviewPage() {
   useEffect(() => {
     reload();
   }, [reload]);
+
+  useEffect(() => {
+    window.archiveLens.tasks.get(taskId).then((task: { search_mode?: string }) => {
+      setSearchMode(task.search_mode ?? "");
+    });
+  }, [taskId]);
 
   const selected = useMemo(
     () => items.find((i) => i.occurrence_id === selectedId) ?? null,
@@ -170,11 +177,13 @@ export default function ReviewPage() {
           <option value="needs_review">待判断</option>
           <option value="rejected">排除</option>
         </select>
-        <select value={variantFilter} onChange={(e) => setVariantFilter(e.target.value)}>
-          <option value="">简繁全部</option>
-          <option value="simplified">简体 约</option>
-          <option value="traditional">繁体 約</option>
-        </select>
+        {searchMode === "legacy_fixed_pair" && (
+          <select value={variantFilter} onChange={(e) => setVariantFilter(e.target.value)}>
+            <option value="">全部</option>
+            <option value="simplified">约</option>
+            <option value="traditional">約</option>
+          </select>
+        )}
         <Input placeholder="搜索上下文" value={search} onChange={(_, d) => setSearch(d.value)} />
         <Text className="al-muted">共 {total} 条</Text>
         <div className="al-spacer" />
@@ -192,7 +201,7 @@ export default function ReviewPage() {
             >
               <div className="al-result-line1">
                 <span className={"al-tag al-tag-" + (it.review_decision || it.verification_status)}>
-                  {it.matched_character}
+                  {it.matched_text}
                 </span>
                 <span className="al-filename" title={it.file_name}>{it.file_name}</span>
               </div>
@@ -240,7 +249,7 @@ export default function ReviewPage() {
                   </div>
                 )}
                 {assetUrl(taskId, selected.crop_image_relpath) && (
-                  <img className="al-crop" src={assetUrl(taskId, selected.crop_image_relpath)} alt="字符截取" />
+                  <img className="al-crop" src={assetUrl(taskId, selected.crop_image_relpath)} alt="检索词截取" />
                 )}
               </div>
               <div className="al-detail-meta">

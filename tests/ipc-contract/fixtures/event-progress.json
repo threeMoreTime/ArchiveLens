@@ -1,1 +1,1 @@
-{"protocol_version":1,"event":"task.progress","task_id":"task_abc","sequence":42,"timestamp":"2026-07-07T00:00:00+00:00","payload":{"processed_pages":125,"total_pages":500}}
+{"protocol_version":2,"event":"task.progress","task_id":"task_abc","sequence":42,"timestamp":"2026-07-07T00:00:00+00:00","payload":{"processed_pages":125,"total_pages":500,"search_text":"档案","search_mode":"exact_literal"}}

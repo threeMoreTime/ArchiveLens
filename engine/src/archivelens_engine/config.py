@@ -20,8 +20,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-#: 检索目标字符：简体“约”与繁体“約”。
-#: 值为 ``(variant, unicode_codepoint)``。
+#: Alpha10 历史任务的默认检索目标；新任务改由任务级 ``search_terms`` 提供。
+#: 值为 ``(variant, unicode_codepoint)``，仅保留给 legacy 数据兼容。
 TARGET_CHARS: dict[str, tuple[str, str]] = {
     "约": ("simplified", "U+7EA6"),
     "約": ("traditional", "U+7D04"),

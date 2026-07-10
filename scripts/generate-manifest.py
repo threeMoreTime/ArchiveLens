@@ -83,7 +83,7 @@ def main() -> int:
             "electron_version": json.loads((ROOT / "apps" / "desktop" / "package.json").read_text(encoding="utf-8"))[
                 "devDependencies"
             ]["electron"].lstrip("^"),
-            "protocol_version": 1,
+            "protocol_version": 2,
         },
         "test_summary": test_summary,
     }

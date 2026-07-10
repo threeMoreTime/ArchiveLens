@@ -1,7 +1,7 @@
 """HTML 离线导出 smoke（任务 §十六/§十七）。
 
 真实 OCR fixtures → task.completed → export.html → 验证：
-存在 / 大小 / 约 / 約 / ArchiveLens / 无 http(s) / 无开发路径。
+存在 / 大小 / 检索词 / ArchiveLens / 无 http(s) / 无开发路径。
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
 FX = ROOT / "tests" / "fixtures" / "ocr"
 MODE = os.environ.get("ARCHIVELENS_HTML_SMOKE_MODE", "auto").strip().lower()
+SEARCH_TEXT = os.environ.get("ARCHIVELENS_HTML_SMOKE_SEARCH_TEXT", "约")
 
 
 def start_engine() -> subprocess.Popen[str]:
@@ -74,7 +75,7 @@ def send(method: str, params: dict | None = None) -> str:
     rid = f"{method}-{_counter[0]}"
     assert proc.stdin is not None
     proc.stdin.write(json.dumps(
-        {"protocol_version": 1, "request_id": rid, "method": method, "params": params or {}},
+        {"protocol_version": 2, "request_id": rid, "method": method, "params": params or {}},
         ensure_ascii=False) + "\n")
     proc.stdin.flush()
     return rid
@@ -111,7 +112,7 @@ def main() -> int:
             return 1
         log_status("INFO", "engine.ready")
 
-        rid = send("tasks.create", {"source_dir": str(FX)})
+        rid = send("tasks.create", {"source_dir": str(FX), "search_text": SEARCH_TEXT})
         r = resp(rid, 30)
         if not r or not r.get("ok"):
             log_status("FAIL", f"tasks.create {r}")
@@ -149,8 +150,7 @@ def main() -> int:
         checks = {
             "exists": html_path.exists(),
             "size>1KB": html_path.stat().st_size > 1024,
-            "has 约": "约" in content,
-            "has 約": "約" in content,
+            "has search text": SEARCH_TEXT in content,
             "has ArchiveLens": "ArchiveLens" in content,
             "no http://": "http://" not in content,
             "no https://": "https://" not in content,

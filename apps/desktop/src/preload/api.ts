@@ -34,6 +34,9 @@ export interface TaskSummary {
   started_at: string | null;
   finished_at: string | null;
   error_message: string | null;
+  search_text: string;
+  search_terms: string[];
+  search_mode: "exact_literal" | "legacy_fixed_pair";
 }
 
 export interface OccurrenceItem {
@@ -43,8 +46,12 @@ export interface OccurrenceItem {
   relative_path: string;
   page_number: number;
   page_occurrence_index: number;
-  matched_character: string;
-  character_variant: string;
+  matched_character: string | null;
+  character_variant: string | null;
+  matched_text: string;
+  match_start: number | null;
+  match_end: number | null;
+  unicode_sequence: string | null;
   context_before: string;
   context_after: string;
   context_full: string;
@@ -91,6 +98,7 @@ export interface ArchiveLensApi {
   tasks: {
     create(p: {
       source_dir: string;
+      search_text: string;
       output_dir?: string;
       name?: string;
       parallel_workers?: number;

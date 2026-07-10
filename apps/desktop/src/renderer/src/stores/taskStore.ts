@@ -31,6 +31,8 @@ export interface TrackedTask {
   total_pages?: number;
   occurrence_count?: number;
   last_error?: string | null;
+  search_text?: string;
+  search_mode?: string;
 }
 
 export interface EngineEvent {
@@ -55,6 +57,8 @@ function reduceTask(prev: TrackedTask | undefined, tid: string, event: EngineEve
   switch (event.event) {
     case "task.created":
       next.status = prev?.status === "unknown" ? "draft" : prev?.status ?? "draft";
+      if (typeof payload.search_text === "string") next.search_text = payload.search_text;
+      if (typeof payload.search_mode === "string") next.search_mode = payload.search_mode;
       break;
     case "task.started":
     case "task.resumed":

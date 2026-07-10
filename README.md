@@ -1,6 +1,6 @@
 # ArchiveLens
 
-> 本地档案 OCR 检索与校对桌面工具 —— 在 PDF / DJVU / DJV 中定位简体“约”与繁体“約”。
+> 本地档案 OCR 检索与校对桌面工具 —— 在 PDF / DJVU / DJV 中定位用户指定的文字或词语。
 
 **文档内容默认在本机处理，不上传网络。**
 
@@ -8,7 +8,7 @@
 
 ## 当前状态
 
-本仓库正在 `feat/electron-desktop-v0.1` 分支上推进 **v0.1.0-alpha.10 Desktop Alpha** 的可复现发布闭环。已落地的实质能力：
+本仓库正在 `feat/custom-search-term` 分支上推进 **v0.1.0-alpha.11 Desktop Alpha** 的用户自定义检索词能力。
 
 | 能力 | 状态 | 证据 |
 | --- | --- | --- |
@@ -93,7 +93,8 @@ MIT（见 [LICENSE](LICENSE)）。第三方组件清单见 [THIRD_PARTY_NOTICES.
 
 ## Alpha 限制（必读）
 
-- 版本 `0.1.0-alpha.10`，**非稳定版**，仅供早期试用与反馈；
+- 版本 `0.1.0-alpha.11`，**非稳定版**，仅供早期试用与反馈；
+- 新建任务输入 1～32 个 Unicode 字符的检索文字或词语；首尾空白会去除，按 NFC 规范化后进行区分大小写的精确行内匹配；不支持正则、通配符或跨 OCR 行匹配；
 - 安装包**未签名**，Windows SmartScreen 可能提示「未知发布者」，需手动「仍要运行」；
 - 仅支持 Windows 10/11 x64；
 - 原生 OCR 依赖（Tesseract / DjVuLibre / 语言包）**当前需宿主已安装**，未随包分发（许可证阻塞）；

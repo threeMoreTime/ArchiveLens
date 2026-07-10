@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 import hashlib
 import json
 import os
@@ -22,7 +23,7 @@ import pytesseract
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 
-from .config import DEFAULT_CONFIG, EngineConfig, TARGET_CHARS
+from .config import DEFAULT_CONFIG, EngineConfig
 from .runtime.task_control import TaskControl
 from .documents import DocumentBackendRegistry
 from .ocr_core import (
@@ -33,7 +34,9 @@ from .ocr_core import (
     dedupe_occurrences,
     normalize_bbox,
     split_line_bbox,
+    union_bboxes,
 )
+from .search_terms import LEGACY_SEARCH_TERMS, find_literal_matches, normalize_search_text, unicode_sequence
 
 
 STATUS_LABELS = {
@@ -92,11 +95,15 @@ class ReportPipeline:
         task_control: TaskControl | None = None,
         ocr_engine: Any = None,
         on_page_completed: Callable[..., None] | None = None,
+        search_terms: tuple[str, ...] | list[str] | None = None,
     ) -> None:
         # Phase 1 预留实例配置入口；Phase 3 起 Sidecar 将按任务注入打包内路径。
         self.config = config or DEFAULT_CONFIG
         self.task_control = task_control
         self.on_page_completed = on_page_completed
+        self.search_terms = tuple(search_terms or LEGACY_SEARCH_TERMS)
+        if not self.search_terms or any(not isinstance(term, str) or not term for term in self.search_terms):
+            raise ValueError("search_terms must contain at least one non-empty term")
         self.backend_registry = DocumentBackendRegistry(self.config)
         self.root_dir = root_dir
         self.output_html = output_html
@@ -382,27 +389,25 @@ class ReportPipeline:
             page_image_id = f"{document.document_id}-p{page_index+1}"
             for line_index, line in enumerate(ocr_results):
                 polygon, text, confidence = line
-                if not any(ch in text for ch in TARGET_CHARS):
-                    continue
                 line_box = self._line_rect(polygon)
                 char_boxes = split_line_bbox(text, line_box)
-                for char_index, char in enumerate(text):
-                    if char not in TARGET_CHARS:
-                        continue
-                    occurrence = self._build_occurrence(
-                        document=document,
-                        page_index=page_index,
-                        page_image_id=page_image_id,
-                        line_index=line_index,
-                        line_text=text,
-                        line_confidence=float(confidence),
-                        image=image,
-                        char_index=char_index,
-                        char_box=char_boxes[char_index],
-                        page_width=width,
-                        page_height=height,
-                    )
-                    page_occurrences.append(occurrence)
+                for search_text in self.search_terms:
+                    for match_start, match_end in find_literal_matches(text, search_text):
+                        occurrence = self._build_occurrence(
+                            document=document,
+                            page_index=page_index,
+                            page_image_id=page_image_id,
+                            line_index=line_index,
+                            line_text=text,
+                            line_confidence=float(confidence),
+                            image=image,
+                            match_start=match_start,
+                            match_end=match_end,
+                            match_box=union_bboxes(char_boxes[match_start:match_end]),
+                            page_width=width,
+                            page_height=height,
+                        )
+                        page_occurrences.append(occurrence)
             if not page_occurrences:
                 render_path.unlink(missing_ok=True)
                 return None, []
@@ -443,19 +448,22 @@ class ReportPipeline:
         line_text: str,
         line_confidence: float,
         image: Image.Image,
-        char_index: int,
-        char_box: tuple[float, float, float, float],
+        match_start: int,
+        match_end: int,
+        match_box: tuple[float, float, float, float],
         page_width: int,
         page_height: int,
     ) -> dict[str, Any]:
-        matched_character = line_text[char_index]
-        character_variant, unicode_codepoint = TARGET_CHARS[matched_character]
-        context_fields = build_context_fields(line_text, char_index)
-        box_fields = normalize_bbox(*char_box, page_width, page_height)
-        crop_image, crop_bounds = self._crop_with_padding(image, char_box)
-        secondary_result, secondary_confidence = self._secondary_verify(crop_image, matched_character)
+        matched_text = line_text[match_start:match_end]
+        matched_character = matched_text if len(matched_text) == 1 else None
+        character_variant = "simplified" if matched_character == "约" else "traditional" if matched_character == "約" else None
+        unicode_codepoint = f"U+{ord(matched_character):04X}" if matched_character else None
+        context_fields = build_context_fields(line_text, match_start, match_end)
+        box_fields = normalize_bbox(*match_box, page_width, page_height)
+        crop_image, crop_bounds = self._crop_with_padding(image, match_box)
+        secondary_result, secondary_confidence = self._secondary_verify(crop_image, matched_text)
         verification_status, review_reason = classify_verification_status(
-            matched_character,
+            matched_text,
             line_confidence,
             secondary_result,
         )
@@ -481,6 +489,10 @@ class ReportPipeline:
             "document_occurrence_index": 0,
             "matched_character": matched_character,
             "character_variant": character_variant,
+            "matched_text": matched_text,
+            "match_start": match_start,
+            "match_end": match_end,
+            "unicode_sequence": unicode_sequence(matched_text),
             "bbox_hash": build_bbox_hash(
                 source_x0=box_fields["source_x0"],
                 source_y0=box_fields["source_y0"],
@@ -503,7 +515,7 @@ class ReportPipeline:
             "ocr_confidence": round(line_confidence, 6),
             "secondary_ocr_result": secondary_result,
             "secondary_ocr_confidence": secondary_confidence,
-            "verification_method": "rapidocr_full_page_plus_tesseract_single_char",
+            "verification_method": "rapidocr_full_page_plus_tesseract_literal",
             "verification_status": verification_status,
             "review_reason": review_reason,
             "source_x0": box_fields["source_x0"],
@@ -543,16 +555,24 @@ class ReportPipeline:
         enlarged = crop.resize((max(1, crop.width * 4), max(1, crop.height * 4)))
         return enlarged, (left, top, right, bottom)
 
-    def _secondary_verify(self, crop_image: Image.Image, matched_character: str) -> tuple[str, float]:
+    def _secondary_verify(self, crop_image: Image.Image, matched_text: str) -> tuple[str, float]:
         # Tesseract 可选（任务 §4.2）：缺失时不阻断主 OCR，二次复核记为 skipped。
         if not self.config.has_tesseract:
             return "", 0.0
-        language = "chi_sim+chi_sim_vert" if matched_character == "约" else "chi_tra+chi_tra_vert"
+        languages: list[str] = []
+        if self.config.has_simplified_lang:
+            languages.append("chi_sim")
+        if self.config.has_traditional_lang:
+            languages.append("chi_tra")
+        if not languages:
+            languages.append("eng")
+        language = "+".join(languages)
+        psm = 10 if len(matched_text) == 1 else 7
         try:
             data = pytesseract.image_to_data(
                 crop_image,
                 lang=language,
-                config="--psm 10",
+                config=f"--psm {psm}",
                 output_type=pytesseract.Output.DICT,
             )
         except Exception:
@@ -569,7 +589,7 @@ class ReportPipeline:
                 conf_value = 0.0
             if conf_value >= best_conf:
                 best_conf = conf_value
-                best_text = stripped[:1]
+                best_text = stripped
         return best_text, round(best_conf, 6)
 
     def _convert_page_to_webp(self, render_path: Path, page_image_id: str) -> Path:
@@ -676,6 +696,7 @@ class ReportPipeline:
         report = {
             "root_dir": str(self.root_dir),
             "output_html": str(self.output_html),
+            "search_terms": list(self.search_terms),
             "started_at": self.started_at.isoformat(timespec="seconds"),
             "finished_at": datetime.now().isoformat(timespec="seconds"),
             "documents": documents,
@@ -694,13 +715,16 @@ class ReportPipeline:
         occurrences: list[dict[str, Any]],
         failures: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        char_counter = Counter(item["matched_character"] for item in occurrences)
-        status_counter = Counter((item["matched_character"], item["verification_status"]) for item in occurrences)
+        match_counter = Counter(item.get("matched_text") or item.get("matched_character") for item in occurrences)
+        status_counter = Counter(
+            ((item.get("matched_text") or item.get("matched_character")), item["verification_status"])
+            for item in occurrences
+        )
         file_types = Counter(item["file_type"] for item in documents)
         methods = Counter(item["location_method"] for item in occurrences)
         per_file_char = defaultdict(set)
         for item in occurrences:
-            per_file_char[item["file_path"]].add(item["matched_character"])
+            per_file_char[item["file_path"]].add(item.get("matched_text") or item.get("matched_character"))
         only_simplified = sum(chars == {"约"} for chars in per_file_char.values())
         only_traditional = sum(chars == {"約"} for chars in per_file_char.values())
         both_variants = sum(chars == {"约", "約"} for chars in per_file_char.values())
@@ -715,9 +739,11 @@ class ReportPipeline:
             "document_total_pages": sum(item["page_count"] for item in documents),
             "hit_file_count": len({item["file_path"] for item in occurrences}),
             "hit_page_count": len({(item["file_path"], item["page_number"]) for item in occurrences}),
-            "simplified_total": char_counter.get("约", 0),
-            "traditional_total": char_counter.get("約", 0),
-            "combined_total": char_counter.get("约", 0) + char_counter.get("約", 0),
+            "search_terms": list(self.search_terms),
+            "match_totals": dict(match_counter),
+            "simplified_total": match_counter.get("约", 0),
+            "traditional_total": match_counter.get("約", 0),
+            "combined_total": len(occurrences),
             "simplified_confirmed": status_counter.get(("约", "confirmed"), 0),
             "traditional_confirmed": status_counter.get(("約", "confirmed"), 0),
             "simplified_needs_review": status_counter.get(("约", "needs_review"), 0),
@@ -740,11 +766,18 @@ class ReportPipeline:
             if item["occurrence_id"] in seen_ids:
                 raise ValueError(f"duplicate occurrence_id: {item['occurrence_id']}")
             seen_ids.add(item["occurrence_id"])
-            if item["matched_character"] not in TARGET_CHARS:
-                raise ValueError(f"invalid matched_character: {item['matched_character']}")
-            if item["matched_character"] == "约" and item["unicode_codepoint"] != "U+7EA6":
+            matched_text = item.get("matched_text") or item.get("matched_character")
+            if matched_text not in self.search_terms:
+                raise ValueError(f"invalid matched_text: {matched_text}")
+            if not item.get("matched_text"):
+                item["matched_text"] = matched_text
+            if not item.get("unicode_sequence"):
+                item["unicode_sequence"] = unicode_sequence(str(matched_text))
+            if item.get("unicode_sequence") != unicode_sequence(str(matched_text)):
+                raise ValueError("unicode sequence mismatch")
+            if item.get("matched_character") == "约" and item.get("unicode_codepoint") != "U+7EA6":
                 raise ValueError("simplified unicode mismatch")
-            if item["matched_character"] == "約" and item["unicode_codepoint"] != "U+7D04":
+            if item.get("matched_character") == "約" and item.get("unicode_codepoint") != "U+7D04":
                 raise ValueError("traditional unicode mismatch")
             if item["normalized_x0"] < 0 or item["normalized_y0"] < 0:
                 raise ValueError("normalized coordinate below zero")
@@ -759,9 +792,19 @@ class ReportPipeline:
         return default_browser_validation()
 
     def _build_html(self, report: dict[str, Any]) -> str:
-        data_json = json.dumps(report, ensure_ascii=False, separators=(",", ":"))
+        # JSON 直接嵌入 script；转义 HTML 终止字符避免用户检索词闭合脚本标签。
+        data_json = (
+            json.dumps(report, ensure_ascii=False, separators=(",", ":"))
+            .replace("&", "\\u0026")
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029")
+        )
         status_labels_json = json.dumps(STATUS_LABELS, ensure_ascii=False, separators=(",", ":"))
         stats = report.get("stats", {})
+        search_label = " / ".join(str(item) for item in report.get("search_terms", stats.get("search_terms", [])))
+        escaped_search_label = html.escape(search_label, quote=True)
         html_size_note = (
             "从结果清单进入，同屏查看出处页与截取小图，并直接完成校对。"
             f" 当前文件大小：{stats.get('html_file_size_human', '计算中')}。"
@@ -772,7 +815,7 @@ class ReportPipeline:
             <head>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>约字检索报告</title>
+              <title>ArchiveLens 检索报告：__SEARCH_LABEL__</title>
               <style>
                 :root {
                   --bg: #efe1c4;
@@ -1292,7 +1335,7 @@ class ReportPipeline:
                 <header class="hero">
                   <div>
                     <p class="eyebrow">档案校对工作台</p>
-                    <h1>约字检索报告</h1>
+                    <h1>检索词：__SEARCH_LABEL__</h1>
                     <p>__HTML_SIZE_NOTE__</p>
                   </div>
                   <div id="stats" class="stats"></div>
@@ -1687,7 +1730,7 @@ class ReportPipeline:
                     [JSON.stringify({ exported_at: new Date().toISOString(), records }, null, 2)],
                     { type: "application/json" },
                   );
-                  downloadBlob(blob, "约字检索报告-校对记录.json");
+                  downloadBlob(blob, "ArchiveLens-检索校对记录.json");
                 }
 
                 function renderStats() {
@@ -1695,8 +1738,12 @@ class ReportPipeline:
                   const pending = occurrences.filter(item => getDecision(item) === "needs_review").length;
                   const confirmed = occurrences.filter(item => getDecision(item) === "confirmed").length;
                   const rejected = occurrences.filter(item => getDecision(item) === "rejected").length;
+                  const pages = data.pages || [];
                   const entries = [
-                    ["当前结果", filtered.length],
+                    ["文档数", (data.documents || []).length],
+                    ["总页数", data.stats?.document_total_pages || 0],
+                    ["处理页数", pages.length],
+                    ["命中总数", occurrences.length],
                     ["待判断", pending],
                     ["已确认", confirmed],
                     ["排除", rejected],
@@ -1774,7 +1821,7 @@ class ReportPipeline:
                     <article class="result-card ${item.occurrence_id === currentOccurrenceId ? "active" : ""}" data-select="${item.occurrence_id}">
                       <div class="status-row">
                         <span class="status-badge status-${getDecision(item)}">${escapeHtml(getDecisionLabel(item))}</span>
-                        <span class="count-chip">${escapeHtml(item.matched_character || "命中")} · 第 ${item.page_occurrence_index} 处</span>
+                        <span class="count-chip">${escapeHtml(item.matched_text || item.matched_character || "命中")} · 第 ${item.page_occurrence_index} 处</span>
                       </div>
                       <h3>${escapeHtml(item.result_title)}</h3>
                       <div class="result-meta-row">
@@ -2166,6 +2213,7 @@ class ReportPipeline:
             .replace("__DATA_JSON__", data_json)
             .replace("__STATUS_LABELS__", status_labels_json)
             .replace("__HTML_SIZE_NOTE__", html_size_note)
+            .replace("__SEARCH_LABEL__", escaped_search_label)
         )
 
 
@@ -2326,6 +2374,7 @@ def run_parallel_documents(args: argparse.Namespace) -> dict[str, Any]:
         include_paths={str(Path(p)) for p in args.include_path} if args.include_path else None,
         start_page_index=args.start_page_index,
         end_page_index_exclusive=args.end_page_index_exclusive,
+        search_terms=[normalize_search_text(args.search_text)] if args.search_text is not None else None,
     )
     try:
         documents = coordinator._scan_documents()
@@ -2372,6 +2421,8 @@ def _run_workers(args: argparse.Namespace, documents: list[DocumentRecord], work
         ]
         if args.page_limit is not None:
             cmd += ["--page-limit", str(args.page_limit)]
+        if args.search_text is not None:
+            cmd += ["--search-text", normalize_search_text(args.search_text)]
         out_handle = out_log.open("w", encoding="utf-8")
         err_handle = err_log.open("w", encoding="utf-8")
         proc = subprocess.Popen(
@@ -2514,6 +2565,7 @@ def main() -> None:
     parser.add_argument("--parallel-docs", type=int, default=1)
     parser.add_argument("--merge-workers", nargs="*", default=None)
     parser.add_argument("--output-json", default=None)
+    parser.add_argument("--search-text", default=None)
     parser.add_argument("--start-page-index", type=int, default=None)
     parser.add_argument("--end-page-index-exclusive", type=int, default=None)
     parser.add_argument("--merge-only", action="store_true")
@@ -2544,6 +2596,7 @@ def main() -> None:
         include_paths={str(Path(p)) for p in args.include_path} if args.include_path else None,
         start_page_index=args.start_page_index,
         end_page_index_exclusive=args.end_page_index_exclusive,
+        search_terms=[normalize_search_text(args.search_text)] if args.search_text is not None else None,
     )
     try:
         report = pipeline.run()

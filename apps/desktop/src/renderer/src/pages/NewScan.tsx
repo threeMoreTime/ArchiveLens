@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Input, Text } from "@fluentui/react-components";
+import { TaskCreateParamsSchema } from "@archivelens/ipc-schema";
 
 export default function NewScan() {
   const nav = useNavigate();
   const [dir, setDir] = useState("");
+  const [searchText, setSearchText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,11 +16,15 @@ export default function NewScan() {
   };
 
   const start = async () => {
-    if (!dir) return;
+    const parsed = TaskCreateParamsSchema.safeParse({ source_dir: dir, search_text: searchText });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "请输入检索文字或词语");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const t = await window.archiveLens.tasks.create({ source_dir: dir });
+      const t = await window.archiveLens.tasks.create(parsed.data);
       await window.archiveLens.tasks.start(t.task_id);
       nav(`/tasks/${t.task_id}`);
     } catch (e: unknown) {
@@ -38,8 +44,18 @@ export default function NewScan() {
         <Button onClick={select}>选择文件夹</Button>
       </div>
 
+      <div className="al-scan-row">
+        <Text>检索文字或词语</Text>
+        <Input
+          value={searchText}
+          onChange={(_, data) => setSearchText(data.value)}
+          placeholder="输入 1～32 个文字，按 OCR 结果进行精确匹配"
+          aria-label="检索文字或词语"
+        />
+      </div>
+
       <div className="al-welcome-actions">
-        <Button appearance="primary" onClick={start} disabled={busy || !dir}>
+        <Button appearance="primary" onClick={start} disabled={busy || !TaskCreateParamsSchema.safeParse({ source_dir: dir, search_text: searchText }).success}>
           {busy ? "创建中…" : "开始扫描"}
         </Button>
       </div>

@@ -36,6 +36,37 @@ class TaskStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get_task(tid)["status"], "running")
         self.assertEqual(len(self.store.list_tasks()), 1)
 
+    def test_create_task_persists_single_exact_literal_search_term(self) -> None:
+        tid = self.store.create_task(search_terms=["档案"], search_mode="exact_literal")
+        task = self.store.get_task(tid)
+        assert task is not None
+        self.assertEqual(task["search_terms"], ["档案"])
+        self.assertEqual(task["search_text"], "档案")
+        self.assertEqual(task["search_mode"], "exact_literal")
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            self.store.update_task(tid, search_terms_json='["其他"]')
+
+    def test_occurrence_uses_matched_text_without_replacing_existing_review(self) -> None:
+        tid = self.store.create_task(search_terms=["档案"], search_mode="exact_literal")
+        occurrence = {
+            "occurrence_id": "occ-first",
+            "source_id": "source-1",
+            "page_number": 1,
+            "matched_text": "档案",
+            "match_start": 0,
+            "match_end": 2,
+            "unicode_sequence": "U+6863 U+6848",
+            "bbox_hash": "bbox-1",
+        }
+        self.store.add_occurrences(tid, [occurrence])
+        self.store.upsert_review(task_id=tid, occurrence_id="occ-first", note="保留")
+        duplicate = {**occurrence, "occurrence_id": "occ-second"}
+        self.store.add_occurrences(tid, [duplicate])
+        total, items = self.store.query_occurrences(task_id=tid)
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["occurrence_id"], "occ-first")
+        self.assertEqual(items[0]["review_note"], "保留")
+
     def test_occurrence_query_filter_and_review_join(self) -> None:
         tid = self.store.create_task()
         self.store.add_occurrences(

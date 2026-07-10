@@ -12,6 +12,18 @@ describe("taskStore 事件归并", () => {
     expect(useTaskStore.getState().tasks.t1.status).toBe("paused");
   });
 
+  it("task.created 保留任务检索词与匹配模式", () => {
+    const s = useTaskStore.getState();
+    s.applyEvent({
+      event: "task.created",
+      task_id: "t1",
+      sequence: 1,
+      payload: { search_text: "档案", search_mode: "exact_literal" },
+    });
+    expect(useTaskStore.getState().tasks.t1.search_text).toBe("档案");
+    expect(useTaskStore.getState().tasks.t1.search_mode).toBe("exact_literal");
+  });
+
   it("旧 sequence 不覆盖新 sequence", () => {
     const s = useTaskStore.getState();
     s.applyEvent({ event: "task.progress", task_id: "t1", sequence: 5, payload: { processed_pages: 50 } });

@@ -1,6 +1,6 @@
 # ArchiveLens Engine
 
-本地 OCR 引擎：在 PDF / DJVU / DJV 档案中检索简体“约”与繁体“約”，产出可校对的离线报告。
+本地 OCR 引擎：在 PDF / DJVU / DJV 档案中检索用户指定的文字或词语，产出可校对的离线报告。
 
 该包同时提供两种入口：
 
@@ -37,7 +37,7 @@ PYTHONPATH="engine/src;engine" python -m unittest discover -s engine/tests -t en
 
 ## 原生依赖
 
-* Tesseract OCR（单字符二次识别）
+* Tesseract OCR（可选的二次识别；单字符与词语均可用）
 * DjVuLibre 的 `ddjvu` / `djvused`（DJVU/DJV 解析）
 * 简繁体中文 traineddata
 

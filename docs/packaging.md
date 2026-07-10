@@ -17,7 +17,7 @@ pwsh scripts/build-engine.ps1
 - smoke 验证（已通过）：
 
 ```bash
-echo '{"protocol_version":1,"request_id":"r1","method":"app.info","params":{}}' \
+echo '{"protocol_version":2,"request_id":"r1","method":"app.info","params":{}}' \
   | dist/engine/win-x64/archivelens-engine.exe serve
 # → engine.ready 事件 + app.info success（python_executable 指向 exe 自身）
 ```
@@ -51,12 +51,12 @@ pnpm --filter @archivelens/desktop dist
 ### 安装包产物（目标）
 
 ```
-ArchiveLens-0.1.0-alpha.10-x64-setup.exe      (NSIS)
-ArchiveLens-0.1.0-alpha.10-x64-portable.exe   (portable)
+ArchiveLens-0.1.0-alpha.11-x64-setup.exe      (NSIS)
+ArchiveLens-0.1.0-alpha.11-x64-portable.exe   (portable)
 SHA256SUMS.txt
 ```
 
-> v0.1.0-alpha.10 未签名：EXE 属性已含产品名 / 版本，但无代码签名证书。架构上 `cscLink` / `cscKeyPassword` 已预留，不得将私钥提交仓库。
+> v0.1.0-alpha.11 未签名：EXE 属性已含产品名 / 版本，但无代码签名证书。架构上 `cscLink` / `cscKeyPassword` 已预留，不得将私钥提交仓库。
 
 ## 发布前检查清单（任务 §三十四）
 

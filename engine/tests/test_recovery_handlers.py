@@ -27,7 +27,7 @@ class RecoveryHandlerTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_resume_without_live_task_control_starts_new_scan_thread(self) -> None:
-        created = _h_tasks_create(self.server, {"source_dir": str(self.src)})
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
         task_id = created["task_id"]
         self.server.store.update_task(task_id, status="paused")
         self.server.store.record_page_completion(
@@ -61,7 +61,7 @@ class RecoveryHandlerTests(unittest.TestCase):
         start_scan_thread.assert_called_once()
 
     def test_inspect_state_returns_persisted_checkpoint_processed_pages_and_events(self) -> None:
-        created = _h_tasks_create(self.server, {"source_dir": str(self.src)})
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
         task_id = created["task_id"]
         self.server.store.append_task_event(
             task_id=task_id,
@@ -104,7 +104,7 @@ class RecoveryHandlerTests(unittest.TestCase):
         self.assertEqual(len(state["occurrence_ids"]), 1)
 
     def test_inspect_state_derives_real_source_id_without_explicit_param(self) -> None:
-        created = _h_tasks_create(self.server, {"source_dir": str(self.src)})
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
         task_id = created["task_id"]
         source_id = "long-real-ocr.pdf"
         self.server.store.record_page_completion(
@@ -139,7 +139,7 @@ class RecoveryHandlerTests(unittest.TestCase):
         self.assertEqual(state["checkpoint"]["source_id"], source_id)
 
     def test_real_scan_path_persists_processed_pages_checkpoint_and_progress_events(self) -> None:
-        created = _h_tasks_create(self.server, {"source_dir": str(self.src)})
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
         task_id = created["task_id"]
         self.server.store.update_task(task_id, status="running")
         self.server.store.update_task(task_id, started_at="2026-07-09T00:00:00+00:00")
@@ -220,7 +220,7 @@ class RecoveryHandlerTests(unittest.TestCase):
         self.assertEqual(len(state["occurrence_ids"]), 2)
 
     def test_real_scan_path_backfills_bbox_hash_for_report_occurrences(self) -> None:
-        created = _h_tasks_create(self.server, {"source_dir": str(self.src)})
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
         task_id = created["task_id"]
         self.server.store.update_task(task_id, status="running")
         worker_generation = self.server.store.allocate_worker_generation(task_id)

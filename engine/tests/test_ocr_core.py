@@ -1,6 +1,7 @@
 import unittest
 import tempfile
 from pathlib import Path
+from PIL import Image
 
 from archivelens_engine.report_pipeline import DocumentRecord, ReportPipeline, discover_worker_report_paths
 
@@ -11,6 +12,7 @@ from archivelens_engine.ocr_core import (
     dedupe_occurrences,
     normalize_bbox,
     split_line_bbox,
+    union_bboxes,
 )
 
 
@@ -47,8 +49,44 @@ class BuildContextFieldsTests(unittest.TestCase):
         self.assertEqual(context["context_after"], "定的期限完成交付")
         self.assertEqual(context["context_full"], "雙方應按照本協議約定的期限完成交付")
 
+    def test_build_context_fields_keeps_a_multi_character_match_intact(self) -> None:
+        context = build_context_fields("前缀档案管理后缀", 2, 6)
+        self.assertEqual(context["matched_text"], "档案管理")
+        self.assertEqual(context["context_before"], "前缀")
+        self.assertEqual(context["context_after"], "后缀")
+
+
+class UnionBboxesTests(unittest.TestCase):
+    def test_union_bboxes_covers_every_character_in_a_word(self) -> None:
+        self.assertEqual(
+            union_bboxes([(10, 20, 20, 60), (20, 20, 30, 60)]),
+            (10, 20, 30, 60),
+        )
+
 
 class DedupeOccurrencesTests(unittest.TestCase):
+    def test_dedupe_occurrences_keeps_overlapping_literal_matches_separate(self) -> None:
+        items = [
+            {
+                "occurrence_id": f"occ-{index}",
+                "file_path": "doc.pdf",
+                "page_number": 1,
+                "matched_text": "aa",
+                "unicode_sequence": "U+0061 U+0061",
+                "match_start": index,
+                "match_end": index + 2,
+                "context_full": "aaaa",
+                "location_method": "pdf_ocr",
+                "detection_sources": ["ocr"],
+                "source_x0": float(index * 5),
+                "source_y0": 0.0,
+                "source_x1": float(index * 5 + 10),
+                "source_y1": 10.0,
+            }
+            for index in range(3)
+        ]
+        self.assertEqual(len(dedupe_occurrences(items)), 3)
+
     def test_dedupe_occurrences_prefers_text_layer_when_boxes_overlap(self) -> None:
         items = [
             {
@@ -205,6 +243,42 @@ class CheckpointRoundtripTests(unittest.TestCase):
                 self.assertEqual(restored["failures"], failures)
             finally:
                 pipeline.close()
+
+
+class ReportPipelineLiteralMatchTests(unittest.TestCase):
+    def test_word_matches_are_distinct_and_use_union_bbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"
+            root.mkdir()
+            render_path = Path(tmp) / "render.png"
+            Image.new("RGB", (200, 100), color="white").save(render_path)
+            pipeline = ReportPipeline(
+                root_dir=root,
+                output_html=root / "out.html",
+                workspace_dir=Path(tmp) / "work",
+                search_terms=["档案"],
+                ocr_engine=lambda _path: ([([[0, 0], [160, 0], [160, 40], [0, 40]], "档案档案", 0.98)], None),
+            )
+            pipeline._render_page = lambda _document, _page_index: render_path  # type: ignore[method-assign]
+            document = DocumentRecord(
+                document_id="doc-1",
+                file_path=root / "sample.pdf",
+                relative_path="sample.pdf",
+                file_type="PDF",
+                file_size_bytes=1,
+                file_hash_sha256="abc",
+                modified_time=0.0,
+                page_count=1,
+            )
+            try:
+                _page, occurrences = pipeline._process_page(document, 0)
+            finally:
+                pipeline.close()
+            self.assertEqual([(item["match_start"], item["match_end"]) for item in occurrences], [(0, 2), (2, 4)])
+            self.assertEqual([item["matched_text"] for item in occurrences], ["档案", "档案"])
+            self.assertEqual(occurrences[0]["source_x0"], 0.0)
+            self.assertEqual(occurrences[0]["source_x1"], 80.0)
+            self.assertIsNone(occurrences[0]["matched_character"])
 
 
 class PageRangeCheckpointTests(unittest.TestCase):

@@ -65,8 +65,15 @@ class HandlersTests(unittest.TestCase):
 
     def test_tasks_create_validates_source_dir(self) -> None:
         with self.assertRaises(ProtocolError) as cm:
-            self.server.handlers["tasks.create"](self.server, {"source_dir": "Z:/no/such/dir/x"})
+            self.server.handlers["tasks.create"](
+                self.server, {"source_dir": "Z:/no/such/dir/x", "search_text": "档案"}
+            )
         self.assertEqual(cm.exception.code, ErrorCode.PATH_NOT_FOUND)
+
+    def test_tasks_create_requires_a_valid_search_text(self) -> None:
+        with self.assertRaises(ProtocolError) as cm:
+            self.server.handlers["tasks.create"](self.server, {"source_dir": self.tmp})
+        self.assertEqual(cm.exception.code, ErrorCode.VALIDATION_ERROR)
 
     def test_tasks_create_counts_files(self) -> None:
         src = Path(self.tmp) / "src"
@@ -74,20 +81,52 @@ class HandlersTests(unittest.TestCase):
         (src / "a.pdf").write_bytes(b"%PDF-1.4")
         (src / "b.djvu").write_bytes(b"AT&T")
         (src / "ignore.txt").write_text("x")
-        result = self.server.handlers["tasks.create"](self.server, {"source_dir": str(src)})
+        result = self.server.handlers["tasks.create"](
+            self.server, {"source_dir": str(src), "search_text": "  档案  "}
+        )
         self.assertEqual(result["file_count"], 2)
         self.assertEqual(result["status"], "draft")
+        self.assertEqual(result["search_text"], "档案")
 
     def test_export_json_and_html(self) -> None:
         demo = self.server.handlers["demo.create"](self.server, {})
         tid = demo["task_id"]
         j = self.server.handlers["export.json"](self.server, {"task_id": tid})
         self.assertTrue(Path(j["path"]).exists())
+        json_payload = json.loads(Path(j["path"]).read_text(encoding="utf-8"))
+        self.assertEqual(json_payload["task"]["search_mode"], "legacy_fixed_pair")
+        self.assertEqual(json_payload["task"]["search_terms"], ["约", "約"])
+        self.assertIn("matched_text", json_payload["occurrences"][0])
         h = self.server.handlers["export.html"](self.server, {"task_id": tid})
         self.assertTrue(Path(h["path"]).exists())
         content = Path(h["path"]).read_text(encoding="utf-8")
         self.assertIn("ArchiveLens", content)
         self.assertIn("约", content)
+
+    def test_html_export_escapes_user_search_text_and_review_content(self) -> None:
+        tid = self.server.store.create_task(
+            name="<script>alert(1)</script>",
+            search_terms=["A&B"],
+            search_mode="exact_literal",
+        )
+        self.server.store.add_occurrences(
+            tid,
+            [{
+                "occurrence_id": "occ-escape",
+                "matched_text": "A&B",
+                "bbox_hash": "escape-bbox",
+                "context_full": "<img onerror=alert(1)>",
+                "file_name": "<unsafe>.pdf",
+                "page_number": 1,
+            }],
+        )
+        self.server.store.upsert_review(task_id=tid, occurrence_id="occ-escape", note="<b>note</b>")
+        result = self.server.handlers["export.html"](self.server, {"task_id": tid})
+        content = Path(result["path"]).read_text(encoding="utf-8")
+        self.assertIn("A&amp;B", content)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", content)
+        self.assertNotIn("<img onerror=alert(1)>", content)
+        self.assertIn("&lt;b&gt;note&lt;/b&gt;", content)
 
     def test_export_review_records(self) -> None:
         demo = self.server.handlers["demo.create"](self.server, {})

@@ -7,6 +7,8 @@ import {
   EventSchema,
   WireMessageSchema,
   ErrorCodeSchema,
+  TaskCreateParamsSchema,
+  normalizeSearchText,
 } from "@shared/index";
 
 const FIXTURE_DIR = path.resolve(__dirname, "../../../tests/ipc-contract/fixtures");
@@ -26,6 +28,15 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
 
   it("task-create 中文/空格/# 路径通过", () => {
     expect(RequestSchema.safeParse(load("task-create.json")).success).toBe(true);
+    const fixture = load("task-create.json") as { params: unknown };
+    expect(TaskCreateParamsSchema.safeParse(fixture.params).success).toBe(true);
+  });
+
+  it("search_text 规范化 NFC，拒绝空白、换行、控制字符与超长输入", () => {
+    expect(normalizeSearchText("  e\u0301  ")).toBe("é");
+    for (const value of ["", "   ", "档\n案", "档\u0000案", "档".repeat(33)]) {
+      expect(TaskCreateParamsSchema.safeParse({ source_dir: "E:\\OCR", search_text: value }).success).toBe(false);
+    }
   });
 
   it("review-update 合法 decision 通过", () => {
@@ -71,7 +82,7 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
 
   it("非法枚举 decision 被拒", () => {
     const bad = {
-      protocol_version: 1,
+      protocol_version: 2,
       request_id: "r",
       method: "review.updateDecision",
       params: { task_id: "t", occurrence_id: "o", decision: "bogus" },

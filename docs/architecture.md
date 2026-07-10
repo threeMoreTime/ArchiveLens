@@ -49,7 +49,7 @@ ArchiveLens 桌面端由三个进程层级 + 一个 Python Sidecar 组成：
 
 ## IPC 协议
 
-见 [ipc-protocol.md](ipc-protocol.md)。协议版本 `PROTOCOL_VERSION = 1`，TS（`packages/ipc-schema`，Zod）与 Python（`archivelens_engine.protocol`）双端一致。
+见 [ipc-protocol.md](ipc-protocol.md)。协议版本 `PROTOCOL_VERSION = 2`，TS（`packages/ipc-schema`，Zod）与 Python（`archivelens_engine.protocol`）双端一致。任务持久化检索词数组与匹配模式：新任务使用单个 `exact_literal` 检索词；旧任务保持 `legacy_fixed_pair` 的“约/約”语义。
 
 ## 用户数据目录
 

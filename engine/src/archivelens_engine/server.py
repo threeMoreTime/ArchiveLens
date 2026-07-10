@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import shutil
@@ -34,6 +35,7 @@ from .protocol import (
 )
 from .runtime.task_control import TaskControl
 from .runtime.task_state import LEGAL_TRANSITIONS, TaskStateConflict
+from .search_terms import EXACT_LITERAL_SEARCH_MODE, normalize_search_text, unicode_sequence
 
 Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
 SLOWFAKE_SOURCE_ID = "source-main"
@@ -251,6 +253,8 @@ class Server:
         payload: dict[str, Any] = {"worker_generation": generation}
         if task is not None:
             payload["source_dir"] = task["source_dir"]
+            payload["search_text"] = task["search_text"]
+            payload["search_mode"] = task["search_mode"]
         self.emit_task_event(
             entry_event,
             task_id,
@@ -325,7 +329,7 @@ class Server:
                 source_id=SLOWFAKE_SOURCE_ID,
                 page_no=page_no,
                 worker_generation=worker_generation,
-                occurrences=[self._build_slowfake_occurrence(page_no)],
+                occurrences=[self._build_slowfake_occurrence(task_id, page_no)],
             )
             processed_page_ids = outcome["processed_page_ids"]
             processed = len(processed_page_ids)
@@ -352,8 +356,11 @@ class Server:
                 worker_generation=worker_generation,
             )
 
-    def _build_slowfake_occurrence(self, page_no: int) -> dict[str, Any]:
-        matched_character = "约" if page_no % 2 == 1 else "約"
+    def _build_slowfake_occurrence(self, task_id: str, page_no: int) -> dict[str, Any]:
+        task = self.store.get_task(task_id) or {}
+        search_terms = task.get("search_terms") or ["约", "約"]
+        matched_text = str(search_terms[(page_no - 1) % len(search_terms)])
+        matched_character = matched_text if len(matched_text) == 1 else None
         return {
             "occurrence_id": f"occ-{page_no}",
             "document_id": SLOWFAKE_SOURCE_ID,
@@ -364,10 +371,14 @@ class Server:
             "page_index": page_no - 1,
             "page_occurrence_index": 1,
             "matched_character": matched_character,
-            "character_variant": "simplified" if matched_character == "约" else "traditional",
-            "bbox_hash": f"bbox-{page_no}-{matched_character}",
+            "character_variant": "simplified" if matched_character == "约" else "traditional" if matched_character == "約" else None,
+            "matched_text": matched_text,
+            "match_start": 0,
+            "match_end": len(matched_text),
+            "unicode_sequence": unicode_sequence(matched_text),
+            "bbox_hash": f"bbox-{page_no}-{matched_text}",
             "verification_status": "confirmed",
-            "context_full": f"page-{page_no}-{matched_character}",
+            "context_full": f"page-{page_no}-{matched_text}",
         }
 
     def _build_store_occurrence_rows(
@@ -490,6 +501,7 @@ class Server:
                 output_html=output_html,
                 workspace_dir=scan_workspace,
                 config=self.config,
+                search_terms=task["search_terms"],
                 task_control=tc,
                 ocr_engine=self.ocr_engine,
                 on_page_completed=lambda **kwargs: self._persist_real_page_completion(
@@ -613,6 +625,10 @@ def _h_shutdown(server: Server, params: dict) -> dict:
 
 def _h_tasks_create(server: Server, params: dict) -> dict:
     source_dir = _require(params, "source_dir", str)
+    try:
+        search_text = normalize_search_text(_require(params, "search_text", str))
+    except ValueError as exc:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
     src = Path(source_dir)
     if not src.exists() or not src.is_dir():
         raise ProtocolError(ErrorCode.PATH_NOT_FOUND, f"来源目录不存在：{source_dir}")
@@ -642,9 +658,18 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         name=params.get("name") or src.name,
         file_count=file_count,
         status="draft",
+        search_terms=[search_text],
+        search_mode=EXACT_LITERAL_SEARCH_MODE,
     )
-    server.emit_task_event("task.created", task_id, {"source_dir": str(src), "file_count": file_count, "counts": counts})
-    return {"task_id": task_id, "status": "draft", "file_count": file_count, "counts": counts}
+    payload = {
+        "source_dir": str(src),
+        "file_count": file_count,
+        "counts": counts,
+        "search_text": search_text,
+        "search_mode": EXACT_LITERAL_SEARCH_MODE,
+    }
+    server.emit_task_event("task.created", task_id, payload)
+    return {"task_id": task_id, "status": "draft", **payload}
 
 
 def _h_tasks_start(server: Server, params: dict) -> dict:
@@ -859,26 +884,31 @@ def _h_export_html(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     task = server.store.get_task(task_id)
     total, items = server.store.query_occurrences(task_id=task_id, limit=10**9, offset=0)
+    def escaped(value: Any) -> str:
+        return html.escape(str(value or ""), quote=True)
+
     rows = "".join(
-        f"<tr><td>{i + 1}</td><td>{r.get('file_name', '')}</td><td>{r.get('page_number', '')}</td>"
-        f"<td>{r.get('matched_character', '')}</td><td>{r.get('context_full', '')}</td>"
-        f"<td>{r.get('review_decision') or r.get('verification_status', '')}</td>"
-        f"<td>{r.get('review_note') or ''}</td></tr>"
+        f"<tr><td>{i + 1}</td><td>{escaped(r.get('file_name'))}</td><td>{escaped(r.get('page_number'))}</td>"
+        f"<td>{escaped(r.get('matched_text') or r.get('matched_character'))}</td><td>{escaped(r.get('context_full'))}</td>"
+        f"<td>{escaped(r.get('review_decision') or r.get('verification_status'))}</td>"
+        f"<td>{escaped(r.get('review_note'))}</td></tr>"
         for i, r in enumerate(items)
     )
-    html = (
+    search_text = escaped(task.get("search_text"))
+    html_document = (
         "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
-        f"<title>ArchiveLens 报告 — {task_id}</title>"
+        f"<title>ArchiveLens 报告 — {search_text}</title>"
         "<style>body{font-family:'Microsoft YaHei',sans-serif;padding:24px}"
         "table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px 8px;font-size:13px}</style>"
         "</head><body>"
         f"<h1>ArchiveLens 检索报告</h1>"
-        f"<p>任务：{task.get('name', '')} · 命中：{total}</p>"
-        f"<table><thead><tr><th>#</th><th>文件</th><th>页</th><th>字</th><th>上下文</th><th>校对</th><th>备注</th></tr></thead>"
+        f"<p>检索词：{search_text}</p>"
+        f"<p>任务：{escaped(task.get('name'))} · 命中：{total}</p>"
+        f"<table><thead><tr><th>#</th><th>文件</th><th>页</th><th>匹配词</th><th>上下文</th><th>校对</th><th>备注</th></tr></thead>"
         f"<tbody>{rows}</tbody></table></body></html>"
     )
     out = _export_dir(server, task_id) / f"{task_id}-report.html"
-    out.write_text(html, encoding="utf-8")
+    out.write_text(html_document, encoding="utf-8")
     server.store.add_export(task_id=task_id, kind="html", path=str(out))
     return {"path": str(out), "occurrence_count": total}
 

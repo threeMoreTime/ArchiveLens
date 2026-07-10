@@ -32,7 +32,7 @@ export default function Welcome() {
     <div className="al-welcome">
       <h1>欢迎使用 ArchiveLens</h1>
       <Text className="al-subtitle">
-        在本机扫描 PDF、DJVU、DJV 文件，定位简体“约”与繁体“約”。文档内容不会上传到网络。
+        在本机扫描 PDF、DJVU、DJV 文件，定位你指定的文字或词语。文档内容不会上传到网络。
       </Text>
 
       <div className="al-welcome-actions">

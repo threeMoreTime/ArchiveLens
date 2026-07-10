@@ -47,7 +47,7 @@ def send(method: str, params: dict | None = None) -> str:
     rid = f"{method}-{_counter[0]}"
     assert proc.stdin is not None
     proc.stdin.write(json.dumps(
-        {"protocol_version": 1, "request_id": rid, "method": method, "params": params or {}},
+        {"protocol_version": 2, "request_id": rid, "method": method, "params": params or {}},
         ensure_ascii=False) + "\n")
     proc.stdin.flush()
     return rid
@@ -99,7 +99,7 @@ def main() -> int:
             return 1
         log_status("INFO", "engine.ready")
 
-        rid = send("tasks.create", {"source_dir": str(FX)})
+        rid = send("tasks.create", {"source_dir": str(FX), "search_text": "约"})
         resp = take_response(rid, 30)
         if not resp or not resp.get("ok"):
             log_status("FAIL", f"tasks.create {resp}")

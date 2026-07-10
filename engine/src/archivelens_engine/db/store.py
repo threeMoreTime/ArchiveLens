@@ -26,7 +26,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 2
+from ..search_terms import (
+    EXACT_LITERAL_SEARCH_MODE,
+    LEGACY_SEARCH_MODE,
+    LEGACY_SEARCH_TERMS,
+    unicode_sequence,
+)
+
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -49,7 +56,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     last_event_sequence INTEGER NOT NULL DEFAULT 0,
     worker_generation INTEGER NOT NULL DEFAULT 0,
     error_code TEXT,
-    error_message TEXT
+    error_message TEXT,
+    search_terms_json TEXT NOT NULL DEFAULT '["约","約"]',
+    search_mode TEXT NOT NULL DEFAULT 'legacy_fixed_pair'
 );
 CREATE TABLE IF NOT EXISTS occurrences (
     occurrence_id TEXT PRIMARY KEY,
@@ -64,6 +73,10 @@ CREATE TABLE IF NOT EXISTS occurrences (
     source_id TEXT NOT NULL DEFAULT '',
     matched_character TEXT,
     character_variant TEXT,
+    matched_text TEXT,
+    match_start INTEGER,
+    match_end INTEGER,
+    unicode_sequence TEXT,
     bbox_hash TEXT NOT NULL DEFAULT '',
     unicode_codepoint TEXT,
     context_before TEXT,
@@ -131,7 +144,6 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-PRAGMA user_version = 2;
 """
 
 
@@ -162,8 +174,9 @@ class TaskStore:
     def _init_schema(self) -> None:
         try:
             self.conn.execute("BEGIN IMMEDIATE")
+            current = int(self.conn.execute("PRAGMA user_version").fetchone()[0] or 0)
             self._execute_schema_sql(SCHEMA_SQL)
-            self._migrate_schema()
+            self._migrate_schema(current)
             self.conn.execute(
                 "INSERT INTO schema_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 ("schema_version", str(SCHEMA_VERSION)),
@@ -189,18 +202,59 @@ class TaskStore:
             if candidate:
                 self.conn.execute(candidate)
 
-    def _migrate_schema(self) -> None:
-        current = int(
-            self.conn.execute("PRAGMA user_version").fetchone()[0] or 0
-        )
+    def _migrate_schema(self, current: int) -> None:
         self._ensure_column("tasks", "last_event_sequence", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("tasks", "worker_generation", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("tasks", "search_terms_json", "TEXT NOT NULL DEFAULT '[\"约\",\"約\"]'")
+        self._ensure_column("tasks", "search_mode", "TEXT NOT NULL DEFAULT 'legacy_fixed_pair'")
         self._ensure_column("occurrences", "source_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("occurrences", "bbox_hash", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("occurrences", "matched_text", "TEXT")
+        self._ensure_column("occurrences", "match_start", "INTEGER")
+        self._ensure_column("occurrences", "match_end", "INTEGER")
+        self._ensure_column("occurrences", "unicode_sequence", "TEXT")
+        legacy_terms_json = json.dumps(list(LEGACY_SEARCH_TERMS), ensure_ascii=False, separators=(",", ":"))
+        self.conn.execute(
+            "UPDATE tasks SET search_terms_json=? WHERE search_terms_json IS NULL OR TRIM(search_terms_json)=''",
+            (legacy_terms_json,),
+        )
+        self.conn.execute(
+            "UPDATE tasks SET search_mode=? WHERE search_mode IS NULL OR TRIM(search_mode)=''",
+            (LEGACY_SEARCH_MODE,),
+        )
+        self.conn.execute(
+            "UPDATE occurrences SET matched_text=matched_character "
+            "WHERE (matched_text IS NULL OR matched_text='') AND matched_character IS NOT NULL"
+        )
+        missing_sequences = self.conn.execute(
+            "SELECT occurrence_id, matched_text FROM occurrences "
+            "WHERE (unicode_sequence IS NULL OR unicode_sequence='') AND matched_text IS NOT NULL AND matched_text<>''"
+        ).fetchall()
+        for row in missing_sequences:
+            self.conn.execute(
+                "UPDATE occurrences SET unicode_sequence=? WHERE occurrence_id=?",
+                (unicode_sequence(str(row["matched_text"])), row["occurrence_id"]),
+            )
         self.conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_business_key "
             "ON occurrences(task_id, source_id, page_number, matched_character, bbox_hash) "
             "WHERE source_id <> '' AND bbox_hash <> ''"
+        )
+        duplicates = self.conn.execute(
+            """
+            SELECT task_id, source_id, page_number, matched_text, bbox_hash, COUNT(*) AS count
+            FROM occurrences
+            WHERE source_id <> '' AND bbox_hash <> '' AND matched_text IS NOT NULL AND matched_text <> ''
+            GROUP BY task_id, source_id, page_number, matched_text, bbox_hash
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        if duplicates:
+            raise RuntimeError("migration found duplicate occurrence business keys; refusing to discard evidence")
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_business_key_matched_text "
+            "ON occurrences(task_id, source_id, page_number, matched_text, bbox_hash) "
+            "WHERE source_id <> '' AND bbox_hash <> '' AND matched_text IS NOT NULL AND matched_text <> ''"
         )
         self.conn.execute(
             """
@@ -265,18 +319,26 @@ class TaskStore:
         file_count: int = 0,
         total_pages: int = 0,
         status: str = "draft",
+        search_terms: Iterable[str] | None = None,
+        search_mode: str = LEGACY_SEARCH_MODE,
     ) -> str:
         task_id = new_id("task_")
         created = now_iso()
+        normalized_terms = list(search_terms) if search_terms is not None else list(LEGACY_SEARCH_TERMS)
+        if not normalized_terms or any(not isinstance(term, str) or not term for term in normalized_terms):
+            raise ValueError("search_terms must contain at least one non-empty term")
+        if search_mode == EXACT_LITERAL_SEARCH_MODE and len(normalized_terms) != 1:
+            raise ValueError("exact_literal tasks require one search term")
         with self._lock:
             self.conn.execute(
                 """INSERT INTO tasks
                    (task_id, name, source_dir, output_dir, workspace_dir, status,
-                    is_demo, file_count, total_pages, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    is_demo, file_count, total_pages, created_at, updated_at, search_terms_json, search_mode)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     task_id, name, source_dir, output_dir, workspace_dir, status,
                     1 if is_demo else 0, file_count, total_pages, created, created,
+                    json.dumps(normalized_terms, ensure_ascii=False, separators=(",", ":")), search_mode,
                 ),
             )
             self.conn.commit()
@@ -285,7 +347,7 @@ class TaskStore:
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self.conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
-        return dict(row) if row else None
+        return self._task_for_api(dict(row)) if row else None
 
     def list_tasks(
         self, *, limit: int = 50, offset: int = 0, status: str | None = None
@@ -301,11 +363,26 @@ class TaskStore:
                     "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
                     (limit, offset),
                 )
-            return [dict(r) for r in cur.fetchall()]
+            return [self._task_for_api(dict(row)) for row in cur.fetchall()]
+
+    def _task_for_api(self, task: dict[str, Any]) -> dict[str, Any]:
+        raw_terms = task.get("search_terms_json")
+        try:
+            search_terms = json.loads(raw_terms) if isinstance(raw_terms, str) else list(LEGACY_SEARCH_TERMS)
+        except json.JSONDecodeError:
+            search_terms = list(LEGACY_SEARCH_TERMS)
+        if not isinstance(search_terms, list) or not all(isinstance(term, str) and term for term in search_terms):
+            search_terms = list(LEGACY_SEARCH_TERMS)
+        task["search_terms"] = search_terms
+        task["search_mode"] = task.get("search_mode") or LEGACY_SEARCH_MODE
+        task["search_text"] = search_terms[0] if len(search_terms) == 1 else " / ".join(search_terms)
+        return task
 
     def update_task(self, task_id: str, **fields: Any) -> None:
         if not fields:
             return
+        if {"search_terms_json", "search_mode", "search_terms", "search_text"} & set(fields):
+            raise ValueError("task search terms are immutable")
         fields.setdefault("updated_at", now_iso())
         cols = ", ".join(f"{k}=?" for k in fields)
         vals = list(fields.values()) + [task_id]
@@ -335,7 +412,8 @@ class TaskStore:
             "occurrence_id", "task_id", "document_id", "file_path", "relative_path",
             "file_name", "page_number", "page_index", "page_occurrence_index",
             "source_id",
-            "matched_character", "character_variant", "unicode_codepoint",
+            "matched_character", "character_variant", "matched_text", "match_start", "match_end",
+            "unicode_sequence", "unicode_codepoint",
             "bbox_hash",
             "context_before", "context_after", "context_full", "ocr_confidence",
             "secondary_ocr_result", "verification_status", "location_method",
@@ -345,15 +423,25 @@ class TaskStore:
             "page_image_relpath", "crop_image_relpath",
             "page_image_width", "page_image_height",
         ]
-        record = {"occurrence_id": new_id("occ_"), "task_id": task_id}
+        record = {
+            "occurrence_id": occ.get("occurrence_id") or new_id("occ_"),
+            "task_id": task_id,
+            "source_id": "",
+            "bbox_hash": "",
+        }
         record.update(
             {k: v for k, v in occ.items() if k in cols and k not in ("occurrence_id", "task_id")}
         )
+        record["matched_text"] = record.get("matched_text") or record.get("matched_character")
+        if record.get("matched_text") and not record.get("unicode_sequence"):
+            record["unicode_sequence"] = unicode_sequence(str(record["matched_text"]))
+        if record.get("matched_text") and len(str(record["matched_text"])) == 1 and not record.get("matched_character"):
+            record["matched_character"] = record["matched_text"]
         placeholders = ", ".join("?" for _ in cols)
         # RLock 可重入：add_occurrences 持锁时本方法同线程可再进入
         with self._lock:
             self.conn.execute(
-                f"INSERT OR REPLACE INTO occurrences ({', '.join(cols)}) VALUES ({placeholders})",
+                f"INSERT OR IGNORE INTO occurrences ({', '.join(cols)}) VALUES ({placeholders})",
                 [record.get(c) for c in cols],
             )
 
@@ -634,9 +722,13 @@ class TaskStore:
                 raise
 
     def _validate_recovery_occurrence(self, occurrence: dict[str, Any], *, source_id: str, page_no: int) -> None:
-        matched = occurrence.get("matched_character")
+        matched = occurrence.get("matched_text") or occurrence.get("matched_character")
         if not isinstance(matched, str) or not matched:
-            raise ValueError("matched_character is required")
+            raise ValueError("matched_text is required")
+        occurrence.setdefault("matched_text", matched)
+        if len(matched) == 1:
+            occurrence.setdefault("matched_character", matched)
+        occurrence.setdefault("unicode_sequence", unicode_sequence(matched))
         bbox_hash = occurrence.get("bbox_hash")
         if not isinstance(bbox_hash, str) or not bbox_hash:
             raise ValueError("bbox_hash is required")

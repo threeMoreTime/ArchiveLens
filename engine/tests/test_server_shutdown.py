@@ -49,7 +49,7 @@ class ShutdownTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _req(self, method: str, rid: str = "r1") -> str:
-        return json.dumps({"protocol_version": 1, "request_id": rid, "method": method, "params": {}})
+        return json.dumps({"protocol_version": 2, "request_id": rid, "method": method, "params": {}})
 
     def test_shutdown_rejects_new_requests(self) -> None:
         # shutdown

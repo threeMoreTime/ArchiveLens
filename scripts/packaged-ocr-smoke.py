@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import queue
@@ -25,15 +26,18 @@ ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
 FIXTURES = ROOT / "tests" / "fixtures" / "ocr"
 WS = ROOT / "dist" / "_ocr_ws"
-EXPECTED = json.loads((FIXTURES / "expected.json").read_text(encoding="utf-8"))
-EXPECTED_TOTAL = 14
-EXPECTED_COUNTS = {"约": 7, "約": 7}
 EXPECTED_FAILURE_COUNT = 0
 TASK_COMPLETION_TIMEOUT = int(os.environ.get("ARCHIVELENS_PACKAGED_OCR_TIMEOUT_SEC", "420"))
 PROGRESS_LOG_INTERVAL_SEC = 30.0
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--search-text", default="约")
+    parser.add_argument("--expected-count", type=int, default=7)
+    args = parser.parse_args()
+    search_text = args.search_text
+    expected_count = args.expected_count
     configure_console()
 
     if not EXE.exists():
@@ -77,7 +81,7 @@ def main() -> int:
         counter[0] += 1
         rid = f"r{counter[0]}"
         line = json.dumps(
-            {"protocol_version": 1, "request_id": rid, "method": method, "params": params or {}},
+            {"protocol_version": 2, "request_id": rid, "method": method, "params": params or {}},
             ensure_ascii=False,
         )
         assert proc.stdin is not None
@@ -138,7 +142,7 @@ def main() -> int:
             return 1
         log_status("INFO", "engine.ready")
 
-        rid = send("tasks.create", {"source_dir": str(FIXTURES)})
+        rid = send("tasks.create", {"source_dir": str(FIXTURES), "search_text": search_text})
         resp = read_until(rid=rid, timeout=30)
         if not resp or not resp.get("ok"):
             log_status("FAIL", f"tasks.create {resp}")
@@ -182,10 +186,11 @@ def main() -> int:
         resp = read_until(rid=rid, timeout=30)
         items = resp["result"]["items"]
         total = resp["result"]["total"]
-        chars: dict[str, int] = {}
+        matched_texts: dict[str, int] = {}
         for it in items:
-            chars[it["matched_character"]] = chars.get(it["matched_character"], 0) + 1
-        log_status("INFO", f"results total={total} chars={json.dumps(chars, ensure_ascii=True, sort_keys=True)}")
+            matched = str(it.get("matched_text") or it.get("matched_character") or "")
+            matched_texts[matched] = matched_texts.get(matched, 0) + 1
+        log_status("INFO", f"results total={total} matches={json.dumps(matched_texts, ensure_ascii=True, sort_keys=True)}")
 
         rid = send("export.json", {"task_id": task_id})
         exp = read_until(rid=rid, timeout=30)
@@ -198,17 +203,14 @@ def main() -> int:
         if total == 0:
             log_status("FAIL", "no occurrences found")
             return 1
-        if "约" not in chars and "約" not in chars:
-            log_status("FAIL", "neither simplified nor traditional target characters were found")
+        if total != expected_count:
+            log_status("FAIL", f"total={total} expected={expected_count}")
             return 1
-        if total != EXPECTED_TOTAL:
-            log_status("FAIL", f"total={total} expected={EXPECTED_TOTAL}")
-            return 1
-        if chars != EXPECTED_COUNTS:
+        if matched_texts != {search_text: expected_count}:
             log_status(
                 "FAIL",
-                f"chars={json.dumps(chars, ensure_ascii=True, sort_keys=True)} "
-                f"expected={json.dumps(EXPECTED_COUNTS, ensure_ascii=True, sort_keys=True)}",
+                f"matches={json.dumps(matched_texts, ensure_ascii=True, sort_keys=True)} "
+                f"expected={json.dumps({search_text: expected_count}, ensure_ascii=True, sort_keys=True)}",
             )
             return 1
         if failure_count != EXPECTED_FAILURE_COUNT:
@@ -218,7 +220,7 @@ def main() -> int:
         log_status(
             "PASS",
             "packaged PDF OCR "
-            f"total={total} chars={json.dumps(chars, ensure_ascii=True, sort_keys=True)} "
+            f"search_text={search_text!r} total={total} matches={json.dumps(matched_texts, ensure_ascii=True, sort_keys=True)} "
             f"failure_count={failure_count}"
         )
         return 0
