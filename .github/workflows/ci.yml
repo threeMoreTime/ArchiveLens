@@ -14,6 +14,7 @@ permissions:
 env:
   PYTHONUTF8: "1"
   PYTHONIOENCODING: "utf-8"
+  ARCHIVELENS_TEST_RUN_ID: "a11-ci-${{ github.run_id }}"
 
 jobs:
   engine-tests:
@@ -157,10 +158,10 @@ jobs:
       - name: Build desktop app
         run: pnpm --filter @archivelens/desktop build
 
-      - name: Run lifecycle Playwright suite
+      - name: Run lifecycle and custom-search Playwright suites
         run: |
           $env:ARCHIVELENS_E2E_PYTHON = Join-Path $env:pythonLocation "python.exe"
-          pnpm --filter @archivelens/desktop exec playwright test e2e/lifecycle.spec.ts
+          pnpm --filter @archivelens/desktop exec playwright test e2e/lifecycle.spec.ts e2e/custom-search.spec.ts
 
       - name: Upload lifecycle artifacts
         if: failure()
@@ -279,8 +280,24 @@ jobs:
       - name: Build win-unpacked
         run: pnpm --filter @archivelens/desktop exec electron-builder --dir
 
-      - name: Run packaged OCR smoke
-        run: python scripts/packaged-ocr-smoke.py
+      - name: Run packaged OCR smoke matrix
+        run: |
+          $cases = @(
+            'custom-single',
+            'custom-double',
+            'custom-multi',
+            'custom-english',
+            'custom-special',
+            'custom-no-hit',
+            'legacy-pair-simplified',
+            'legacy-pair-traditional'
+          )
+          New-Item -ItemType Directory -Force apps/desktop/release | Out-Null
+          foreach ($case in $cases) {
+            python scripts/packaged-ocr-smoke.py --case-id $case 2>&1 |
+              Tee-Object -FilePath apps/desktop/release/packaged-ocr.log -Append
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Run shutdown inference smoke
         run: python scripts/shutdown-inference-smoke.py
@@ -319,6 +336,7 @@ jobs:
             apps/desktop/release/release-manifest.json
             apps/desktop/release/SHA256SUMS.txt
             apps/desktop/release/verify-release-chain.json
+            apps/desktop/release/packaged-ocr.log
             apps/desktop/release/win-unpacked/resources/app.info.json
           if-no-files-found: ignore
           retention-days: 14

@@ -4,14 +4,19 @@ A6 仅验证控制平面（状态机 + 拒绝 + 幂等）。本轮证明：
 真实 RapidOCR/ONNX inference 进行中 → app.shutdown → ENGINE_SHUTTING_DOWN
 → 进程退出 → 无残留线程/进程。
 
-使用 dist/engine/win-x64/archivelens-engine.exe（packaged，非源码）+ 5 PDF fixtures（真实 OCR）。
+使用 dist/engine/win-x64/archivelens-engine.exe（packaged，非源码）和确定性
+custom-multi.pdf fixture（真实 OCR）。
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -21,11 +26,19 @@ from smoke_output import log_status, configure_console
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
 FX = ROOT / "tests" / "fixtures" / "ocr"
+RUN_ID = re.sub(r"[^A-Za-z0-9._-]", "-", os.environ.get("ARCHIVELENS_TEST_RUN_ID", "a11-local"))
+SOURCE_CONTEXT = tempfile.TemporaryDirectory(prefix=f"archivelens-ocr-temp-{RUN_ID}-shutdown-")
+SOURCE_ROOT = Path(SOURCE_CONTEXT.name)
+SOURCE_DIR = SOURCE_ROOT / "source"
+SOURCE_DIR.mkdir(parents=True)
+(SOURCE_ROOT / ".archivelens-test-owned").write_text("shutdown-inference-smoke", encoding="utf-8")
+shutil.copy2(FX / "custom-multi.pdf", SOURCE_DIR / "custom-multi.pdf")
 
 proc = subprocess.Popen(
     [str(EXE), "serve"],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     text=True, encoding="utf-8",
+    env={**os.environ, "AL_WORKSPACE_ROOT": str(SOURCE_ROOT / "workspace")},
 )
 messages: list[str] = []
 lock = threading.Lock()
@@ -99,7 +112,7 @@ def main() -> int:
             return 1
         log_status("INFO", "engine.ready")
 
-        rid = send("tasks.create", {"source_dir": str(FX), "search_text": "约"})
+        rid = send("tasks.create", {"source_dir": str(SOURCE_DIR), "search_text": "档案管理"})
         resp = take_response(rid, 30)
         if not resp or not resp.get("ok"):
             log_status("FAIL", f"tasks.create {resp}")
@@ -155,4 +168,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    finally:
+        SOURCE_CONTEXT.cleanup()

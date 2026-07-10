@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, readdir } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +11,20 @@ const SEARCH_TEXT = "档案";
 const SOURCE_ID = "source-main";
 const APP_DIR = path.resolve(__dirname, "..");
 const ENGINE_SRC = path.resolve(APP_DIR, "..", "..", "engine", "src");
+const RUN_ID = (process.env["ARCHIVELENS_TEST_RUN_ID"] ?? "a11-local").replace(/[^A-Za-z0-9._-]/g, "-");
+
+async function makeOwnedTempDir(kind: "source" | "userData", label = "run"): Promise<string> {
+  const family = kind === "source" ? "archivelens-ocr-temp" : "archivelens-e2e-userdata";
+  const dir = await mkdtemp(path.join(os.tmpdir(), `${family}-${RUN_ID}-${label}-`));
+  await writeFile(path.join(dir, ".archivelens-test-owned"), `${RUN_ID}\n`, "utf8");
+  return dir;
+}
+
+test.beforeAll(async () => {
+  const resultRoot = path.join(APP_DIR, "test-results");
+  await mkdir(resultRoot, { recursive: true });
+  await writeFile(path.join(resultRoot, ".archivelens-runid"), `${RUN_ID}\n`, "utf8");
+});
 
 interface TaskState {
   task_id: string;
@@ -413,8 +427,8 @@ async function restartAndResumeTask(userDataDir: string, taskId: string, previou
 }
 
 async function runPauseResumeScenario(pausePage: number, attempt = 1): Promise<PersistedTaskSnapshot> {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), `archivelens-e2e-src-pause-${pausePage}-`));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), `archivelens-e2e-userdata-pause-${pausePage}-`));
+  const sourceDir = await makeOwnedTempDir("source", `pause-${pausePage}`);
+  const userDataDir = await makeOwnedTempDir("userData", `pause-${pausePage}`);
   await mkdir(sourceDir, { recursive: true });
 
   const firstApp = await launchDesktop({
@@ -491,8 +505,8 @@ async function closeAppForceQuit(app: ElectronApplication, win: Page): Promise<v
 }
 
 test("Lifecycle: tray minimize keeps task running and tray restore returns the window", async () => {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-src-"));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-"));
+  const sourceDir = await makeOwnedTempDir("source");
+  const userDataDir = await makeOwnedTempDir("userData");
   await mkdir(sourceDir, { recursive: true });
 
   let app: ElectronApplication | undefined;
@@ -532,8 +546,8 @@ test("Lifecycle: tray minimize keeps task running and tray restore returns the w
 });
 
 test("Lifecycle: cancel close keeps the window open and allows a second close request", async () => {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-src-"));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-"));
+  const sourceDir = await makeOwnedTempDir("source");
+  const userDataDir = await makeOwnedTempDir("userData");
   await mkdir(sourceDir, { recursive: true });
 
   let app: ElectronApplication | undefined;
@@ -567,8 +581,8 @@ test("Lifecycle: cancel close keeps the window open and allows a second close re
 });
 
 test("Lifecycle: pause and exit persists checkpoint and leaves no residual process", async () => {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-src-"));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-"));
+  const sourceDir = await makeOwnedTempDir("source");
+  const userDataDir = await makeOwnedTempDir("userData");
   await mkdir(sourceDir, { recursive: true });
 
   const app = await launchDesktop({ userDataDir });
@@ -606,8 +620,8 @@ test("Lifecycle: pause and exit persists checkpoint and leaves no residual proce
 });
 
 test("Lifecycle: restart recover resumes from checkpoint without duplicates or missing pages", async () => {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-src-"));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-"));
+  const sourceDir = await makeOwnedTempDir("source");
+  const userDataDir = await makeOwnedTempDir("userData");
   await mkdir(sourceDir, { recursive: true });
 
   const firstApp = await launchDesktop({ userDataDir });
@@ -672,8 +686,8 @@ test("Lifecycle: restart recover resumes from checkpoint without duplicates or m
 });
 
 test("Lifecycle: stop and exit keeps cancelled history and does not auto-recover", async () => {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-src-"));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-"));
+  const sourceDir = await makeOwnedTempDir("source");
+  const userDataDir = await makeOwnedTempDir("userData");
   await mkdir(sourceDir, { recursive: true });
 
   const firstApp = await launchDesktop({ userDataDir });
@@ -712,8 +726,8 @@ test("Lifecycle: stop and exit keeps cancelled history and does not auto-recover
 });
 
 test("Lifecycle: sidecar crash is recoverable after relaunch and resume preserves integrity", async () => {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-src-"));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-"));
+  const sourceDir = await makeOwnedTempDir("source");
+  const userDataDir = await makeOwnedTempDir("userData");
   await mkdir(sourceDir, { recursive: true });
 
   const firstApp = await launchDesktop({ userDataDir });
@@ -779,8 +793,8 @@ for (const pausePage of [1, 3, 10, 19]) {
 }
 
 test("Lifecycle: continue waiting completes pause-and-quit without duplicate pause requests", async () => {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-src-timeout-wait-"));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-timeout-wait-"));
+  const sourceDir = await makeOwnedTempDir("source", "timeout-wait");
+  const userDataDir = await makeOwnedTempDir("userData", "timeout-wait");
   await mkdir(sourceDir, { recursive: true });
 
   const app = await launchDesktop({
@@ -809,8 +823,8 @@ test("Lifecycle: continue waiting completes pause-and-quit without duplicate pau
 });
 
 test("Lifecycle: cancel timeout clears shutdown flow and task keeps running", async () => {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-src-timeout-cancel-"));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-timeout-cancel-"));
+  const sourceDir = await makeOwnedTempDir("source", "timeout-cancel");
+  const userDataDir = await makeOwnedTempDir("userData", "timeout-cancel");
   await mkdir(sourceDir, { recursive: true });
 
   const app = await launchDesktop({
@@ -847,8 +861,8 @@ test("Lifecycle: cancel timeout clears shutdown flow and task keeps running", as
 });
 
 test("Lifecycle: force quit after timeout yields recoverable resume on next launch", async () => {
-  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-src-timeout-force-"));
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-timeout-force-"));
+  const sourceDir = await makeOwnedTempDir("source", "timeout-force");
+  const userDataDir = await makeOwnedTempDir("userData", "timeout-force");
   await mkdir(sourceDir, { recursive: true });
 
   const firstApp = await launchDesktop({
@@ -874,7 +888,7 @@ test("Lifecycle: force quit after timeout yields recoverable resume on next laun
 });
 
 test("Lifecycle: production mode does not expose the E2E bridge", async () => {
-  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-e2e-userdata-prod-"));
+  const userDataDir = await makeOwnedTempDir("userData", "production");
   const pythonExe = await resolvePythonExecutable();
   const app = await electron.launch({
     args: [APP_DIR],

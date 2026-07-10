@@ -1,34 +1,261 @@
 {
-  "documents": [
+  "schema_version": 2,
+  "generator": {
+    "script": "scripts/generate-ocr-fixtures.py",
+    "python_version": "3.11.9",
+    "pillow_version": "12.1.1",
+    "font": {
+      "name": "SimHei",
+      "version": "5.05",
+      "file_name": "simhei.ttf",
+      "sha256": "9b1959db3b3abeb7efdaec26edf7dfe871a6039de8d614af7248575207be629e",
+      "license_note": "Windows system font; the font program is not redistributed. Fixtures contain rasterized glyph images only.",
+      "redistributed": false
+    },
+    "page_size": [
+      1200,
+      1600
+    ],
+    "page_dpi": 144.0,
+    "font_size": 96,
+    "text_origin": [
+      120,
+      180
+    ],
+    "line_spacing": 150,
+    "pdf_date": "D:20260710000000Z"
+  },
+  "legacy_documents": [
     {
       "file": "simplified-horizontal.pdf",
-      "expected_min_hits": 2,
-      "expected_characters": [
-        "约"
-      ]
+      "sha256": "a5cdda1580c653c1ef3873749131c18733066e354df0acac06538331a0f43488"
     },
     {
       "file": "traditional-horizontal.pdf",
-      "expected_min_hits": 2,
-      "expected_characters": [
-        "約"
-      ]
+      "sha256": "53927e22db9ee5b014ed8c63f5ccd7da217e797e283bd31635218c85d2df86c1"
     },
     {
       "file": "mixed-multipage.pdf",
-      "expected_min_hits": 2,
-      "expected_characters": [
-        "约",
-        "約"
-      ]
+      "sha256": "1e341f91675937bc403766b8dd2dd69aa9339de95beb29a02a20782ab0db046d"
+    },
+    {
+      "file": "rotated-page.pdf",
+      "sha256": "a3e5f6dd32f521a17c78b6a5a084c38d28450e642383bdf6a542ed17c779a705"
     },
     {
       "file": "中文 空格 # %.pdf",
-      "expected_min_hits": 1,
-      "expected_characters": [
-        "约",
-        "約"
-      ]
+      "sha256": "7d86431f0432cfba5b5b211c5575f2eb0528ba5e609ebd72f0887e3ac70ccaad"
+    }
+  ],
+  "cases": [
+    {
+      "id": "custom-single",
+      "file": "custom-single.pdf",
+      "search_text": "档",
+      "expected_count": 1,
+      "expected_matches": [
+        {
+          "matched_text": "档",
+          "page_number": 1,
+          "match_start": 0,
+          "match_end": 1
+        }
+      ],
+      "source_lines": [
+        [
+          "档"
+        ]
+      ],
+      "sha256": "dc37c918605e7d481302d6653ae8f9c05a8d16d48d311e343bd06f9f1515fbff"
+    },
+    {
+      "id": "custom-double",
+      "file": "custom-double.pdf",
+      "search_text": "档案",
+      "expected_count": 1,
+      "expected_matches": [
+        {
+          "matched_text": "档案",
+          "page_number": 1,
+          "match_start": 0,
+          "match_end": 2
+        }
+      ],
+      "source_lines": [
+        [
+          "档案"
+        ]
+      ],
+      "sha256": "a2961d685ec17ba22f82f621a70d2f0c35b76b850a2e38ebc9b9a3fa5be683cb"
+    },
+    {
+      "id": "custom-multi",
+      "file": "custom-multi.pdf",
+      "search_text": "档案管理",
+      "expected_count": 1,
+      "expected_matches": [
+        {
+          "matched_text": "档案管理",
+          "page_number": 1,
+          "match_start": 0,
+          "match_end": 4
+        }
+      ],
+      "source_lines": [
+        [
+          "档案管理"
+        ]
+      ],
+      "sha256": "2428d732d4851edb394d0399cd1f323e63651800ba289403637f18e1db084908"
+    },
+    {
+      "id": "custom-repeat",
+      "file": "custom-repeat.pdf",
+      "search_text": "档案",
+      "expected_count": 2,
+      "expected_matches": [
+        {
+          "matched_text": "档案",
+          "page_number": 1,
+          "match_start": 0,
+          "match_end": 2
+        },
+        {
+          "matched_text": "档案",
+          "page_number": 1,
+          "match_start": 2,
+          "match_end": 4
+        }
+      ],
+      "source_lines": [
+        [
+          "档案档案"
+        ]
+      ],
+      "sha256": "fa5c3b04781459e42c799b12d735eee0e606072a75634c44413e9a447d216489"
+    },
+    {
+      "id": "custom-english",
+      "file": "custom-english.pdf",
+      "search_text": "ArchiveLens",
+      "expected_count": 1,
+      "expected_matches": [
+        {
+          "matched_text": "ArchiveLens",
+          "page_number": 1,
+          "match_start": 0,
+          "match_end": 11
+        }
+      ],
+      "source_lines": [
+        [
+          "ArchiveLens"
+        ]
+      ],
+      "sha256": "692f46ec8a2cda6fd7920b0cb7cbfafc461708a6a0d2368a4656ba32815f1eba"
+    },
+    {
+      "id": "custom-special",
+      "file": "custom-special.pdf",
+      "search_text": "A&B",
+      "expected_count": 1,
+      "expected_matches": [
+        {
+          "matched_text": "A&B",
+          "page_number": 1,
+          "match_start": 0,
+          "match_end": 3
+        }
+      ],
+      "source_lines": [
+        [
+          "A&B"
+        ]
+      ],
+      "sha256": "0b7e234155e7b9f82cfa2d7bac396360b9125b1956a9d18954c5ffe6f0312589"
+    },
+    {
+      "id": "custom-english-case-sensitive",
+      "file": "custom-english.pdf",
+      "search_text": "archivelens",
+      "expected_count": 0,
+      "expected_matches": [],
+      "source_lines": [
+        [
+          "ArchiveLens"
+        ]
+      ],
+      "sha256": "692f46ec8a2cda6fd7920b0cb7cbfafc461708a6a0d2368a4656ba32815f1eba"
+    },
+    {
+      "id": "custom-no-hit",
+      "file": "custom-no-hit.pdf",
+      "search_text": "不存在",
+      "expected_count": 0,
+      "expected_matches": [],
+      "source_lines": [
+        [
+          "档案管理"
+        ]
+      ],
+      "sha256": "1265c1c5dc2694c8c39a8d4160b1c9f12653fa0c355f6b5ed54ad26f31152141"
+    },
+    {
+      "id": "custom-cross-line",
+      "file": "custom-cross-line.pdf",
+      "search_text": "档案",
+      "expected_count": 0,
+      "expected_matches": [],
+      "source_lines": [
+        [
+          "档",
+          "",
+          "",
+          "",
+          "案"
+        ]
+      ],
+      "sha256": "b4fc8391c8329baa990357040a698d273eaea22ec8f6526de4f80468b7798c1f"
+    },
+    {
+      "id": "legacy-pair-simplified",
+      "file": "legacy-pair.pdf",
+      "search_text": "约",
+      "expected_count": 1,
+      "expected_matches": [
+        {
+          "matched_text": "约",
+          "page_number": 1,
+          "match_start": 0,
+          "match_end": 1
+        }
+      ],
+      "source_lines": [
+        [
+          "约 約"
+        ]
+      ],
+      "sha256": "aa561dd2c8253e33b5ee9e070f4f8372b81fe19b6bfbd3a028a0a595c5ccc2a2"
+    },
+    {
+      "id": "legacy-pair-traditional",
+      "file": "legacy-pair.pdf",
+      "search_text": "約",
+      "expected_count": 1,
+      "expected_matches": [
+        {
+          "matched_text": "約",
+          "page_number": 1,
+          "match_start": 1,
+          "match_end": 2
+        }
+      ],
+      "source_lines": [
+        [
+          "约 約"
+        ]
+      ],
+      "sha256": "aa561dd2c8253e33b5ee9e070f4f8372b81fe19b6bfbd3a028a0a595c5ccc2a2"
     }
   ]
 }

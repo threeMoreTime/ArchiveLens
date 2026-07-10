@@ -11,11 +11,15 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import queue
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -25,26 +29,60 @@ from smoke_output import configure_console, log_status
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
 FIXTURES = ROOT / "tests" / "fixtures" / "ocr"
-WS = ROOT / "dist" / "_ocr_ws"
 EXPECTED_FAILURE_COUNT = 0
 TASK_COMPLETION_TIMEOUT = int(os.environ.get("ARCHIVELENS_PACKAGED_OCR_TIMEOUT_SEC", "420"))
 PROGRESS_LOG_INTERVAL_SEC = 30.0
 
 
+def resolve_case(args: argparse.Namespace) -> tuple[str, str, int]:
+    explicit = args.fixture is not None or args.search_text is not None or args.expected_count is not None
+    case_id = args.case_id
+    if case_id is None and not explicit:
+        case_id = "custom-double"
+    if case_id is not None:
+        if explicit:
+            raise ValueError("--case-id cannot be combined with --fixture/--search-text/--expected-count")
+        manifest = json.loads((FIXTURES / "expected.json").read_text(encoding="utf-8"))
+        case = next((item for item in manifest["cases"] if item["id"] == case_id), None)
+        if case is None:
+            raise ValueError(f"unknown fixture case: {case_id}")
+        return str(case["file"]), str(case["search_text"]), int(case["expected_count"])
+    if args.fixture is None or args.search_text is None or args.expected_count is None:
+        raise ValueError("explicit mode requires --fixture, --search-text, and --expected-count")
+    return args.fixture, args.search_text, args.expected_count
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--search-text", default="约")
-    parser.add_argument("--expected-count", type=int, default=7)
+    parser.add_argument("--case-id")
+    parser.add_argument("--fixture")
+    parser.add_argument("--search-text")
+    parser.add_argument("--expected-count", type=int)
     args = parser.parse_args()
-    search_text = args.search_text
-    expected_count = args.expected_count
     configure_console()
+
+    try:
+        fixture_name, search_text, expected_count = resolve_case(args)
+    except ValueError as exc:
+        log_status("FAIL", str(exc))
+        return 2
+    fixture_path = (FIXTURES / fixture_name).resolve()
+    if fixture_path.parent != FIXTURES.resolve() or not fixture_path.is_file():
+        log_status("FAIL", f"fixture missing or outside fixture root: {fixture_name}")
+        return 2
 
     if not EXE.exists():
         log_status("FAIL", f"engine exe missing {EXE}")
         return 1
 
-    env = {**os.environ, "AL_WORKSPACE_ROOT": str(WS)}
+    run_id = re.sub(r"[^A-Za-z0-9._-]", "-", os.environ.get("ARCHIVELENS_TEST_RUN_ID", "a11-local"))
+    source_context = tempfile.TemporaryDirectory(prefix=f"archivelens-ocr-temp-{run_id}-packaged-")
+    run_root = Path(source_context.name)
+    (run_root / ".archivelens-test-owned").write_text(f"{run_id}\n", encoding="utf-8")
+    source_dir = run_root / "source"
+    source_dir.mkdir()
+    shutil.copy2(fixture_path, source_dir / fixture_path.name)
+    env = {**os.environ, "AL_WORKSPACE_ROOT": str(run_root / "workspace")}
     proc = subprocess.Popen(
         [str(EXE), "serve"],
         stdin=subprocess.PIPE,
@@ -142,7 +180,7 @@ def main() -> int:
             return 1
         log_status("INFO", "engine.ready")
 
-        rid = send("tasks.create", {"source_dir": str(FIXTURES), "search_text": search_text})
+        rid = send("tasks.create", {"source_dir": str(source_dir), "search_text": search_text})
         resp = read_until(rid=rid, timeout=30)
         if not resp or not resp.get("ok"):
             log_status("FAIL", f"tasks.create {resp}")
@@ -181,6 +219,7 @@ def main() -> int:
             log_status("FAIL", f"tasks.get {task_resp}")
             return 1
         failure_count = int(task_resp["result"].get("failure_count", -1))
+        workspace_dir = Path(task_resp["result"].get("workspace_dir") or "")
 
         rid = send("results.query", {"task_id": task_id, "limit": 200})
         resp = read_until(rid=rid, timeout=30)
@@ -192,6 +231,25 @@ def main() -> int:
             matched_texts[matched] = matched_texts.get(matched, 0) + 1
         log_status("INFO", f"results total={total} matches={json.dumps(matched_texts, ensure_ascii=True, sort_keys=True)}")
 
+        for item in items:
+            if item.get("matched_text") != search_text:
+                log_status("FAIL", f"unexpected matched_text: {item.get('matched_text')!r}")
+                return 1
+            if not item.get("context_full") or search_text not in str(item.get("context_full")):
+                log_status("FAIL", "occurrence context is missing the matched text")
+                return 1
+            coordinates = [item.get(key) for key in ("normalized_x0", "normalized_y0", "normalized_x1", "normalized_y1")]
+            if any(value is None or not 0 <= float(value) <= 1 for value in coordinates):
+                log_status("FAIL", f"invalid normalized bbox: {coordinates}")
+                return 1
+            if float(item["normalized_x1"]) <= float(item["normalized_x0"]) or float(item["normalized_y1"]) <= float(item["normalized_y0"]):
+                log_status("FAIL", f"empty occurrence bbox: {coordinates}")
+                return 1
+            crop_path = workspace_dir / str(item.get("crop_image_relpath") or "")
+            if not item.get("crop_image_relpath") or not crop_path.is_file():
+                log_status("FAIL", f"crop missing: {crop_path}")
+                return 1
+
         rid = send("export.json", {"task_id": task_id})
         exp = read_until(rid=rid, timeout=30)
         json_path = Path(exp["result"]["path"])
@@ -200,17 +258,37 @@ def main() -> int:
             return 1
         log_status("INFO", f"export.json: {json_path}")
 
-        if total == 0:
-            log_status("FAIL", "no occurrences found")
+        exported = json.loads(json_path.read_text(encoding="utf-8"))
+        if exported.get("task", {}).get("search_text") != search_text:
+            log_status("FAIL", "export.json search_text mismatch")
             return 1
+        if len(exported.get("occurrences", [])) != expected_count:
+            log_status("FAIL", "export.json occurrence count mismatch")
+            return 1
+
+        rid = send("export.html", {"task_id": task_id})
+        html_response = read_until(rid=rid, timeout=30)
+        if not html_response or not html_response.get("ok"):
+            log_status("FAIL", f"export.html {html_response}")
+            return 1
+        html_path = Path(html_response["result"]["path"])
+        html_content = html_path.read_text(encoding="utf-8")
+        if f"检索词：{html.escape(search_text, quote=True)}" not in html_content:
+            log_status("FAIL", "export.html search_text mismatch")
+            return 1
+        if "http://" in html_content or "https://" in html_content:
+            log_status("FAIL", "export.html contains remote URL")
+            return 1
+
         if total != expected_count:
             log_status("FAIL", f"total={total} expected={expected_count}")
             return 1
-        if matched_texts != {search_text: expected_count}:
+        expected_matches = {} if expected_count == 0 else {search_text: expected_count}
+        if matched_texts != expected_matches:
             log_status(
                 "FAIL",
                 f"matches={json.dumps(matched_texts, ensure_ascii=True, sort_keys=True)} "
-                f"expected={json.dumps({search_text: expected_count}, ensure_ascii=True, sort_keys=True)}",
+                f"expected={json.dumps(expected_matches, ensure_ascii=True, sort_keys=True)}",
             )
             return 1
         if failure_count != EXPECTED_FAILURE_COUNT:
@@ -220,7 +298,8 @@ def main() -> int:
         log_status(
             "PASS",
             "packaged PDF OCR "
-            f"search_text={search_text!r} total={total} matches={json.dumps(matched_texts, ensure_ascii=True, sort_keys=True)} "
+            f"fixture={fixture_name!r} search_text={search_text!r} total={total} "
+            f"matches={json.dumps(matched_texts, ensure_ascii=True, sort_keys=True)} "
             f"failure_count={failure_count}"
         )
         return 0
@@ -233,6 +312,7 @@ def main() -> int:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+        source_context.cleanup()
 
 
 if __name__ == "__main__":

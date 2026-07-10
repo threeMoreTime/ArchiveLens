@@ -122,17 +122,17 @@ class HandlersTests(unittest.TestCase):
 
     def test_html_export_escapes_user_search_text_and_review_content(self) -> None:
         tid = self.server.store.create_task(
-            name="<script>alert(1)</script>",
-            search_terms=["A&B"],
+            name="<script>alert(1)</script> \"quoted\" 'single'",
+            search_terms=["A&B < > \" '"],
             search_mode="exact_literal",
         )
         self.server.store.add_occurrences(
             tid,
             [{
                 "occurrence_id": "occ-escape",
-                "matched_text": "A&B",
+                "matched_text": "A&B < > \" '",
                 "bbox_hash": "escape-bbox",
-                "context_full": "<img onerror=alert(1)>",
+                "context_full": "<img src=x onerror=alert(1)> & \" '",
                 "file_name": "<unsafe>.pdf",
                 "page_number": 1,
             }],
@@ -140,9 +140,11 @@ class HandlersTests(unittest.TestCase):
         self.server.store.upsert_review(task_id=tid, occurrence_id="occ-escape", note="<b>note</b>")
         result = self.server.handlers["export.html"](self.server, {"task_id": tid})
         content = Path(result["path"]).read_text(encoding="utf-8")
-        self.assertIn("A&amp;B", content)
+        self.assertIn("A&amp;B &lt; &gt; &quot; &#x27;", content)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", content)
-        self.assertNotIn("<img onerror=alert(1)>", content)
+        self.assertNotIn("<img src=x onerror=alert(1)>", content)
+        self.assertIn("&lt;img src=x onerror=alert(1)&gt;", content)
+        self.assertIn("&quot;quoted&quot; &#x27;single&#x27;", content)
         self.assertIn("&lt;b&gt;note&lt;/b&gt;", content)
 
     def test_export_review_records(self) -> None:

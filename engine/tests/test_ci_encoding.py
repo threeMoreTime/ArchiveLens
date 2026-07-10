@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -140,6 +142,46 @@ Write-Output 'WINDOWS_POWERSHELL_PARSE_PASS'
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("WINDOWS_POWERSHELL_PARSE_PASS", result.stdout)
+
+    def test_cleanup_script_resolves_repo_root_from_its_own_location(self) -> None:
+        if sys.platform != "win32":
+            self.skipTest("cleanup integration check only runs on Windows")
+
+        powershell = shutil.which("powershell.exe")
+        if not powershell:
+            self.skipTest("powershell.exe is unavailable")
+
+        run_id = "a11-cleanup-default-root-test"
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_repo = Path(tmp) / "repo"
+            script_dir = fake_repo / "scripts"
+            report_dir = fake_repo / "apps" / "desktop" / "test-results"
+            script_dir.mkdir(parents=True)
+            report_dir.mkdir(parents=True)
+            shutil.copy2(ROOT / "scripts" / "cleanup-test-artifacts.ps1", script_dir)
+            (report_dir / ".archivelens-runid").write_text(run_id, encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script_dir / "cleanup-test-artifacts.ps1"),
+                    "-RunId",
+                    run_id,
+                ],
+                cwd=Path(tmp),
+                capture_output=True,
+                text=True,
+                encoding="utf-8-sig",
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["mode"], "dry-run")
+            self.assertEqual(payload["found"], 1)
+            self.assertEqual(Path(payload["paths"][0]["Path"]), report_dir)
 
     def test_powershell_7_can_parse_release_scripts_when_available(self) -> None:
         if sys.platform != "win32":

@@ -1,10 +1,15 @@
 ﻿param(
   [Parameter(Mandatory = $true)][string]$RunId,
   [switch]$Confirm,
-  [string]$RepoRoot = (Resolve-Path "$PSScriptRoot/..").Path
+  [string]$RepoRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+  $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+} else {
+  $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+}
 $tempRoot = [IO.Path]::GetTempPath()
 $markerFile = ".archivelens-test-owned"
 $reportMarker = ".archivelens-runid"

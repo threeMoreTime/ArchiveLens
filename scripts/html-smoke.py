@@ -6,10 +6,14 @@
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -21,11 +25,25 @@ EXE = ROOT / "dist" / "engine" / "win-x64" / "archivelens-engine.exe"
 FX = ROOT / "tests" / "fixtures" / "ocr"
 MODE = os.environ.get("ARCHIVELENS_HTML_SMOKE_MODE", "auto").strip().lower()
 SEARCH_TEXT = os.environ.get("ARCHIVELENS_HTML_SMOKE_SEARCH_TEXT", "约")
+FIXTURE_NAME = os.environ.get("ARCHIVELENS_HTML_SMOKE_FIXTURE", "custom-special.pdf")
+if "ARCHIVELENS_HTML_SMOKE_SEARCH_TEXT" not in os.environ:
+    SEARCH_TEXT = "A&B"
+RUN_ID = re.sub(r"[^A-Za-z0-9._-]", "-", os.environ.get("ARCHIVELENS_TEST_RUN_ID", "a11-local"))
+SOURCE_CONTEXT = tempfile.TemporaryDirectory(prefix=f"archivelens-ocr-temp-{RUN_ID}-html-")
+RUN_ROOT = Path(SOURCE_CONTEXT.name)
+(RUN_ROOT / ".archivelens-test-owned").write_text(f"{RUN_ID}\n", encoding="utf-8")
+SOURCE_DIR = RUN_ROOT / "source"
+SOURCE_DIR.mkdir()
+SOURCE_FIXTURE = (FX / FIXTURE_NAME).resolve()
+if SOURCE_FIXTURE.parent != FX.resolve() or not SOURCE_FIXTURE.is_file():
+    raise RuntimeError(f"HTML fixture missing or outside fixture root: {FIXTURE_NAME}")
+shutil.copy2(SOURCE_FIXTURE, SOURCE_DIR / SOURCE_FIXTURE.name)
 
 
 def start_engine() -> subprocess.Popen[str]:
     packaged_available = EXE.exists()
     use_packaged = MODE == "packaged" or (MODE == "auto" and packaged_available)
+    env = {**os.environ, "AL_WORKSPACE_ROOT": str(RUN_ROOT / "workspace")}
     if use_packaged:
         print(f"[html] launch mode: packaged ({EXE})")
         return subprocess.Popen(
@@ -35,12 +53,10 @@ def start_engine() -> subprocess.Popen[str]:
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
+            env=env,
         )
 
-    env = {
-        **os.environ,
-        "PYTHONPATH": f"{ROOT / 'engine/src'};{ROOT / 'engine'}",
-    }
+    env["PYTHONPATH"] = f"{ROOT / 'engine/src'};{ROOT / 'engine'}"
     print(f"[html] launch mode: source ({sys.executable})")
     return subprocess.Popen(
         [sys.executable, "-m", "archivelens_engine", "serve"],
@@ -57,6 +73,25 @@ def start_engine() -> subprocess.Popen[str]:
 proc = start_engine()
 messages: list[str] = []
 lock = threading.Lock()
+
+
+def stop_engine() -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        if proc.stdin is not None and not proc.stdin.closed:
+            proc.stdin.close()
+    except (BrokenPipeError, OSError, ValueError):
+        pass
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
 
 
 def _drain() -> None:
@@ -112,7 +147,7 @@ def main() -> int:
             return 1
         log_status("INFO", "engine.ready")
 
-        rid = send("tasks.create", {"source_dir": str(FX), "search_text": SEARCH_TEXT})
+        rid = send("tasks.create", {"source_dir": str(SOURCE_DIR), "search_text": SEARCH_TEXT})
         r = resp(rid, 30)
         if not r or not r.get("ok"):
             log_status("FAIL", f"tasks.create {r}")
@@ -133,8 +168,17 @@ def main() -> int:
         r = resp(rid, 30)
         items = r["result"]["items"] if r and r.get("ok") else []
         if items:
-            send("review.updateDecision", {"task_id": tid, "occurrence_id": items[0]["occurrence_id"], "decision": "confirmed"})
-            resp(f"review.updateDecision-{_counter[0]}", 10)
+            rid = send("review.updateDecision", {"task_id": tid, "occurrence_id": items[0]["occurrence_id"], "decision": "confirmed"})
+            resp(rid, 10)
+            rid = send(
+                "review.updateNote",
+                {
+                    "task_id": tid,
+                    "occurrence_id": items[0]["occurrence_id"],
+                    "note": "A&B <script>alert(1)</script> <img src=x onerror=alert(1)>",
+                },
+            )
+            resp(rid, 10)
 
         # export.html
         rid = send("export.html", {"task_id": tid})
@@ -149,14 +193,17 @@ def main() -> int:
         content = html_path.read_text(encoding="utf-8")
         checks = {
             "exists": html_path.exists(),
-            "size>1KB": html_path.stat().st_size > 1024,
-            "has search text": SEARCH_TEXT in content,
+            "size>500B": html_path.stat().st_size > 500,
+            "has escaped search text": f"检索词：{html.escape(SEARCH_TEXT, quote=True)}" in content,
             "has ArchiveLens": "ArchiveLens" in content,
             "no http://": "http://" not in content,
             "no https://": "https://" not in content,
             "no repo source path": str(ROOT) not in content and str(ROOT).replace("\\", "/") not in content,
             "no .tmp": ".tmp" not in content,
             "has 已确认或 confirmed": "已确认" in content or "confirmed" in content.lower(),
+            "review note escaped": "A&amp;B &lt;script&gt;alert(1)&lt;/script&gt;" in content,
+            "no executable script": "<script>alert(1)</script>" not in content,
+            "no event handler injection": "<img src=x onerror=alert(1)>" not in content,
         }
         all_ok = True
         for k, v in checks.items():
@@ -164,21 +211,23 @@ def main() -> int:
             if not v:
                 all_ok = False
 
-        proc.stdin.close()
-        proc.wait(timeout=15)
+        stop_engine()
 
         if all_ok:
             log_status("PASS", "HTML offline smoke passed")
-            log_status("INFO", "simplified HTML export path validated; full React/B2 offline viewer still pending")
             return 0
         else:
             log_status("FAIL", "HTML smoke checks failed")
             return 1
     except Exception as exc:  # noqa: BLE001
         log_status("FAIL", exc)
-        proc.kill()
+        stop_engine()
         return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    finally:
+        stop_engine()
+        SOURCE_CONTEXT.cleanup()
