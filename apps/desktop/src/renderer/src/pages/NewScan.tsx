@@ -1,14 +1,21 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Button, Input, Text } from "@fluentui/react-components";
-import { TaskCreateParamsSchema } from "@archivelens/ipc-schema";
+import { SearchTextSchema, TaskCreateParamsSchema } from "@archivelens/ipc-schema";
 
 export default function NewScan() {
   const nav = useNavigate();
-  const [dir, setDir] = useState("");
+  const location = useLocation();
+  const initialSourceDir = (location.state as { sourceDir?: unknown } | null)?.sourceDir;
+  const [dir, setDir] = useState(typeof initialSourceDir === "string" ? initialSourceDir : "");
   const [searchText, setSearchText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const searchValidation = SearchTextSchema.safeParse(searchText);
+  const searchError = searchText && !searchValidation.success
+    ? searchValidation.error.issues[0]?.message ?? "检索词无效"
+    : null;
+  const canStart = TaskCreateParamsSchema.safeParse({ source_dir: dir, search_text: searchText }).success;
 
   const select = async () => {
     const d = await window.archiveLens.dialog.selectFolder();
@@ -53,9 +60,11 @@ export default function NewScan() {
           aria-label="检索文字或词语"
         />
       </div>
+      <Text className="al-muted">精确字面匹配，区分大小写，不支持正则、通配符或跨 OCR 行匹配。</Text>
+      {searchError && <div className="al-error" role="alert">错误：{searchError}</div>}
 
       <div className="al-welcome-actions">
-        <Button appearance="primary" onClick={start} disabled={busy || !TaskCreateParamsSchema.safeParse({ source_dir: dir, search_text: searchText }).success}>
+        <Button appearance="primary" onClick={start} disabled={busy || !canStart}>
           {busy ? "创建中…" : "开始扫描"}
         </Button>
       </div>

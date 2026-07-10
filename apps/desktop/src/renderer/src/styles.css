@@ -119,6 +119,7 @@ body {
 .al-env-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; }
 .al-scan-row { display: flex; gap: 8px; margin: 16px 0; }
 .al-task-meta { margin: 16px 0; line-height: 1.8; }
+.al-warning { margin-top: 12px; padding: 10px 12px; border-left: 4px solid var(--warn); background: #fff1d8; color: #6d4300; }
 
 /* ---- 校对工作台 ---- */
 .al-review { display: flex; flex-direction: column; height: 100vh; }
@@ -132,12 +133,12 @@ body {
 .al-result-item.selected { background: #fff1d8; }
 .al-result-line1 { display: flex; gap: 8px; align-items: center; }
 .al-filename { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.al-tag { padding: 2px 8px; border-radius: 6px; font-weight: 700; font-size: 13px; background: #e0e0e0; }
+.al-tag { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; border-radius: 6px; font-weight: 700; font-size: 13px; background: #e0e0e0; }
 .al-tag-confirmed, .al-badge-PASS { background: #e8f6ec; color: var(--ok); }
 .al-tag-needs_review, .al-badge-WARN { background: #fff1d8; color: var(--warn); }
 .al-tag-rejected, .al-badge-FAIL { background: #fbe7e5; color: var(--fail); }
 .al-result-line2 { font-size: 12px; color: var(--muted); margin: 3px 0; }
-.al-result-ctx { font-size: 12px; color: #4a4030; }
+.al-result-ctx { font-size: 12px; color: #4a4030; overflow-wrap: anywhere; }
 .al-detail { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .al-viewer { display: flex; gap: 16px; }
 .al-page-wrap { position: relative; flex: 1; overflow: hidden; cursor: grab; background: #e9e4d8; min-height: 320px; user-select: none; }
@@ -150,4 +151,3 @@ body {
 .al-note { flex: 1; min-height: 60px; }
 .al-save-state { font-size: 12px; color: var(--muted); align-self: center; }
 .al-nav-row { display: flex; gap: 8px; flex-wrap: wrap; }
-

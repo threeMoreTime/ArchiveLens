@@ -44,6 +44,10 @@ export function registerAppHandlers(sidecar: SidecarManager): void {
   });
 
   ipcMain.handle("dialog.selectFolder", async () => {
+    const e2eFolder = process.env["ARCHIVELENS_E2E"] === "1"
+      ? process.env["ARCHIVELENS_E2E_SELECT_FOLDER"]
+      : undefined;
+    if (e2eFolder) return e2eFolder;
     const result = await dialog.showOpenDialog({
       properties: ["openDirectory"],
       title: "选择扫描目录",

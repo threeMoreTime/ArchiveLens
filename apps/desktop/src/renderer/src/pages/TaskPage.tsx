@@ -7,6 +7,7 @@ export default function TaskPage() {
   const nav = useNavigate();
   const [task, setTask] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const legacyRequiresReview = task?.error_code === "LEGACY_TASK_REQUIRES_REVIEW";
 
   useEffect(() => {
     let active = true;
@@ -54,6 +55,11 @@ export default function TaskPage() {
               <Text className="al-error">{task.error_message}</Text>
             </>
           )}
+          {legacyRequiresReview && (
+            <div className="al-warning">
+              该 Alpha10 未完成任务缺少可信页进度，已保留旧结果但不能自动恢复。请创建新任务重新扫描。
+            </div>
+          )}
         </div>
       )}
       <div className="al-welcome-actions">
@@ -63,8 +69,13 @@ export default function TaskPage() {
         {task && (task.status === "running") && (
           <Button onClick={() => window.archiveLens.tasks.pause(taskId)}>暂停</Button>
         )}
-        {task && (task.status === "paused" || task.status === "recoverable") && (
+        {task && !legacyRequiresReview && (task.status === "paused" || task.status === "recoverable") && (
           <Button onClick={() => window.archiveLens.tasks.resume(taskId)}>继续</Button>
+        )}
+        {task && legacyRequiresReview && (
+          <Button onClick={() => nav("/scan/new", { state: { sourceDir: task.source_dir } })}>
+            使用原目录新建任务
+          </Button>
         )}
         {task && task.status !== "cancelled" && task.status !== "completed" && (
           <Button onClick={() => window.archiveLens.tasks.cancel(taskId)}>取消</Button>
