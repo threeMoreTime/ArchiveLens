@@ -141,8 +141,16 @@ def main() -> int:
         resp = take_response(rid, 5)
         if resp and not resp.get("ok") and resp["error"]["code"] == "ENGINE_SHUTTING_DOWN":
             log_status("PASS", "new request rejected with ENGINE_SHUTTING_DOWN")
+        elif resp is None:
+            try:
+                proc.wait(timeout=5)
+                log_status("PASS", "engine exited after shutdown before accepting a new request")
+            except subprocess.TimeoutExpired:
+                log_status("FAIL", "engine stayed alive without rejecting a new request")
+                return 1
         else:
-            log_status("WARN", f"new request was not rejected as expected: {resp}")
+            log_status("FAIL", f"new request was not rejected as expected: {resp}")
+            return 1
 
         # 关 stdin 触发 run loop 退出 → 进程退出
         assert proc.stdin is not None

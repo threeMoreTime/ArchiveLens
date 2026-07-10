@@ -11,7 +11,16 @@ from __future__ import annotations
 import sys
 
 
+def configure_utf8_stdio() -> None:
+    """Keep JSONL IPC UTF-8 even when a frozen Windows executable ignores env hints."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="strict")
+
+
 def cli_main() -> None:
+    configure_utf8_stdio()
     args = sys.argv[1:]
     if args and args[0] == "serve":
         from archivelens_engine.server import run_server

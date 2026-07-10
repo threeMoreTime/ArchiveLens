@@ -13,8 +13,10 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from archivelens_engine import PROTOCOL_VERSION, __version__
+from archivelens_engine.__main__ import configure_utf8_stdio
 from archivelens_engine.protocol import ErrorCode
 from archivelens_engine.server import Server
 
@@ -44,6 +46,23 @@ class ServerDispatchTests(unittest.TestCase):
         self.assertEqual(msg["result"]["protocol_version"], PROTOCOL_VERSION)
         self.assertEqual(msg["result"]["engine_version"], __version__)
         self.assertIn("build_metadata", msg["result"])
+
+    def test_entrypoint_forces_utf8_for_all_jsonl_streams(self) -> None:
+        class ReconfigurableStream:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, str]] = []
+
+            def reconfigure(self, **kwargs: str) -> None:
+                self.calls.append(kwargs)
+
+        stdin = ReconfigurableStream()
+        stdout = ReconfigurableStream()
+        stderr = ReconfigurableStream()
+        with patch("sys.stdin", stdin), patch("sys.stdout", stdout), patch("sys.stderr", stderr):
+            configure_utf8_stdio()
+        self.assertEqual(stdin.calls, [{"encoding": "utf-8", "errors": "strict"}])
+        self.assertEqual(stdout.calls, [{"encoding": "utf-8", "errors": "strict"}])
+        self.assertEqual(stderr.calls, [{"encoding": "utf-8", "errors": "strict"}])
 
     def test_app_info_includes_embedded_build_metadata_when_present(self) -> None:
         tmp = tempfile.mkdtemp()

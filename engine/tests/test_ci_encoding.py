@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -181,7 +182,7 @@ Write-Output 'WINDOWS_POWERSHELL_PARSE_PASS'
             payload = json.loads(result.stdout)
             self.assertEqual(payload["mode"], "dry-run")
             self.assertEqual(payload["found"], 1)
-            self.assertEqual(Path(payload["paths"][0]["Path"]), report_dir)
+            self.assertTrue(os.path.samefile(payload["paths"][0]["Path"], report_dir))
 
     def test_powershell_7_can_parse_release_scripts_when_available(self) -> None:
         if sys.platform != "win32":

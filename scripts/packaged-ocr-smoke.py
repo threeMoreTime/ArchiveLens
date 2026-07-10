@@ -120,6 +120,8 @@ def main() -> int:
         rid = f"r{counter[0]}"
         line = json.dumps(
             {"protocol_version": 2, "request_id": rid, "method": method, "params": params or {}},
+            # Match Electron's JSON.stringify output: raw UTF-8 reaches the frozen
+            # sidecar, which must not depend on the host console code page.
             ensure_ascii=False,
         )
         assert proc.stdin is not None
@@ -187,7 +189,19 @@ def main() -> int:
             return 1
         task_id = resp["result"]["task_id"]
         active_task_id[0] = task_id
-        log_status("INFO", f"task created: {task_id} files={resp['result'].get('file_count')}")
+        log_status(
+            "INFO",
+            "task created: "
+            + json.dumps(
+                {
+                    "task_id": task_id,
+                    "files": resp["result"].get("file_count"),
+                    "search_text": resp["result"].get("search_text"),
+                    "search_terms": resp["result"].get("search_terms"),
+                },
+                ensure_ascii=True,
+            ),
+        )
 
         rid = send("tasks.start", {"task_id": task_id})
         read_until(rid=rid, timeout=30)
@@ -218,8 +232,23 @@ def main() -> int:
         if not task_resp or not task_resp.get("ok"):
             log_status("FAIL", f"tasks.get {task_resp}")
             return 1
-        failure_count = int(task_resp["result"].get("failure_count", -1))
-        workspace_dir = Path(task_resp["result"].get("workspace_dir") or "")
+        task_state = task_resp["result"]
+        if task_state.get("search_text") != search_text or task_state.get("search_terms") != [search_text]:
+            log_status(
+                "FAIL",
+                "persisted task search terms mismatch "
+                + json.dumps(
+                    {
+                        "expected": search_text,
+                        "actual_text": task_state.get("search_text"),
+                        "actual_terms": task_state.get("search_terms"),
+                    },
+                    ensure_ascii=True,
+                ),
+            )
+            return 1
+        failure_count = int(task_state.get("failure_count", -1))
+        workspace_dir = Path(task_state.get("workspace_dir") or "")
 
         rid = send("results.query", {"task_id": task_id, "limit": 200})
         resp = read_until(rid=rid, timeout=30)
@@ -260,7 +289,17 @@ def main() -> int:
 
         exported = json.loads(json_path.read_text(encoding="utf-8"))
         if exported.get("task", {}).get("search_text") != search_text:
-            log_status("FAIL", "export.json search_text mismatch")
+            log_status(
+                "FAIL",
+                "export.json search_text mismatch "
+                + json.dumps(
+                    {
+                        "expected": search_text,
+                        "actual": exported.get("task", {}).get("search_text"),
+                    },
+                    ensure_ascii=True,
+                ),
+            )
             return 1
         if len(exported.get("occurrences", [])) != expected_count:
             log_status("FAIL", "export.json occurrence count mismatch")
