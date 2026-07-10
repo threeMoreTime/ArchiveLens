@@ -3,7 +3,14 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { resolveEngineCommand, type EngineCommand } from "./paths";
 import { JsonLineReader } from "../protocol/jsonl";
-import { PROTOCOL_VERSION, WireMessageSchema, type Response, type Event } from "@shared/index";
+import {
+  PROTOCOL_VERSION,
+  TaskSearchEventPayloadSchema,
+  WireMessageSchema,
+  parseMethodResult,
+  type Response,
+  type Event,
+} from "@shared/index";
 import { logger } from "../logging/logger";
 
 const READY_TIMEOUT_MS = 15_000;
@@ -12,7 +19,11 @@ const STDERR_TAIL_LINES = 200;
 
 /** Sidecar 相关的结构化错误（code 与 IPC ErrorCode 对齐）。 */
 export class EngineError extends Error {
-  constructor(public readonly code: string, message: string) {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly details: Record<string, unknown> = {},
+  ) {
     super(message);
     this.name = "EngineError";
   }
@@ -21,6 +32,12 @@ export class EngineError extends Error {
 interface Pending {
   resolve: (r: Response) => void;
   reject: (e: EngineError) => void;
+  timer: NodeJS.Timeout;
+}
+
+interface ReadyWaiter {
+  resolve: () => void;
+  reject: (error: EngineError) => void;
   timer: NodeJS.Timeout;
 }
 
@@ -69,8 +86,9 @@ export class SidecarManager extends EventEmitter {
   private ready = false;
   private starting: Promise<void> | null = null;
   private stderrTail: string[] = [];
-  private readyWaiters: Array<() => void> = [];
+  private readyWaiters: ReadyWaiter[] = [];
   private requestedExitReason: SidecarExitReason | null = null;
+  private lastStartupError: EngineError | null = null;
 
   get isReady(): boolean {
     return this.ready;
@@ -84,9 +102,17 @@ export class SidecarManager extends EventEmitter {
     return this.proc?.pid ?? null;
   }
 
+  get startupErrorSnapshot(): EngineError | null {
+    return this.lastStartupError;
+  }
+
   async start(): Promise<void> {
     if (this.starting) return this.starting;
-    this.starting = this._start();
+    this.lastStartupError = null;
+    this.starting = this._start().catch((error) => {
+      this.starting = null;
+      throw error;
+    });
     return this.starting;
   }
 
@@ -106,10 +132,7 @@ export class SidecarManager extends EventEmitter {
           ),
         );
       }, READY_TIMEOUT_MS);
-      this.readyWaiters.push(() => {
-        clearTimeout(timer);
-        resolve();
-      });
+      this.readyWaiters.push({ resolve, reject, timer });
     });
   }
 
@@ -156,7 +179,11 @@ export class SidecarManager extends EventEmitter {
     }
     const parsed = WireMessageSchema.safeParse(data);
     if (!parsed.success) {
-      logger.warn(`Sidecar 消息 schema 不符：${parsed.error.issues[0]?.message ?? "unknown"}`);
+      this.failProtocol(
+        "wire_message",
+        data,
+        parsed.error.issues[0]?.message ?? "Sidecar message schema mismatch",
+      );
       return;
     }
     const msg = parsed.data;
@@ -171,6 +198,12 @@ export class SidecarManager extends EventEmitter {
   private handleEvent(event: Event): void {
     if (event.event === "engine.ready") {
       this.markReady();
+    } else if (["task.created", "task.started", "task.resumed", "task.recoverable"].includes(event.event)) {
+      const payload = TaskSearchEventPayloadSchema.safeParse(event.payload);
+      if (!payload.success) {
+        this.failProtocol("task_event", event, payload.error.issues[0]?.message ?? "Task event payload mismatch");
+        return;
+      }
     }
     this.emit("event", event);
   }
@@ -196,10 +229,57 @@ export class SidecarManager extends EventEmitter {
   private markReady(): void {
     if (this.ready) return;
     this.ready = true;
+    this.lastStartupError = null;
     logger.info("Sidecar 就绪（engine.ready）");
     const waiters = this.readyWaiters;
     this.readyWaiters = [];
-    for (const w of waiters) w();
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve();
+    }
+  }
+
+  private failProtocol(stage: string, received: unknown, message: string): void {
+    const actual =
+      typeof received === "object" && received !== null && "protocol_version" in received
+        ? (received as { protocol_version?: unknown }).protocol_version
+        : undefined;
+    const error = new EngineError("PROTOCOL_MISMATCH", "Engine protocol version is incompatible.", {
+      expected: PROTOCOL_VERSION,
+      actual,
+      stage,
+      validation: message,
+    });
+    this.lastStartupError = error;
+    this.ready = false;
+    for (const waiter of this.readyWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+    this.readyWaiters = [];
+    for (const [, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+    logger.error(`Sidecar protocol mismatch stage=${stage} expected=${PROTOCOL_VERSION} actual=${String(actual)}`);
+    this.emit("protocolError", error);
+    this.terminateProtocolFault();
+  }
+
+  private terminateProtocolFault(): void {
+    const proc = this.proc;
+    if (!proc) return;
+    this.requestedExitReason = "forced_shutdown";
+    if (process.platform === "win32" && proc.pid) {
+      execFile("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { windowsHide: true }, () => undefined);
+      return;
+    }
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      // Exit handling will finish cleanup if the process already ended.
+    }
   }
 
   /** 发起一次请求，关联响应；超时拒绝。 */
@@ -208,7 +288,7 @@ export class SidecarManager extends EventEmitter {
     params: Record<string, unknown> = {},
     timeoutMs = DEFAULT_REQ_TIMEOUT_MS,
   ): Promise<Response> {
-    if (!this.proc?.stdin) {
+    if (!this.proc?.stdin || (!this.ready && method !== "app.shutdown")) {
       return Promise.reject(new EngineError("ENGINE_CRASHED", "Sidecar 未运行"));
     }
     const request_id = randomUUID();
@@ -220,7 +300,13 @@ export class SidecarManager extends EventEmitter {
       }, timeoutMs);
       this.pending.set(request_id, { resolve, reject, timer });
       const line = JSON.stringify({ protocol_version: PROTOCOL_VERSION, request_id, method, params });
-      this.proc!.stdin!.write(line + "\n", "utf-8");
+      try {
+        this.proc!.stdin!.write(line + "\n", "utf-8");
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(request_id);
+        reject(new EngineError("ENGINE_CRASHED", `Sidecar request write failed: ${String(error)}`));
+      }
     });
   }
 
@@ -228,9 +314,14 @@ export class SidecarManager extends EventEmitter {
   async call<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
     const resp = await this.request(method, params, timeoutMs);
     if (!resp.ok) {
-      throw new EngineError(resp.error.code, resp.error.message);
+      throw new EngineError(resp.error.code, resp.error.message, resp.error.details);
     }
-    return resp.result as T;
+    try {
+      return parseMethodResult(method, resp.result) as T;
+    } catch (error) {
+      this.failProtocol("response_result", resp, String(error));
+      throw this.lastStartupError ?? new EngineError("PROTOCOL_MISMATCH", "Engine response schema mismatch");
+    }
   }
 
   private onExit(code: number | null, signal: NodeJS.Signals | null): void {
@@ -247,6 +338,15 @@ export class SidecarManager extends EventEmitter {
     this.ready = false;
     this.starting = null;
     this.proc = null;
+    if (this.readyWaiters.length > 0) {
+      const startupError = this.lastStartupError ?? new EngineError("ENGINE_CRASHED", `Sidecar exited before ready (code=${code})`);
+      for (const waiter of this.readyWaiters) {
+        clearTimeout(waiter.timer);
+        waiter.reject(startupError);
+      }
+      this.readyWaiters = [];
+      this.lastStartupError = startupError;
+    }
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
       p.reject(new EngineError("ENGINE_CRASHED", `Sidecar 退出（code=${code}）`));

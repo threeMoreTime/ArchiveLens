@@ -34,6 +34,7 @@ from ..search_terms import (
 )
 
 SCHEMA_VERSION = 3
+LEGACY_TASK_REQUIRES_REVIEW = "LEGACY_TASK_REQUIRES_REVIEW"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -172,11 +173,18 @@ class TaskStore:
             self._init_schema()
 
     def _init_schema(self) -> None:
+        current = int(self.conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+        if current == SCHEMA_VERSION:
+            return
+        if current > SCHEMA_VERSION:
+            raise RuntimeError(f"unsupported schema version: {current} > {SCHEMA_VERSION}")
         try:
             self.conn.execute("BEGIN IMMEDIATE")
-            current = int(self.conn.execute("PRAGMA user_version").fetchone()[0] or 0)
             self._execute_schema_sql(SCHEMA_SQL)
-            self._migrate_schema(current)
+            if current > 0:
+                self._migrate_schema(current)
+            else:
+                self._create_occurrence_business_indexes()
             self.conn.execute(
                 "INSERT INTO schema_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 ("schema_version", str(SCHEMA_VERSION)),
@@ -201,6 +209,18 @@ class TaskStore:
             candidate = "\n".join(statement_lines).strip()
             if candidate:
                 self.conn.execute(candidate)
+
+    def _create_occurrence_business_indexes(self) -> None:
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_business_key "
+            "ON occurrences(task_id, source_id, page_number, matched_character, bbox_hash) "
+            "WHERE source_id <> '' AND bbox_hash <> ''"
+        )
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_business_key_matched_text "
+            "ON occurrences(task_id, source_id, page_number, matched_text, bbox_hash) "
+            "WHERE source_id <> '' AND bbox_hash <> '' AND matched_text IS NOT NULL AND matched_text <> ''"
+        )
 
     def _migrate_schema(self, current: int) -> None:
         self._ensure_column("tasks", "last_event_sequence", "INTEGER NOT NULL DEFAULT 0")
@@ -296,9 +316,41 @@ class TaskStore:
             """
         )
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_task_events_sequence ON task_events(task_id, sequence)")
-        if current < SCHEMA_VERSION:
-            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        if current < 2:
+            self._mark_untrusted_legacy_tasks_for_review()
 
+    def _mark_untrusted_legacy_tasks_for_review(self) -> None:
+        """Prevent v1 tasks from resuming without authoritative page progress."""
+        rows = self.conn.execute(
+            """
+            SELECT task_id, search_terms_json, search_mode, worker_generation
+            FROM tasks
+            WHERE status IN ('queued', 'starting', 'running', 'pausing', 'paused', 'recoverable', 'stale')
+            """
+        ).fetchall()
+        for row in rows:
+            task_id = str(row["task_id"])
+            self.conn.execute(
+                """
+                UPDATE tasks
+                SET status='recoverable', error_code=?,
+                    error_message='Legacy task progress cannot be verified. Review or restart the task manually.'
+                WHERE task_id=?
+                """,
+                (LEGACY_TASK_REQUIRES_REVIEW, task_id),
+            )
+            terms = json.loads(row["search_terms_json"])
+            self._append_task_event_locked(
+                task_id=task_id,
+                event_type="task.recoverable",
+                payload={
+                    "reason": LEGACY_TASK_REQUIRES_REVIEW,
+                    "search_text": " / ".join(terms),
+                    "search_terms": terms,
+                    "search_mode": row["search_mode"],
+                },
+                worker_generation=int(row["worker_generation"] or 0),
+            )
     def _ensure_column(self, table: str, column: str, ddl: str) -> None:
         cols = {
             row["name"] if isinstance(row, sqlite3.Row) else row[1]
@@ -324,25 +376,110 @@ class TaskStore:
     ) -> str:
         task_id = new_id("task_")
         created = now_iso()
+        normalized_terms = self._validate_task_search_terms(search_terms, search_mode)
+        with self._lock:
+            with self.conn:
+                self._insert_task_locked(
+                    task_id=task_id,
+                    created_at=created,
+                    source_dir=source_dir,
+                    output_dir=output_dir,
+                    workspace_dir=workspace_dir,
+                    name=name,
+                    is_demo=is_demo,
+                    file_count=file_count,
+                    total_pages=total_pages,
+                    status=status,
+                    search_terms=normalized_terms,
+                    search_mode=search_mode,
+                )
+        return task_id
+
+    def create_task_with_event(
+        self,
+        *,
+        event_type: str,
+        event_payload: dict[str, Any] | None = None,
+        source_dir: str = "",
+        output_dir: str = "",
+        workspace_dir: str = "",
+        name: str = "",
+        is_demo: bool = False,
+        file_count: int = 0,
+        total_pages: int = 0,
+        status: str = "draft",
+        search_terms: Iterable[str] | None = None,
+        search_mode: str = LEGACY_SEARCH_MODE,
+    ) -> tuple[str, dict[str, Any]]:
+        task_id = new_id("task_")
+        created = now_iso()
+        normalized_terms = self._validate_task_search_terms(search_terms, search_mode)
+        with self._lock:
+            try:
+                with self.conn:
+                    self._insert_task_locked(
+                        task_id=task_id,
+                        created_at=created,
+                        source_dir=source_dir,
+                        output_dir=output_dir,
+                        workspace_dir=workspace_dir,
+                        name=name,
+                        is_demo=is_demo,
+                        file_count=file_count,
+                        total_pages=total_pages,
+                        status=status,
+                        search_terms=normalized_terms,
+                        search_mode=search_mode,
+                    )
+                    event = self._append_task_event_locked(
+                        task_id=task_id,
+                        event_type=event_type,
+                        payload=event_payload,
+                    )
+                return task_id, event
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    @staticmethod
+    def _validate_task_search_terms(
+        search_terms: Iterable[str] | None,
+        search_mode: str,
+    ) -> list[str]:
         normalized_terms = list(search_terms) if search_terms is not None else list(LEGACY_SEARCH_TERMS)
         if not normalized_terms or any(not isinstance(term, str) or not term for term in normalized_terms):
             raise ValueError("search_terms must contain at least one non-empty term")
         if search_mode == EXACT_LITERAL_SEARCH_MODE and len(normalized_terms) != 1:
             raise ValueError("exact_literal tasks require one search term")
-        with self._lock:
-            self.conn.execute(
-                """INSERT INTO tasks
-                   (task_id, name, source_dir, output_dir, workspace_dir, status,
-                    is_demo, file_count, total_pages, created_at, updated_at, search_terms_json, search_mode)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    task_id, name, source_dir, output_dir, workspace_dir, status,
-                    1 if is_demo else 0, file_count, total_pages, created, created,
-                    json.dumps(normalized_terms, ensure_ascii=False, separators=(",", ":")), search_mode,
-                ),
-            )
-            self.conn.commit()
-        return task_id
+        return normalized_terms
+
+    def _insert_task_locked(
+        self,
+        *,
+        task_id: str,
+        created_at: str,
+        source_dir: str,
+        output_dir: str,
+        workspace_dir: str,
+        name: str,
+        is_demo: bool,
+        file_count: int,
+        total_pages: int,
+        status: str,
+        search_terms: list[str],
+        search_mode: str,
+    ) -> None:
+        self.conn.execute(
+            """INSERT INTO tasks
+               (task_id, name, source_dir, output_dir, workspace_dir, status,
+                is_demo, file_count, total_pages, created_at, updated_at, search_terms_json, search_mode)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                task_id, name, source_dir, output_dir, workspace_dir, status,
+                1 if is_demo else 0, file_count, total_pages, created_at, created_at,
+                json.dumps(search_terms, ensure_ascii=False, separators=(",", ":")), search_mode,
+            ),
+        )
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -478,6 +615,40 @@ class TaskStore:
                 "worker_generation": int(row["worker_generation"]),
                 "updated_at": row["updated_at"],
             }
+
+    def list_task_resume_states(self, task_id: str) -> dict[str, dict[str, Any]]:
+        """Return SQLite-authoritative resume state grouped by stable source id."""
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT source_id FROM task_checkpoints WHERE task_id=? AND source_id<>''
+                UNION
+                SELECT source_id FROM task_processed_pages WHERE task_id=? AND source_id<>''
+                ORDER BY source_id
+                """,
+                (task_id, task_id),
+            ).fetchall()
+            states: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                source_id = str(row["source_id"])
+                processed_page_ids = self._list_processed_page_ids_locked(task_id, source_id)
+                checkpoint = self.get_task_checkpoint(task_id, source_id)
+                states[source_id] = {
+                    "source_id": source_id,
+                    "processed_page_ids": processed_page_ids,
+                    "last_completed_page": max(processed_page_ids) if processed_page_ids else 0,
+                    "next_page": self._first_missing_page(processed_page_ids),
+                    "worker_generation": int(checkpoint["worker_generation"]) if checkpoint else 0,
+                }
+            return states
+
+    @staticmethod
+    def _first_missing_page(processed_page_ids: Iterable[int]) -> int:
+        processed = {int(page_no) for page_no in processed_page_ids if int(page_no) > 0}
+        candidate = 1
+        while candidate in processed:
+            candidate += 1
+        return candidate
 
     def resolve_task_source_id(self, task_id: str) -> str:
         with self._lock:
@@ -646,6 +817,19 @@ class TaskStore:
         for item in occurrence_items:
             self._validate_recovery_occurrence(item, source_id=source_id, page_no=page_no)
         with self._lock:
+            existing = self.conn.execute(
+                "SELECT 1 FROM task_processed_pages WHERE task_id=? AND source_id=? AND page_no=?",
+                (task_id, source_id, page_no),
+            ).fetchone()
+            if existing is not None:
+                processed_page_ids = self._list_processed_page_ids_locked(task_id, source_id)
+                checkpoint = self.get_task_checkpoint(task_id, source_id)
+                return {
+                    "processed_page_ids": processed_page_ids,
+                    "checkpoint": checkpoint,
+                    "event": None,
+                    "already_processed": True,
+                }
             try:
                 with self.conn:
                     for item in occurrence_items:
@@ -660,7 +844,7 @@ class TaskStore:
                     )
                     processed_page_ids = self._list_processed_page_ids_locked(task_id, source_id)
                     last_completed_page = max(processed_page_ids) if processed_page_ids else 0
-                    next_page = last_completed_page + 1
+                    next_page = self._first_missing_page(processed_page_ids)
                     self.conn.execute(
                         """
                         INSERT INTO task_checkpoints
@@ -716,6 +900,7 @@ class TaskStore:
                     "processed_page_ids": processed_page_ids,
                     "checkpoint": checkpoint,
                     "event": event,
+                    "already_processed": False,
                 }
             except Exception:
                 self.conn.rollback()
@@ -739,7 +924,7 @@ class TaskStore:
         with self._lock:
             rows = self.conn.execute(
                 """
-                SELECT task_id, worker_generation
+                SELECT task_id, worker_generation, search_terms_json, search_mode
                 FROM tasks
                 WHERE status IN ('starting', 'running', 'pausing', 'stopping')
                 """
@@ -762,7 +947,12 @@ class TaskStore:
                         self._append_task_event_locked(
                             task_id=task_id,
                             event_type="task.recoverable",
-                            payload={"reason": reason},
+                            payload={
+                                "reason": reason,
+                                "search_text": " / ".join(json.loads(row["search_terms_json"])),
+                                "search_terms": json.loads(row["search_terms_json"]),
+                                "search_mode": row["search_mode"],
+                            },
                             worker_generation=int(row["worker_generation"] or 0),
                         )
             except Exception:

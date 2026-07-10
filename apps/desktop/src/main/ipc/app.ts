@@ -27,6 +27,7 @@ export function registerAppHandlers(sidecar: SidecarManager): void {
     } catch (err) {
       logger.warn(`getEnvironment 诊断失败：${(err as Error).message}`);
     }
+    const startupError = sidecar.startupErrorSnapshot;
     return {
       appVersion: app.getVersion(),
       electron: process.versions.electron,
@@ -35,6 +36,9 @@ export function registerAppHandlers(sidecar: SidecarManager): void {
       platform: process.platform,
       arch: process.arch,
       sidecarReady: sidecar.isReady,
+      startupError: startupError
+        ? { code: startupError.code, message: startupError.message, details: startupError.details }
+        : null,
       engine,
     };
   });

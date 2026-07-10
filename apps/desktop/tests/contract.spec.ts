@@ -8,13 +8,37 @@ import {
   WireMessageSchema,
   ErrorCodeSchema,
   TaskCreateParamsSchema,
+  EngineReadyEventSchema,
+  TaskCreateResultSchema,
+  TaskSummarySchema,
+  TasksListResultSchema,
   normalizeSearchText,
 } from "@shared/index";
 
 const FIXTURE_DIR = path.resolve(__dirname, "../../../tests/ipc-contract/fixtures");
+const VALIDATION_CASES = JSON.parse(
+  readFileSync(path.resolve(__dirname, "../../../tests/search-terms/validation-cases.json"), "utf-8"),
+) as {
+  search_text_cases: Array<{
+    id: string;
+    input_codepoints: number[];
+    valid: boolean;
+    normalized?: string;
+  }>;
+  parallel_workers_cases: Array<{
+    id: string;
+    omit?: boolean;
+    valid: boolean;
+    value?: unknown;
+  }>;
+};
 
 function load(name: string): unknown {
   return JSON.parse(readFileSync(path.join(FIXTURE_DIR, name), "utf-8"));
+}
+
+function fromCodepoints(codepoints: number[]): string {
+  return String.fromCodePoint(...codepoints);
 }
 
 describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
@@ -32,10 +56,32 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(TaskCreateParamsSchema.safeParse(fixture.params).success).toBe(true);
   });
 
-  it("search_text 规范化 NFC，拒绝空白、换行、控制字符与超长输入", () => {
-    expect(normalizeSearchText("  e\u0301  ")).toBe("é");
-    for (const value of ["", "   ", "档\n案", "档\u0000案", "档".repeat(33)]) {
-      expect(TaskCreateParamsSchema.safeParse({ source_dir: "E:\\OCR", search_text: value }).success).toBe(false);
+  it("search_text 按共享 fixture 校验", () => {
+    for (const testCase of VALIDATION_CASES.search_text_cases) {
+      const value = fromCodepoints(testCase.input_codepoints);
+      if (testCase.valid) {
+        expect(normalizeSearchText(value), testCase.id).toBe(testCase.normalized);
+      } else {
+        expect(
+          TaskCreateParamsSchema.safeParse({ source_dir: "E:\\OCR", search_text: value }).success,
+          testCase.id,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("parallel_workers 只接受整数 1", () => {
+    for (const testCase of VALIDATION_CASES.parallel_workers_cases) {
+      const params: Record<string, unknown> = { source_dir: "E:\\OCR", search_text: "档案" };
+      if (!testCase.omit) {
+        params.parallel_workers = testCase.value;
+      }
+      const result = TaskCreateParamsSchema.safeParse(params);
+      if (testCase.valid) {
+        expect(result.success, testCase.id).toBe(true);
+      } else {
+        expect(result.success, testCase.id).toBe(false);
+      }
     }
   });
 
@@ -78,6 +124,33 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     ]) {
       expect(WireMessageSchema.safeParse(load(f)).success).toBe(true);
     }
+  });
+
+  it("engine.ready payload 必须携带严格 protocol v2 与 engine version", () => {
+    const valid = { protocol_version: 2, event: "engine.ready", task_id: null, payload: { protocol_version: 2, engine_version: "0.1.0-alpha.11" } };
+    expect(EngineReadyEventSchema.safeParse(valid).success).toBe(true);
+    for (const payload of [
+      { protocol_version: 1, engine_version: "old" },
+      { engine_version: "missing" },
+      "invalid",
+      { protocol_version: "2", engine_version: "string-version" },
+      { protocol_version: 3, engine_version: "future" },
+    ]) {
+      expect(EngineReadyEventSchema.safeParse({ ...valid, payload }).success).toBe(false);
+    }
+    expect(EngineReadyEventSchema.safeParse({ ...valid, payload: { protocol_version: 2.0, engine_version: "same-number" } }).success).toBe(true);
+  });
+
+  it("task create/get/list 结果使用明确运行时 schema", () => {
+    const task = {
+      task_id: "task-1", status: "paused", search_text: "档案", search_terms: ["档案"],
+      search_mode: "exact_literal", processed_pages: 3, total_pages: 10, occurrence_count: 2,
+      worker_generation: 1, last_event_sequence: 5,
+    };
+    expect(TaskSummarySchema.safeParse(task).success).toBe(true);
+    expect(TasksListResultSchema.safeParse({ items: [task], limit: 50, offset: 0 }).success).toBe(true);
+    expect(TaskCreateResultSchema.safeParse({ ...task, file_count: 1, source_dir: "E:\\OCR" }).success).toBe(true);
+    expect(TaskSummarySchema.safeParse({ ...task, search_terms: undefined }).success).toBe(false);
   });
 
   it("非法枚举 decision 被拒", () => {

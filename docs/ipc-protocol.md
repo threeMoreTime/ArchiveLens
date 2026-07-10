@@ -42,6 +42,10 @@ Electron Main ↔ Python Engine 之间的通信协议：**UTF-8 JSON Lines over 
   "payload": { "engine_version": "0.1.0", "protocol_version": 2 } }
 ```
 
+Main 只有在外层和 payload 的 `protocol_version` 都严格为整数 `2`，且
+`engine_version` 为非空字符串时才进入 ready。任何合法 JSON 但 schema/版本不兼容的
+消息都会触发 `PROTOCOL_MISMATCH`、拒绝 startup/pending 请求并终止 Sidecar。
+
 ## 错误码
 
 `VALIDATION_ERROR` · `PATH_NOT_FOUND` · `PERMISSION_DENIED` · `DEPENDENCY_MISSING` · `ENGINE_START_FAILED` · `ENGINE_CRASHED` · `IPC_TIMEOUT` · `TASK_NOT_FOUND` · `TASK_STATE_CONFLICT` · `DATABASE_ERROR` · `EXPORT_FAILED` · `DISK_SPACE_LOW` · `UNSUPPORTED_FILE` · `PROTOCOL_MISMATCH` · `UNKNOWN_METHOD` · `UNKNOWN_ERROR`
@@ -57,7 +61,10 @@ Electron Main ↔ Python Engine 之间的通信协议：**UTF-8 JSON Lines over 
 }
 ```
 
-`search_text` 为必填字段：去除首尾空白并 NFC 规范化后必须为 1～32 个 Unicode 字符；内部空格保留；拒绝 CR/LF、NUL 和其他控制字符。匹配是区分大小写的精确连续子串，只在同一 OCR 行内查找；不支持正则或通配符。创建后的检索词不可修改。
+`search_text` 为必填字段：仅移除首尾 ASCII SPACE（U+0020），再执行 NFC 规范化；
+结果必须为 1～32 个 Unicode code point。内部及非 ASCII 空格保留；拒绝 Cc、Cs、
+U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内查找；不支持正则或
+通配符。创建后的检索词不可修改。`parallel_workers` 若提供，只允许整数 `1`。
 
 | 方法 | 说明 | 状态 |
 | --- | --- | --- |

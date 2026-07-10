@@ -15,12 +15,13 @@ export const PROTOCOL_VERSION = 2 as const;
 export const MAX_SEARCH_TEXT_LENGTH = 32;
 
 export function normalizeSearchText(value: string): string {
-  const normalized = value.trim().normalize("NFC");
+  const normalized = value.replace(/^ +| +$/g, "").normalize("NFC");
   if (!normalized) throw new Error("请输入检索文字或词语");
+  if (normalized.includes("\uFEFF")) throw new Error("检索词不能包含特殊不可见字符");
+  if (/\p{Cs}/u.test(normalized)) throw new Error("检索词不能包含代理项字符");
+  if (/\p{Cc}/u.test(normalized)) throw new Error("检索词不能包含控制字符");
   if (Array.from(normalized).length > MAX_SEARCH_TEXT_LENGTH)
     throw new Error(`检索词最多 ${MAX_SEARCH_TEXT_LENGTH} 个字符`);
-  if (/[\r\n]/.test(normalized)) throw new Error("检索词不能包含换行");
-  if (/\p{C}/u.test(normalized)) throw new Error("检索词不能包含控制字符");
   return normalized;
 }
 
@@ -38,6 +39,7 @@ export const TaskCreateParamsSchema = z.object({
   search_text: SearchTextSchema,
   output_dir: z.string().optional(),
   name: z.string().optional(),
+  parallel_workers: z.literal(1).optional(),
 });
 
 // --------------------------------------------------------------------------- //
@@ -100,14 +102,30 @@ export const ErrorResponseSchema = z.object({
 export const ResponseSchema = z.discriminatedUnion("ok", [SuccessResponseSchema, ErrorResponseSchema]);
 export type Response = z.infer<typeof ResponseSchema>;
 
-export const EventSchema = z.object({
+const GenericEventSchema = z.object({
   protocol_version: z.literal(PROTOCOL_VERSION),
   event: z.string(),
   task_id: z.string().nullable().default(null),
   sequence: z.number().int().nonnegative().optional(),
   timestamp: z.string().optional(),
   payload: z.record(z.string(), z.unknown()).default({}),
+}).refine((event) => event.event !== "engine.ready", { message: "engine.ready must use the strict ready schema" });
+
+export const EngineReadyPayloadSchema = z.object({
+  engine_version: z.string().min(1),
+  protocol_version: z.literal(PROTOCOL_VERSION),
 });
+
+export const EngineReadyEventSchema = z.object({
+  protocol_version: z.literal(PROTOCOL_VERSION),
+  event: z.literal("engine.ready"),
+  task_id: z.null(),
+  sequence: z.number().int().nonnegative().optional(),
+  timestamp: z.string().optional(),
+  payload: EngineReadyPayloadSchema,
+});
+
+export const EventSchema = z.union([EngineReadyEventSchema, GenericEventSchema]);
 export type Event = z.infer<typeof EventSchema>;
 
 /** Python stdout 上的任意一行消息（响应或事件）。 */
@@ -187,6 +205,50 @@ export const DiagnosticsResultSchema = z.object({
   checks: z.array(DiagnosticCheckSchema),
 });
 export type DiagnosticsResult = z.infer<typeof DiagnosticsResultSchema>;
+
+export const SearchModeSchema = z.enum(["exact_literal", "legacy_fixed_pair"]);
+
+export const TaskSummarySchema = z.object({
+  task_id: z.string().min(1),
+  status: z.string().min(1),
+  search_text: z.string().min(1),
+  search_terms: z.array(z.string().min(1)).min(1),
+  search_mode: SearchModeSchema,
+  processed_pages: z.number().int().nonnegative(),
+  total_pages: z.number().int().nonnegative(),
+  occurrence_count: z.number().int().nonnegative(),
+  worker_generation: z.number().int().nonnegative(),
+  last_event_sequence: z.number().int().nonnegative(),
+}).passthrough();
+
+export const TaskCreateResultSchema = z.object({
+  task_id: z.string().min(1),
+  status: z.string().min(1),
+  source_dir: z.string(),
+  file_count: z.number().int().nonnegative(),
+  search_text: z.string().min(1),
+  search_terms: z.array(z.string().min(1)).min(1),
+  search_mode: SearchModeSchema,
+}).passthrough();
+
+export const TasksListResultSchema = z.object({
+  items: z.array(TaskSummarySchema),
+  limit: z.number().int().nonnegative(),
+  offset: z.number().int().nonnegative(),
+});
+
+export const TaskSearchEventPayloadSchema = z.object({
+  search_text: z.string().min(1),
+  search_terms: z.array(z.string().min(1)).min(1),
+  search_mode: SearchModeSchema,
+}).passthrough();
+
+export function parseMethodResult(method: string, value: unknown): unknown {
+  if (method === "tasks.create") return TaskCreateResultSchema.parse(value);
+  if (method === "tasks.get") return TaskSummarySchema.parse(value);
+  if (method === "tasks.list") return TasksListResultSchema.parse(value);
+  return value;
+}
 
 // --------------------------------------------------------------------------- //
 // Renderer 侧统一错误模型（供 UI 展示）

@@ -29,4 +29,11 @@ describe("自定义检索词 UI wiring", () => {
     expect(source).toContain('searchMode === "legacy_fixed_pair"');
     expect(source).toContain("检索词截取");
   });
+
+  it("欢迎页展示 Sidecar 启动和退出错误而不是永久检测中", () => {
+    const source = page("Welcome.tsx");
+    expect(source).toContain("env.startupError");
+    expect(source).toContain("onEngineExit");
+    expect(source).toContain("!error");
+  });
 });

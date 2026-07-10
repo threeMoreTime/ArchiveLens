@@ -89,9 +89,62 @@ class RecoveryContractTests(unittest.TestCase):
         checkpoint = self.store.get_task_checkpoint(self.task_id, SOURCE_ID)
         assert checkpoint is not None
         self.assertEqual(checkpoint["last_completed_page"], 3)
-        self.assertEqual(checkpoint["next_page"], 4)
+        self.assertEqual(checkpoint["next_page"], 1)
         self.assertEqual(checkpoint["processed_page_ids"], [3])
         self.assertEqual(checkpoint["worker_generation"], 1)
+
+    def test_non_contiguous_pages_use_first_missing_page(self) -> None:
+        for page_no in (1, 2, 4):
+            self.store.record_page_completion(
+                task_id=self.task_id,
+                source_id=SOURCE_ID,
+                page_no=page_no,
+                worker_generation=1,
+                occurrences=[_occ(page_no)],
+            )
+        checkpoint = self.store.get_task_checkpoint(self.task_id, SOURCE_ID)
+        assert checkpoint is not None
+        self.assertEqual(checkpoint["processed_page_ids"], [1, 2, 4])
+        self.assertEqual(checkpoint["last_completed_page"], 4)
+        self.assertEqual(checkpoint["next_page"], 3)
+
+    def test_duplicate_page_completion_is_idempotent_noop(self) -> None:
+        first = self.store.record_page_completion(
+            task_id=self.task_id,
+            source_id=SOURCE_ID,
+            page_no=1,
+            worker_generation=1,
+            occurrences=[_occ(1)],
+        )
+        event_count = len(self.store.list_task_events(self.task_id))
+        duplicate = self.store.record_page_completion(
+            task_id=self.task_id,
+            source_id=SOURCE_ID,
+            page_no=1,
+            worker_generation=2,
+            occurrences=[{**_occ(1), "occurrence_id": "occ-duplicate", "bbox_hash": "duplicate-bbox"}],
+        )
+        self.assertFalse(first["already_processed"])
+        self.assertTrue(duplicate["already_processed"])
+        self.assertIsNone(duplicate["event"])
+        self.assertEqual(len(self.store.list_task_events(self.task_id)), event_count)
+        self.assertEqual(self.store.query_occurrences(task_id=self.task_id)[0], 1)
+        self.assertEqual(duplicate["checkpoint"]["worker_generation"], 1)
+
+    def test_resume_states_are_grouped_by_source(self) -> None:
+        for source_id, pages in (("a.pdf", (1, 2, 3)), ("b.pdf", (1, 2))):
+            for page_no in pages:
+                self.store.record_page_completion(
+                    task_id=self.task_id,
+                    source_id=source_id,
+                    page_no=page_no,
+                    worker_generation=1,
+                    occurrences=[{**_occ(page_no), "source_id": source_id, "bbox_hash": f"{source_id}-{page_no}"}],
+                )
+        states = self.store.list_task_resume_states(self.task_id)
+        self.assertEqual(set(states), {"a.pdf", "b.pdf"})
+        self.assertEqual(states["a.pdf"]["processed_page_ids"], [1, 2, 3])
+        self.assertEqual(states["b.pdf"]["processed_page_ids"], [1, 2])
 
     def test_checkpoint_does_not_advance_when_occurrence_write_fails(self) -> None:
         self.store.record_page_completion(
@@ -558,8 +611,6 @@ class RecoveryMigrationTests(unittest.TestCase):
         store = TaskStore(db_path)
         try:
             self._assert_schema_v3(store)
-            changed = store.reconcile_incomplete_tasks("LEGACY_TASK_REQUIRES_REVIEW")
-            self.assertEqual(changed, 1)
             task = store.get_task("task_unfinished")
             assert task is not None
             self.assertEqual(task["status"], "recoverable")
@@ -612,6 +663,31 @@ class RecoveryMigrationTests(unittest.TestCase):
             self.assertEqual(task["name"], "rollback")
         finally:
             store.close()
+
+    def test_schema_v3_reopen_skips_migration_helpers(self) -> None:
+        path = Path(self.tmp) / "v3-noop.db"
+        TaskStore(path).close()
+        with mock.patch.object(TaskStore, "_execute_schema_sql", side_effect=AssertionError("should not run")), mock.patch.object(
+            TaskStore, "_migrate_schema", side_effect=AssertionError("should not run")
+        ):
+            TaskStore(path).close()
+
+    def test_future_schema_version_is_rejected_without_mutation(self) -> None:
+        path = Path(self.tmp) / "future.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            "CREATE TABLE marker(value TEXT NOT NULL); INSERT INTO marker VALUES ('keep'); PRAGMA user_version=4;"
+        )
+        conn.close()
+        with self.assertRaisesRegex(RuntimeError, "unsupported schema version"):
+            TaskStore(path)
+        conn = sqlite3.connect(path)
+        try:
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(conn.execute("SELECT value FROM marker").fetchone()[0], "keep")
+            self.assertIsNone(conn.execute("SELECT name FROM sqlite_master WHERE name='tasks'").fetchone())
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

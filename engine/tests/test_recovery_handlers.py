@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from archivelens_engine.server import Server, _h_tasks_create, _h_tasks_resume, _h_tasks_start
+from archivelens_engine.protocol import ProtocolError
 
 
 class RecoveryHandlerTests(unittest.TestCase):
@@ -59,6 +60,32 @@ class RecoveryHandlerTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "running")
         start_scan_thread.assert_called_once()
+
+    def test_repeated_resume_does_not_start_two_scan_threads(self) -> None:
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
+        task_id = created["task_id"]
+        self.server.store.update_task(task_id, status="paused")
+        with patch.object(self.server, "start_scan_thread") as start_scan_thread:
+            _h_tasks_resume(self.server, {"task_id": task_id})
+            with self.assertRaises(ProtocolError):
+                _h_tasks_resume(self.server, {"task_id": task_id})
+        start_scan_thread.assert_called_once()
+
+    def test_legacy_task_requiring_review_cannot_resume_automatically(self) -> None:
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
+        task_id = created["task_id"]
+        self.server.store.update_task(
+            task_id,
+            status="recoverable",
+            error_code="LEGACY_TASK_REQUIRES_REVIEW",
+        )
+
+        with patch.object(self.server, "start_scan_thread") as start_scan_thread:
+            with self.assertRaises(ProtocolError) as raised:
+                _h_tasks_resume(self.server, {"task_id": task_id})
+
+        self.assertEqual(raised.exception.code, "TASK_STATE_CONFLICT")
+        start_scan_thread.assert_not_called()
 
     def test_inspect_state_returns_persisted_checkpoint_processed_pages_and_events(self) -> None:
         created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
@@ -137,6 +164,34 @@ class RecoveryHandlerTests(unittest.TestCase):
         self.assertEqual(state["processed_page_ids"], [1])
         self.assertIsNotNone(state["checkpoint"])
         self.assertEqual(state["checkpoint"]["source_id"], source_id)
+
+    def test_real_page_completion_duplicate_is_a_server_noop(self) -> None:
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
+        task_id = created["task_id"]
+        self.server.store.update_task(task_id, status="running")
+        document = SimpleNamespace(document_id="real-doc.pdf", relative_path="real-doc.pdf", page_count=1)
+        page_occurrence = self.server._build_slowfake_occurrence(task_id, 1)
+        page_occurrence["occurrence_id"] = "occ-real-1"
+        page_occurrence["source_id"] = "real-doc.pdf"
+        page_occurrence["relative_path"] = "real-doc.pdf"
+        page_occurrence["file_name"] = "real-doc.pdf"
+
+        for _ in range(2):
+            self.server._persist_real_page_completion(
+                task_id=task_id,
+                scan_workspace=Path(self.tmp),
+                tc=SimpleNamespace(is_paused=lambda: False),
+                worker_generation=1,
+                document=document,
+                page_index=0,
+                page_payload=None,
+                page_occurrences=[page_occurrence],
+            )
+
+        state = self.server.handlers["tasks.inspectState"](self.server, {"task_id": task_id})
+        self.assertEqual(state["processed_page_ids"], [1])
+        self.assertEqual(len(state["occurrence_ids"]), 1)
+        self.assertEqual([event["event_type"] for event in state["events"]], ["task.created", "task.progress"])
 
     def test_real_scan_path_persists_processed_pages_checkpoint_and_progress_events(self) -> None:
         created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})

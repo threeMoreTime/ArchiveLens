@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from archivelens_engine.db.store import TaskStore
 
@@ -45,6 +46,48 @@ class TaskStoreTests(unittest.TestCase):
         self.assertEqual(task["search_mode"], "exact_literal")
         with self.assertRaisesRegex(ValueError, "immutable"):
             self.store.update_task(tid, search_terms_json='["其他"]')
+
+    def test_create_task_with_event_is_one_transaction(self) -> None:
+        task_id, event = self.store.create_task_with_event(
+            source_dir="X",
+            search_terms=["档案"],
+            search_mode="exact_literal",
+            event_type="task.created",
+            event_payload={"search_text": "档案"},
+        )
+        task = self.store.get_task(task_id)
+        assert task is not None
+        self.assertEqual(task["last_event_sequence"], 1)
+        self.assertEqual(event["sequence"], 1)
+        self.assertEqual([row["event_type"] for row in self.store.list_task_events(task_id)], ["task.created"])
+
+    def test_create_task_with_event_rolls_back_when_event_insert_fails(self) -> None:
+        self.store.conn.execute(
+            "CREATE TRIGGER fail_task_event BEFORE INSERT ON task_events BEGIN SELECT RAISE(FAIL, 'injected event failure'); END"
+        )
+        self.store.conn.commit()
+        with self.assertRaisesRegex(Exception, "injected event failure"):
+            self.store.create_task_with_event(event_type="task.created", event_payload={})
+        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0)
+        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM task_events").fetchone()[0], 0)
+
+    def test_create_task_with_event_rolls_back_when_sequence_update_fails(self) -> None:
+        self.store.conn.execute(
+            "CREATE TRIGGER fail_sequence BEFORE UPDATE OF last_event_sequence ON tasks BEGIN SELECT RAISE(FAIL, 'injected sequence failure'); END"
+        )
+        self.store.conn.commit()
+        with self.assertRaisesRegex(Exception, "injected sequence failure"):
+            self.store.create_task_with_event(event_type="task.created", event_payload={})
+        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0)
+        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM task_events").fetchone()[0], 0)
+
+    def test_duplicate_generated_task_id_rolls_back_second_create(self) -> None:
+        with mock.patch("archivelens_engine.db.store.new_id", return_value="task-fixed"):
+            self.store.create_task_with_event(event_type="task.created", event_payload={})
+            with self.assertRaises(Exception):
+                self.store.create_task_with_event(event_type="task.created", event_payload={})
+        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+        self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM task_events").fetchone()[0], 1)
 
     def test_occurrence_uses_matched_text_without_replacing_existing_review(self) -> None:
         tid = self.store.create_task(search_terms=["档案"], search_mode="exact_literal")

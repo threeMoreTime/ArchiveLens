@@ -96,12 +96,14 @@ class ReportPipeline:
         ocr_engine: Any = None,
         on_page_completed: Callable[..., None] | None = None,
         search_terms: tuple[str, ...] | list[str] | None = None,
+        resume_state_by_source: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         # Phase 1 预留实例配置入口；Phase 3 起 Sidecar 将按任务注入打包内路径。
         self.config = config or DEFAULT_CONFIG
         self.task_control = task_control
         self.on_page_completed = on_page_completed
         self.search_terms = tuple(search_terms or LEGACY_SEARCH_TERMS)
+        self.resume_state_by_source = resume_state_by_source
         if not self.search_terms or any(not isinstance(term, str) or not term for term in self.search_terms):
             raise ValueError("search_terms must contain at least one non-empty term")
         self.backend_registry = DocumentBackendRegistry(self.config)
@@ -233,7 +235,10 @@ class ReportPipeline:
         )
 
     def _checkpoint_path(self, document: DocumentRecord) -> Path:
-        return self.run_dir / f"checkpoint-{document.file_hash_sha256[:16]}.json"
+        # Identical files in separate source paths must not share a local cache.
+        identity = f"{document.relative_path}\0{document.file_hash_sha256}"
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        return self.run_dir / f"checkpoint-{digest}.json"
 
     def _load_checkpoint(self, document: DocumentRecord) -> dict[str, Any] | None:
         path = self._checkpoint_path(document)
@@ -294,6 +299,22 @@ class ReportPipeline:
             page_stop = min(page_stop, self.end_page_index_exclusive)
         return start_page_index, page_stop
 
+    def _page_indexes_for_document(
+        self,
+        document: DocumentRecord,
+        checkpoint: dict[str, Any] | None = None,
+    ) -> list[int]:
+        if self.resume_state_by_source is None:
+            start, stop = self._page_range_for_document(document, checkpoint=checkpoint)
+            return list(range(start, stop))
+        page_stop = document.page_count if self.page_limit is None else min(document.page_count, self.page_limit)
+        if self.end_page_index_exclusive is not None:
+            page_stop = min(page_stop, self.end_page_index_exclusive)
+        start = self.start_page_index or 0
+        state = self.resume_state_by_source.get(document.relative_path, {})
+        processed = {int(page_no) for page_no in state.get("processed_page_ids", [])}
+        return [index for index in range(start, page_stop) if index + 1 not in processed]
+
     def _process_document(self, document: DocumentRecord) -> None:
         cached = self.conn.execute(
             "SELECT * FROM documents WHERE file_path = ?",
@@ -306,12 +327,11 @@ class ReportPipeline:
         ):
             return
         self._delete_document_rows(str(document.file_path))
-        checkpoint = self._load_checkpoint(document)
+        checkpoint = None if self.resume_state_by_source is not None else self._load_checkpoint(document)
         occurrences: list[dict[str, Any]] = checkpoint.get("occurrences", []) if checkpoint else []
         pages: list[dict[str, Any]] = checkpoint.get("pages", []) if checkpoint else []
         failures: list[dict[str, Any]] = checkpoint.get("failures", []) if checkpoint else []
-        start_page_index, page_stop = self._page_range_for_document(document, checkpoint=checkpoint)
-        page_indexes = range(start_page_index, page_stop)
+        page_indexes = self._page_indexes_for_document(document, checkpoint=checkpoint)
         for page_index in page_indexes:
             page_payload: dict[str, Any] | None = None
             page_occurrences: list[dict[str, Any]] = []

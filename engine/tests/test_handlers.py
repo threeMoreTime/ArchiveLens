@@ -88,6 +88,23 @@ class HandlersTests(unittest.TestCase):
         self.assertEqual(result["status"], "draft")
         self.assertEqual(result["search_text"], "档案")
 
+    def test_tasks_create_rolls_back_task_when_initial_event_fails(self) -> None:
+        src = Path(self.tmp) / "atomic-src"
+        src.mkdir()
+        self.server.store.conn.execute(
+            "CREATE TRIGGER fail_created_event BEFORE INSERT ON task_events BEGIN SELECT RAISE(FAIL, 'injected create event failure'); END"
+        )
+        self.server.store.conn.commit()
+        output = io.StringIO()
+        with self.assertRaisesRegex(Exception, "injected create event failure"), redirect_stdout(output):
+            self.server.handlers["tasks.create"](
+                self.server,
+                {"source_dir": str(src), "search_text": "档案"},
+            )
+        self.assertEqual(self.server.store.conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0)
+        self.assertEqual(self.server.store.conn.execute("SELECT COUNT(*) FROM task_events").fetchone()[0], 0)
+        self.assertEqual(output.getvalue(), "")
+
     def test_export_json_and_html(self) -> None:
         demo = self.server.handlers["demo.create"](self.server, {})
         tid = demo["task_id"]

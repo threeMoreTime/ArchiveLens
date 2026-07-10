@@ -8,6 +8,7 @@ export interface EnvironmentInfo {
   platform: string;
   arch: string;
   sidecarReady: boolean;
+  startupError: { code: string; message: string; details: Record<string, unknown> } | null;
   engine: DiagnosticsResult | null;
 }
 
@@ -15,6 +16,9 @@ export interface EngineExitInfo {
   code: number | null;
   signal: string | null;
   stderrTail: string[];
+  expected: boolean;
+  reason: "app_shutdown" | "forced_shutdown" | "unexpected_exit";
+  kind: "expected_shutdown" | "forced_shutdown" | "unexpected_exit" | "crash";
 }
 
 export interface TaskSummary {
@@ -30,6 +34,8 @@ export interface TaskSummary {
   processed_pages: number;
   occurrence_count: number;
   failure_count: number;
+  worker_generation: number;
+  last_event_sequence: number;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -101,11 +107,19 @@ export interface ArchiveLensApi {
       search_text: string;
       output_dir?: string;
       name?: string;
-      parallel_workers?: number;
-    }): Promise<{ task_id: string; status: string; file_count: number }>;
+      parallel_workers?: 1;
+    }): Promise<{
+      task_id: string;
+      status: string;
+      source_dir: string;
+      file_count: number;
+      search_text: string;
+      search_terms: string[];
+      search_mode: "exact_literal";
+    }>;
     start(task_id: string): Promise<{ task_id: string; status: string }>;
     get(task_id: string): Promise<TaskSummary>;
-    list(p?: { limit?: number; offset?: number; status?: string }): Promise<{ items: TaskSummary[] }>;
+    list(p?: { limit?: number; offset?: number; status?: string }): Promise<{ items: TaskSummary[]; limit: number; offset: number }>;
     pause(task_id: string): Promise<{ task_id: string; status: string }>;
     resume(task_id: string): Promise<{ task_id: string; status: string }>;
     cancel(task_id: string): Promise<{ task_id: string; status: string }>;

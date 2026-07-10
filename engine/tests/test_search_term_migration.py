@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from archivelens_engine.db.store import SCHEMA_VERSION, TaskStore
+from archivelens_engine.report_pipeline import DocumentRecord, ReportPipeline
 
 
 def create_alpha10_database(path: Path, *, status: str) -> None:
@@ -106,6 +107,36 @@ class Alpha10MigrationTests(unittest.TestCase):
                 self.assertEqual(store.list_processed_page_ids("task-v2", "source-v2"), [1])
                 self.assertEqual(store.get_task_checkpoint("task-v2", "source-v2")["next_page"], 2)
                 self.assertEqual([event["sequence"] for event in store.list_task_events("task-v2")], [3])
+            finally:
+                store.close()
+
+    def test_migrated_paused_task_drives_pipeline_from_sqlite_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "paused-resume-v2.db"
+            create_alpha10_database(path, status="paused")
+            store = TaskStore(path)
+            try:
+                task = store.get_task("task-v2")
+                assert task is not None
+                self.assertEqual(task["search_terms"], ["约", "約"])
+                states = store.list_task_resume_states("task-v2")
+                pipeline = object.__new__(ReportPipeline)
+                pipeline.resume_state_by_source = states
+                pipeline.page_limit = None
+                pipeline.start_page_index = None
+                pipeline.end_page_index_exclusive = None
+                doc = DocumentRecord(
+                    document_id="random",
+                    file_path=Path("source-v2"),
+                    relative_path="source-v2",
+                    file_type="PDF",
+                    file_size_bytes=1,
+                    file_hash_sha256="a" * 64,
+                    modified_time=0,
+                    page_count=4,
+                )
+                self.assertEqual([index + 1 for index in pipeline._page_indexes_for_document(doc)], [2, 3, 4])
+                self.assertEqual(store.allocate_worker_generation("task-v2"), 2)
             finally:
                 store.close()
 

@@ -21,7 +21,7 @@ from typing import Any, Callable
 from . import PROTOCOL_VERSION, __version__
 from .build_info import load_build_info
 from .config import DEFAULT_CONFIG, EngineConfig
-from .db.store import TaskStore, now_iso
+from .db.store import LEGACY_TASK_REQUIRES_REVIEW, TaskStore, now_iso
 from .diagnostics import detect_all
 from .ocr_core import build_bbox_hash
 from .protocol import (
@@ -254,6 +254,7 @@ class Server:
         if task is not None:
             payload["source_dir"] = task["source_dir"]
             payload["search_text"] = task["search_text"]
+            payload["search_terms"] = task["search_terms"]
             payload["search_mode"] = task["search_mode"]
         self.emit_task_event(
             entry_event,
@@ -277,17 +278,18 @@ class Server:
         import time as _time
 
         total = self.slowfake_pages
-        checkpoint = self.store.get_task_checkpoint(task_id, SLOWFAKE_SOURCE_ID)
         processed_page_ids = self.store.list_processed_page_ids(task_id, SLOWFAKE_SOURCE_ID)
         processed = len(processed_page_ids)
-        next_page = checkpoint["next_page"] if checkpoint is not None else 1
+        processed_page_set = set(processed_page_ids)
         self.store.update_task(
             task_id,
             total_pages=total,
             processed_pages=processed,
             worker_generation=worker_generation,
         )
-        for page_no in range(next_page, total + 1):
+        for page_no in range(1, total + 1):
+            if page_no in processed_page_set:
+                continue
             if tc.should_cancel():
                 break
             if tc.is_paused():
@@ -456,8 +458,9 @@ class Server:
                 source_id=source_id,
             ),
         )
-        outcome["event"]["payload"]["total_pages"] = int(getattr(document, "page_count", 0) or 0)
-        self.emit_task_event_row(outcome["event"])
+        if outcome["event"] is not None:
+            outcome["event"]["payload"]["total_pages"] = int(getattr(document, "page_count", 0) or 0)
+            self.emit_task_event_row(outcome["event"])
         if tc.is_paused():
             self.store.update_task(task_id, status="paused")
             self.emit_task_event(
@@ -502,6 +505,7 @@ class Server:
                 workspace_dir=scan_workspace,
                 config=self.config,
                 search_terms=task["search_terms"],
+                resume_state_by_source=self.store.list_task_resume_states(task_id),
                 task_control=tc,
                 ocr_engine=self.ocr_engine,
                 on_page_completed=lambda **kwargs: self._persist_real_page_completion(
@@ -625,6 +629,8 @@ def _h_shutdown(server: Server, params: dict) -> dict:
 
 def _h_tasks_create(server: Server, params: dict) -> dict:
     source_dir = _require(params, "source_dir", str)
+    if "parallel_workers" in params and (type(params["parallel_workers"]) is not int or params["parallel_workers"] != 1):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "parallel_workers 当前仅支持整数 1")
     try:
         search_text = normalize_search_text(_require(params, "search_text", str))
     except ValueError as exc:
@@ -651,7 +657,15 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
             counts[suffix] += 1
     file_count = sum(counts.values())
 
-    task_id = server.store.create_task(
+    payload = {
+        "source_dir": str(src),
+        "file_count": file_count,
+        "counts": counts,
+        "search_text": search_text,
+        "search_terms": [search_text],
+        "search_mode": EXACT_LITERAL_SEARCH_MODE,
+    }
+    task_id, event = server.store.create_task_with_event(
         source_dir=str(src),
         output_dir=str(out),
         workspace_dir="",
@@ -660,15 +674,10 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         status="draft",
         search_terms=[search_text],
         search_mode=EXACT_LITERAL_SEARCH_MODE,
+        event_type="task.created",
+        event_payload=payload,
     )
-    payload = {
-        "source_dir": str(src),
-        "file_count": file_count,
-        "counts": counts,
-        "search_text": search_text,
-        "search_mode": EXACT_LITERAL_SEARCH_MODE,
-    }
-    server.emit_task_event("task.created", task_id, payload)
+    server.emit_task_event_row(event)
     return {"task_id": task_id, "status": "draft", **payload}
 
 
@@ -721,6 +730,13 @@ def _h_tasks_pause(server: Server, params: dict) -> dict:
 
 def _h_tasks_resume(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
+    task = server.store.get_task(task_id)
+    if task is not None and task.get("error_code") == LEGACY_TASK_REQUIRES_REVIEW:
+        raise ProtocolError(
+            ErrorCode.TASK_STATE_CONFLICT,
+            "旧任务缺少可信进度，不能自动恢复。请人工确认或重新创建任务。",
+            {"reason": LEGACY_TASK_REQUIRES_REVIEW},
+        )
     tc = server._task_controls.get(task_id)
     server._transition(task_id, "running")
     task = server.store.get_task(task_id)
@@ -729,7 +745,11 @@ def _h_tasks_resume(server: Server, params: dict) -> dict:
         server.emit_task_event(
             "task.resumed",
             task_id,
-            {},
+            {
+                "search_text": task["search_text"],
+                "search_terms": task["search_terms"],
+                "search_mode": task["search_mode"],
+            },
             source_id=SLOWFAKE_SOURCE_ID if server.slowfake_pages > 0 else "",
             worker_generation=int(task["worker_generation"] if task else 0),
         )
@@ -798,7 +818,18 @@ def _h_demo_create(server: Server, params: dict) -> dict:
     tasks_root = server.workspace_root / "tasks"
     tasks_root.mkdir(parents=True, exist_ok=True)
     result = create_demo(server.store, tasks_root)
-    server.emit_task_event("task.created", result["task_id"], {"demo": True})
+    task = server.store.get_task(result["task_id"])
+    assert task is not None
+    server.emit_task_event(
+        "task.created",
+        result["task_id"],
+        {
+            "demo": True,
+            "search_text": task["search_text"],
+            "search_terms": task["search_terms"],
+            "search_mode": task["search_mode"],
+        },
+    )
     server.emit_task_event("task.completed", result["task_id"], {"demo": True})
     return result
 

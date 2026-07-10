@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from archivelens_engine import PROTOCOL_VERSION
 from archivelens_engine.protocol import (
@@ -18,8 +21,17 @@ from archivelens_engine.protocol import (
     require_protocol_version,
 )
 from archivelens_engine.search_terms import normalize_search_text
+from archivelens_engine.server import Server, _h_tasks_create
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "tests" / "ipc-contract" / "fixtures"
+VALIDATION_CASES = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "tests"
+        / "search-terms"
+        / "validation-cases.json"
+    ).read_text(encoding="utf-8")
+)
 
 _VALID_ERROR_CODES = {
     "VALIDATION_ERROR",
@@ -45,6 +57,10 @@ def load(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
 
+def build_string_from_codepoints(codepoints: list[int]) -> str:
+    return "".join(chr(codepoint) for codepoint in codepoints)
+
+
 class IpcContractPythonTests(unittest.TestCase):
     def test_request_valid_matches_protocol_version(self) -> None:
         msg = load("request-valid.json")
@@ -66,11 +82,37 @@ class IpcContractPythonTests(unittest.TestCase):
         self.assertIn(" ", src)
         self.assertEqual(normalize_search_text(msg["params"]["search_text"]), "档案管理")
 
-    def test_search_text_rejects_the_same_invalid_values_as_ts_contract(self) -> None:
-        for value in ("", "   ", "档\n案", "档\x00案", "档" * 33):
-            with self.subTest(value=repr(value)):
-                with self.assertRaises(ValueError):
-                    normalize_search_text(value)
+    def test_search_text_matches_shared_fixture(self) -> None:
+        for case in VALIDATION_CASES["search_text_cases"]:
+            value = build_string_from_codepoints(case["input_codepoints"])
+            with self.subTest(case=case["id"]):
+                if case["valid"]:
+                    self.assertEqual(normalize_search_text(value), case["normalized"])
+                else:
+                    with self.assertRaisesRegex(ValueError, f"^{case['error']}$"):
+                        normalize_search_text(value)
+
+    def test_parallel_workers_only_accepts_integer_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src"
+            src.mkdir()
+            with patch.dict(os.environ, {"AL_SLOWFAKE_PAGES": "1"}):
+                server = Server(workspace_root=tmpdir)
+            try:
+                for case in VALIDATION_CASES["parallel_workers_cases"]:
+                    params = {"source_dir": str(src), "search_text": "档案"}
+                    if not case.get("omit"):
+                        params["parallel_workers"] = case["value"]
+                    with self.subTest(case=case["id"]):
+                        if case["valid"]:
+                            result = _h_tasks_create(server, params)
+                            self.assertEqual(result["status"], "draft")
+                        else:
+                            with self.assertRaises(ProtocolError) as ctx:
+                                _h_tasks_create(server, params)
+                            self.assertEqual(ctx.exception.code, ErrorCode.VALIDATION_ERROR)
+            finally:
+                server.store.close()
 
     def test_review_update_valid_decision(self) -> None:
         msg = load("review-update.json")

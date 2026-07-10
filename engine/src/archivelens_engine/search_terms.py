@@ -14,15 +14,17 @@ def normalize_search_text(value: str) -> str:
     """规范化一个用户输入的检索词，失败时给出可展示的中文错误。"""
     if not isinstance(value, str):
         raise ValueError("检索词必须是文字或词语")
-    normalized = unicodedata.normalize("NFC", value.strip())
+    normalized = unicodedata.normalize("NFC", value.strip(" "))
     if not normalized:
         raise ValueError("请输入检索文字或词语")
+    if "\ufeff" in normalized:
+        raise ValueError("检索词不能包含特殊不可见字符")
+    if any(unicodedata.category(character) == "Cs" for character in normalized):
+        raise ValueError("检索词不能包含代理项字符")
+    if any(unicodedata.category(character) == "Cc" for character in normalized):
+        raise ValueError("检索词不能包含控制字符")
     if len(normalized) > MAX_SEARCH_TEXT_LENGTH:
         raise ValueError(f"检索词最多 {MAX_SEARCH_TEXT_LENGTH} 个字符")
-    if any(character in "\r\n" for character in normalized):
-        raise ValueError("检索词不能包含换行")
-    if any(unicodedata.category(character).startswith("C") for character in normalized):
-        raise ValueError("检索词不能包含控制字符")
     return normalized
 
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Card, Text } from "@fluentui/react-components";
+import type { EngineExitInfo, EnvironmentInfo } from "../../../preload/api";
 
 export default function Welcome() {
   const nav = useNavigate();
@@ -11,8 +12,14 @@ export default function Welcome() {
   useEffect(() => {
     window.archiveLens.app
       .getEnvironment()
-      .then((env: any) => setChecks(env?.engine?.checks ?? []))
+      .then((env: EnvironmentInfo) => {
+        setChecks(env.engine?.checks ?? []);
+        if (env.startupError) setError(`${env.startupError.code}: ${env.startupError.message}`);
+      })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    return window.archiveLens.subscribe.onEngineExit((info: EngineExitInfo) => {
+      if (!info.expected) setError(`ENGINE_CRASHED: Engine 已退出（${info.kind}）`);
+    });
   }, []);
 
   const tryDemo = async () => {
@@ -49,7 +56,7 @@ export default function Welcome() {
       <Card className="al-env-card">
         <Text weight="semibold">环境摘要</Text>
         <div className="al-env-list">
-          {checks.length === 0 && <Text className="al-muted">检测中…</Text>}
+          {checks.length === 0 && !error && <Text className="al-muted">检测中…</Text>}
           {checks.map((c) => (
             <div className="al-env-row" key={c.label}>
               <span>{c.label}</span>
