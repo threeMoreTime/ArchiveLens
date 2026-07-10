@@ -70,7 +70,7 @@ U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内
 | --- | --- | --- |
 | `app.info` | 引擎版本 / 协议版本 / python 路径 | ✅ |
 | `diagnostics.run` | 环境自检（Tesseract / DjVu / 语言包 / RapidOCR / onnx） | ✅ |
-| `tasks.*` / `results.*` / `review.*` / `export.*` / `files.*` / `settings.*` | 见 `MethodNameSchema` | ⏳ 进行中 |
+| `tasks.*` / `results.*` / `review.*` / `export.*` / `files.*` / `settings.*` | 见 `MethodNameSchema` | ✅ |
 
 ## 健壮性保证
 
@@ -80,3 +80,7 @@ U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内
 - 任意 handler 异常 → `UNKNOWN_ERROR`，server 不退出；
 - 请求支持超时（默认 30s）；Sidecar 退出时所有 pending 请求失败为 `ENGINE_CRASHED`；
 - Main 将 Sidecar 异常广播给 Renderer。
+
+## Legacy 未完成任务
+
+从缺少可信 processed pages/checkpoint 的旧 schema 迁移时，任务会进入 `recoverable` 并设置 `LEGACY_TASK_REQUIRES_REVIEW`。`tasks.resume` 对该错误码 fail-closed：不伪造 checkpoint、不重新扫描、不删除旧 occurrence/review/note/export。Renderer 显示只读说明，并允许把原来源目录带入新任务页面。

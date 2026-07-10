@@ -28,7 +28,7 @@ echo '{"protocol_version":2,"request_id":"r1","method":"app.info","params":{}}' 
 - [ ] Tesseract / DjVuLibre 随包分发或应用内安装（任务 §二十六）；
 - [ ] `THIRD_PARTY_NOTICES.md` 许可证清单。
 
-## Electron 打包（配置就绪，本地受阻 ⚠️）
+## Electron 打包
 
 ```bash
 pnpm --filter @archivelens/desktop dist
@@ -41,7 +41,7 @@ pnpm --filter @archivelens/desktop dist
 - portable；
 - `extraResources`：`dist/engine/win-x64` → `engine/win-x64`（Engine 随包分发）。
 
-### 当前发布闭环要求
+### 发布闭环要求
 
 - 开发 worktree 全量回归通过后，才允许升级版本并冻结候选 SHA；
 - clean worktree 必须重新安装依赖、重跑测试、重建 Engine / win-unpacked；
@@ -56,7 +56,7 @@ ArchiveLens-0.1.0-alpha.11-x64-portable.exe   (portable)
 SHA256SUMS.txt
 ```
 
-> v0.1.0-alpha.11 未签名：EXE 属性已含产品名 / 版本，但无代码签名证书。架构上 `cscLink` / `cscKeyPassword` 已预留，不得将私钥提交仓库。
+> v0.1.0-alpha.11 是未签名 Alpha：EXE 属性包含产品名与版本，但 Windows SmartScreen 可能显示未知发布者。不得将签名证书或私钥提交仓库。
 
 ## 发布前检查清单（任务 §三十四）
 
@@ -64,3 +64,5 @@ SHA256SUMS.txt
 - [ ] Electron E2E / packaged smoke / installer smoke
 - [ ] 包内无用户数据 / 开发机绝对路径 / `.venv` / `node_modules` / Git 历史
 - [ ] 许可证 / 校验和（SHA-256）
+
+真实 OCR fixture 使用 Windows 系统 SimHei 5.05 生成图片 PDF；字体文件不进入仓库或发布包。生成脚本固定页面参数与 PDF metadata，`expected.json` 记录字体及每个 fixture 的 SHA-256。

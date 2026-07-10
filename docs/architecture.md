@@ -7,7 +7,7 @@ ArchiveLens 桌面端由三个进程层级 + 一个 Python Sidecar 组成：
 ```
 ┌─────────────────────────────────────────────┐
 │ Electron Renderer                           │
-│ React + TypeScript + Fluent UI（计划）       │
+│ React + TypeScript + Fluent UI              │
 │ 仅通过 window.archiveLens 调用 Preload      │
 └──────────────────┬──────────────────────────┘
                    │ contextBridge（最小化、类型化 API）
@@ -19,7 +19,7 @@ ArchiveLens 桌面端由三个进程层级 + 一个 Python Sidecar 组成：
 ┌──────────────────▼──────────────────────────┐
 │ Electron Main                               │
 │ 窗口 / 生命周期 / 对话框 / Sidecar /        │
-│ IPC 校验 / 自定义协议 / 日志 / 托盘（计划）  │
+│ IPC 校验 / 自定义协议 / 日志 / 托盘          │
 └──────────────────┬──────────────────────────┘
                    │ child_process.spawn（参数数组，shell:false）
                    │ UTF-8 JSON Lines over stdin/stdout
@@ -79,6 +79,8 @@ worker-state.status == running
 ```
 
 Task 状态机 12 态（`draft/queued/starting/running/pausing/paused/stopping/completed/failed/cancelled/recoverable/stale`），非法转换抛 `TASK_STATE_CONFLICT`。
+
+正式恢复以 TaskStore SQLite 中按 `task_id + source_id` 持久化的 processed pages、checkpoint、worker generation 与 task events 为唯一真相源。管线本地 checkpoint 仅为内部缓存，不能覆盖 SQLite。无法从 v1 旧库验证页进度的任务使用 `LEGACY_TASK_REQUIRES_REVIEW`，保留结果但拒绝自动 resume。
 
 ## 隐私与本地处理
 

@@ -8,20 +8,20 @@
 
 ## 当前状态
 
-本仓库正在 `feat/custom-search-term` 分支上推进 **v0.1.0-alpha.11 Desktop Alpha** 的用户自定义检索词能力。
+当前版本为 **v0.1.0-alpha.11 Desktop Alpha**，支持任务级用户自定义检索词。
 
 | 能力 | 状态 | 证据 |
 | --- | --- | --- |
 | Python Engine 项目化（`engine/`） | ✅ | 正式包 + pyproject + lock |
-| JSONL Sidecar IPC（TS↔Python） | ✅ | 139 项 engine 测试 + Zod 契约 |
+| JSONL Sidecar IPC（TS↔Python） | ✅ | Protocol v2 + Python/TS 共享契约 |
 | Electron Main/Preload/Renderer 安全骨架 | ✅ | typecheck + build + 生命周期 E2E |
 | Sidecar 端到端握手 | ✅ | `engine.ready` + `app.info` + 主窗口 |
 | Worker/Task 真实状态机（修复残留 checkpoint 误判） | ✅ | checkpoint / sequence / migration 回归 |
 | Engine PyInstaller one-folder 打包 | ✅ | 355MB exe 独立 serve 通过 |
 | 生命周期关闭/恢复自动化 | ✅ | 14 个 Playwright lifecycle/recovery E2E |
 | HTML 离线导出 smoke | ✅ | 本地真实 OCR fixtures 回归 |
-| electron-builder 安装包/portable | ⏳ 收尾中 | clean rebuild / Setup / Portable 完整验收待完成 |
-| 正式发布证据链 | ⏳ 收尾中 | clean worktree / hash / manifest / smoke 待完成 |
+| electron-builder 安装包/portable | ✅ 配置完成 | 仅接受同一候选 SHA 的 clean rebuild 产物 |
+| 正式发布证据链 | ✅ 自动校验 | manifest / SHA256SUMS / release-chain |
 
 详见 [docs/architecture.md](docs/architecture.md) 与最终阶段报告。
 
@@ -63,7 +63,7 @@ Renderer (React)  ──window.archiveLens──▶  Preload (contextBridge)
 
 ```bash
 # Engine（Python）
-PYTHONPATH="engine/src;engine" python -m unittest discover -s engine/tests -t engine   # 139 项
+PYTHONPATH="engine/src;engine" python -m unittest discover -s engine/tests -t engine
 
 # Desktop（TS）
 pnpm --filter @archivelens/desktop exec tsc -p tsconfig.node.json --noEmit
@@ -89,15 +89,17 @@ pnpm --filter @archivelens/desktop dist
 ## 许可证
 
 MIT（见 [LICENSE](LICENSE)）。第三方组件清单见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-⚠️ **PyMuPDF (AGPL) 与 DjVuLibre (GPL) 的许可证合规是发布前阻塞**，原生 OCR 依赖本轮未随包分发（见 [docs/native-dependencies.md](docs/native-dependencies.md)）。
+生产包不包含 PyMuPDF/fitz；PDF 渲染使用 pypdfium2/PDFium。DjVuLibre、Tesseract 与 tessdata 保持宿主安装策略，详见 [docs/native-dependencies.md](docs/native-dependencies.md)。
 
 ## Alpha 限制（必读）
 
 - 版本 `0.1.0-alpha.11`，**非稳定版**，仅供早期试用与反馈；
-- 新建任务输入 1～32 个 Unicode 字符的检索文字或词语；首尾空白会去除，按 NFC 规范化后进行区分大小写的精确行内匹配；不支持正则、通配符或跨 OCR 行匹配；
+- 新建任务输入 1～32 个 Unicode code point 的检索文字或词语；仅移除首尾 ASCII SPACE（U+0020），按 NFC 规范化后进行区分大小写的精确行内匹配；支持重叠匹配，不支持正则、通配符或跨 OCR 行匹配；
 - 安装包**未签名**，Windows SmartScreen 可能提示「未知发布者」，需手动「仍要运行」；
 - 仅支持 Windows 10/11 x64；
 - 原生 OCR 依赖（Tesseract / DjVuLibre / 语言包）**当前需宿主已安装**，未随包分发（许可证阻塞）；
 - userData 位于 `%APPDATA%\ArchiveLens`（安装版与 portable 共用）；
 - 卸载默认保留 userData（任务历史 / 校对 / 数据库）；
-- 已知未完成：clean worktree 重建、Setup/Portable 完整 smoke、旧库 migration 正式包验证、远程 CI。
+- Alpha10 已完成任务保留“约/約”历史语义；无法验证页进度的旧未完成任务标记 `LEGACY_TASK_REQUIRES_REVIEW`，保留旧结果但禁止自动恢复，用户需创建新任务重新扫描。
+
+用户流程见 [docs/user-guide.md](docs/user-guide.md)，数据库兼容策略见 [docs/migration.md](docs/migration.md)。
