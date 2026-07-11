@@ -1,0 +1,49 @@
+appId: io.archivelens.desktop
+productName: ArchiveLens
+copyright: Copyright © 2026 ArchiveLens
+
+directories:
+  output: release
+  buildResources: resources
+
+# 主进程 / preload / renderer 构建产物
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.{ts,tsx,map}"
+
+# Python Engine（PyInstaller one-folder）随包分发，运行时经 process.resourcesPath 定位
+extraResources:
+  - from: app.info.json
+    to: app.info.json
+    filter: ["app.info.json"]
+  - from: ../../dist/engine/win-x64
+    to: engine/win-x64
+    filter: ["**/*"]
+
+asar: true
+
+# 用本地已下载的 Electron dist，避免 app-builder 走系统代理从 github 重新下载。
+electronDist: "node_modules/electron/dist"
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+# NSIS 安装器（任务 §二十八）：per-user、可卸载、默认保留用户数据
+nsis:
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ArchiveLens
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: ${productName}-${version}-${arch}-portable.exe

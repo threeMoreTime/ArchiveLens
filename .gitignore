@@ -13,3 +13,31 @@ __pycache__/
 *.pyc
 *.ppm
 *.webp
+
+# ---- Node / pnpm / Electron ----
+node_modules/
+dist/
+out/
+.vite/
+release/
+*.tsbuildinfo
+
+# 打包产物（Engine / Desktop）
+engine/dist/
+engine/build/
+build/
+*.spec
+apps/desktop/out/
+apps/desktop/dist/
+apps/desktop/release/
+apps/desktop/app.info.json
+
+# 测试产物
+playwright-report/
+test-results/
+coverage/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.log

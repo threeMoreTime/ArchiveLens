@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "archivelens-engine"
+version = "0.1.0-alpha.11"
+description = "ArchiveLens local OCR engine — retrieves user-defined literal text in PDF/DJVU archives."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "ArchiveLens" }]
+dependencies = [
+    # OCR 与文档处理核心依赖；版本下限保证 API 可用，锁定见 requirements-lock.txt
+    "pypdfium2>=5.11,<6.0",
+    "Pillow>=10.0,<13.0",
+    "rapidocr-onnxruntime>=1.3,<2.0",
+    "pytesseract>=0.3.10",
+    "onnxruntime>=1.17,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+# CLI 兼容入口：archivelens-engine --root-dir ... --output-html ...
+archivelens-engine = "archivelens_engine.__main__:cli_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+archivelens_engine = ["py.typed"]
+
+# ---- 测试发现 ----
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"

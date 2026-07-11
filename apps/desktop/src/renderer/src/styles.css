@@ -1,0 +1,153 @@
+/*
+ * ArchiveLens 基础样式。
+ * Design Tokens（颜色/间距/字号）将在 Phase 4 系统化为 Fluent UI 主题，
+ * 此处仅保证 Phase 2 骨架可读。
+ */
+:root {
+  --bg: #f4efe7;
+  --card: #fffdf8;
+  --line: #dccfbb;
+  --ink: #241b12;
+  --muted: #6b5c4a;
+  --accent: #c46916;
+  --ok: #2f7d4a;
+  --warn: #c57d10;
+  --fail: #c0392b;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(180deg, #efe6d4, #fbf8f2);
+  color: var(--ink);
+}
+
+.al-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+.al-shell h1 {
+  font-size: 28px;
+  margin: 0 0 4px;
+}
+
+.al-subtitle {
+  color: var(--muted);
+  margin: 0 0 24px;
+}
+
+.al-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.al-card h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.al-checks {
+  display: grid;
+  gap: 8px;
+}
+
+.al-check {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.al-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.al-badge-PASS {
+  background: #e8f6ec;
+  color: var(--ok);
+}
+
+.al-badge-WARN {
+  background: #fff1d8;
+  color: var(--warn);
+}
+
+.al-badge-FAIL {
+  background: #fbe7e5;
+  color: var(--fail);
+}
+
+.al-error {
+  color: var(--fail);
+  font-size: 14px;
+}
+
+.al-meta {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* ---- 应用壳与导航 ---- */
+.al-app { display: flex; height: 100vh; overflow: hidden; }
+.al-sidebar { width: 200px; background: #efe6d4; padding: 16px; border-right: 1px solid var(--line); flex-shrink: 0; }
+.al-brand { font-weight: 700; font-size: 18px; margin-bottom: 20px; color: var(--accent); }
+.al-navlink { display: block; padding: 8px 12px; border-radius: 8px; text-decoration: none; color: var(--ink); margin-bottom: 4px; font-size: 14px; }
+.al-navlink.active { background: var(--card); font-weight: 600; }
+.al-navlink:hover { background: rgba(255, 253, 248, 0.6); }
+.al-main { flex: 1; overflow: auto; }
+
+/* ---- 欢迎 / 扫描 / 任务 ---- */
+.al-welcome { padding: 32px; max-width: 960px; }
+.al-welcome h1 { margin: 0 0 4px; }
+.al-welcome-actions { display: flex; gap: 12px; margin: 22px 0; }
+.al-env-card { padding: 16px; margin-top: 16px; }
+.al-env-list { margin-top: 10px; }
+.al-env-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; }
+.al-scan-row { display: flex; gap: 8px; margin: 16px 0; }
+.al-task-meta { margin: 16px 0; line-height: 1.8; }
+.al-warning { margin-top: 12px; padding: 10px 12px; border-left: 4px solid var(--warn); background: #fff1d8; color: #6d4300; }
+
+/* ---- 校对工作台 ---- */
+.al-review { display: flex; flex-direction: column; height: 100vh; }
+.al-review-toolbar { display: flex; gap: 8px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--card); flex-shrink: 0; }
+.al-review-toolbar select, .al-review-toolbar input { padding: 4px 8px; font-size: 13px; }
+.al-spacer { flex: 1; }
+.al-review-body { display: flex; flex: 1; overflow: hidden; }
+.al-result-list { width: 360px; overflow: auto; border-right: 1px solid var(--line); background: #fbf8f2; flex-shrink: 0; }
+.al-result-item { padding: 10px 12px; border-bottom: 1px solid #eee2cf; cursor: pointer; }
+.al-result-item:hover { background: #fff7eb; }
+.al-result-item.selected { background: #fff1d8; }
+.al-result-line1 { display: flex; gap: 8px; align-items: center; }
+.al-filename { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.al-tag { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; border-radius: 6px; font-weight: 700; font-size: 13px; background: #e0e0e0; }
+.al-tag-confirmed, .al-badge-PASS { background: #e8f6ec; color: var(--ok); }
+.al-tag-needs_review, .al-badge-WARN { background: #fff1d8; color: var(--warn); }
+.al-tag-rejected, .al-badge-FAIL { background: #fbe7e5; color: var(--fail); }
+.al-result-line2 { font-size: 12px; color: var(--muted); margin: 3px 0; }
+.al-result-ctx { font-size: 12px; color: #4a4030; overflow-wrap: anywhere; }
+.al-detail { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.al-viewer { display: flex; gap: 16px; }
+.al-page-wrap { position: relative; flex: 1; overflow: hidden; cursor: grab; background: #e9e4d8; min-height: 320px; user-select: none; }
+.al-page-wrap img { width: 100%; display: block; }
+.al-highlight { position: absolute; border: 3px solid #c44516; box-sizing: border-box; pointer-events: none; }
+.al-crop { width: 160px; border: 1px solid var(--line); align-self: flex-start; }
+.al-detail-meta { font-size: 14px; line-height: 1.7; }
+.al-actions { display: flex; gap: 8px; }
+.al-note-row { display: flex; gap: 8px; align-items: flex-start; }
+.al-note { flex: 1; min-height: 60px; }
+.al-save-state { font-size: 12px; color: var(--muted); align-self: center; }
+.al-nav-row { display: flex; gap: 8px; flex-wrap: wrap; }

@@ -1,0 +1,184 @@
+{
+  "search_text_cases": [
+    {
+      "id": "trim_ascii_space_and_normalize_nfc",
+      "input_codepoints": [32, 32, 101, 769, 32, 32],
+      "valid": true,
+      "normalized": "é"
+    },
+    {
+      "id": "preserve_internal_ascii_space",
+      "input_codepoints": [26723, 32, 26696],
+      "valid": true,
+      "normalized": "档 案"
+    },
+    {
+      "id": "preserve_ampersand",
+      "input_codepoints": [65, 38, 66],
+      "valid": true,
+      "normalized": "A&B"
+    },
+    {
+      "id": "preserve_english_case",
+      "input_codepoints": [65, 114, 99, 104, 105, 118, 101, 76, 101, 110, 115],
+      "valid": true,
+      "normalized": "ArchiveLens"
+    },
+    {
+      "id": "preserve_non_ascii_spaces_at_edges",
+      "input_codepoints": [12288, 26723, 26696, 12288],
+      "valid": true,
+      "normalized": "　档案　"
+    },
+    {
+      "id": "reject_empty_after_ascii_space_trim",
+      "input_codepoints": [32, 32, 32],
+      "valid": false,
+      "error": "请输入检索文字或词语"
+    },
+    {
+      "id": "reject_tab_wrapped_value",
+      "input_codepoints": [9, 26723, 26696, 9],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_u001c",
+      "input_codepoints": [28, 26723],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_u001d",
+      "input_codepoints": [29, 26723],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_u001e",
+      "input_codepoints": [30, 26723],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_u001f",
+      "input_codepoints": [31, 26723],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_carriage_return",
+      "input_codepoints": [26723, 13, 26696],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_line_feed",
+      "input_codepoints": [26723, 10, 26696],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_nul",
+      "input_codepoints": [26723, 0, 26696],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_escape",
+      "input_codepoints": [27, 26723],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_delete",
+      "input_codepoints": [127, 26723],
+      "valid": false,
+      "error": "检索词不能包含控制字符"
+    },
+    {
+      "id": "reject_bom",
+      "input_codepoints": [65279, 26723, 26696, 65279],
+      "valid": false,
+      "error": "检索词不能包含特殊不可见字符"
+    },
+    {
+      "id": "reject_lone_surrogate",
+      "input_codepoints": [55296],
+      "valid": false,
+      "error": "检索词不能包含代理项字符"
+    },
+    {
+      "id": "accept_max_32_codepoints",
+      "input_codepoints": [
+        26723, 26723, 26723, 26723, 26723, 26723, 26723, 26723,
+        26723, 26723, 26723, 26723, 26723, 26723, 26723, 26723,
+        26723, 26723, 26723, 26723, 26723, 26723, 26723, 26723,
+        26723, 26723, 26723, 26723, 26723, 26723, 26723, 26723
+      ],
+      "valid": true,
+      "normalized": "档档档档档档档档档档档档档档档档档档档档档档档档档档档档档档档档"
+    },
+    {
+      "id": "accept_32_astral_codepoints",
+      "input_codepoints": [128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512],
+      "valid": true,
+      "normalized": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    {
+      "id": "reject_33_astral_codepoints",
+      "input_codepoints": [128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512,128512],
+      "valid": false,
+      "error": "检索词最多 32 个字符"
+    },
+    {
+      "id": "reject_more_than_32_codepoints",
+      "input_codepoints": [
+        26723, 26723, 26723, 26723, 26723, 26723, 26723, 26723,
+        26723, 26723, 26723, 26723, 26723, 26723, 26723, 26723,
+        26723, 26723, 26723, 26723, 26723, 26723, 26723, 26723,
+        26723, 26723, 26723, 26723, 26723, 26723, 26723, 26723,
+        26723
+      ],
+      "valid": false,
+      "error": "检索词最多 32 个字符"
+    }
+  ],
+  "parallel_workers_cases": [
+    {
+      "id": "omitted",
+      "omit": true,
+      "valid": true
+    },
+    {
+      "id": "one",
+      "value": 1,
+      "valid": true
+    },
+    {
+      "id": "zero",
+      "value": 0,
+      "valid": false
+    },
+    {
+      "id": "two",
+      "value": 2,
+      "valid": false
+    },
+    {
+      "id": "float",
+      "value": 1.5,
+      "valid": false
+    },
+    {
+      "id": "string",
+      "value": "1",
+      "valid": false
+    },
+    {
+      "id": "null",
+      "value": null,
+      "valid": false
+    }
+  ]
+}

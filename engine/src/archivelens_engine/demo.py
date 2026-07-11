@@ -1,0 +1,222 @@
+"""演示模式：内置 fixture，不依赖 Tesseract / DjVuLibre / 真实 OCR。
+
+任务 §八：用户点击「体验示例」即进入校对工作台，复用正式 results/review/export API，
+不维护第二套 demo-only UI。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from .db.store import TaskStore, now_iso
+
+#: 演示文档（含中文 / 空格 / # / %，覆盖任务 §八.6 的特殊字符要求）。
+DEMO_DOCUMENTS = [
+    {
+        "document_id": "demo-doc-1",
+        "file_name": "道光婺源县志 卷一.pdf",
+        "relative_path": "道光婺源县志 卷一.pdf",
+    },
+    {
+        "document_id": "demo-doc-2",
+        "file_name": "示例 档案#1%djvu.djvu",
+        "relative_path": "示例 档案#1%djvu.djvu",
+    },
+]
+
+
+def _occ(
+    *,
+    document: dict[str, str],
+    page_number: int,
+    page_index: int,
+    page_occurrence_index: int,
+    char: str,
+    variant: str,
+    codepoint: str,
+    context_full: str,
+    context_before: str,
+    context_after: str,
+    confidence: float,
+    secondary: str,
+    status: str,
+    method: str,
+    bbox: tuple[float, float, float, float],
+    page_size: tuple[int, int],
+    page_id: str,
+    crop_id: str,
+) -> dict[str, Any]:
+    x0, y0, x1, y1 = bbox
+    w, h = page_size
+    return {
+        "document_id": document["document_id"],
+        "file_path": "",
+        "relative_path": document["relative_path"],
+        "file_name": document["file_name"],
+        "page_number": page_number,
+        "page_index": page_index,
+        "page_occurrence_index": page_occurrence_index,
+        "matched_character": char,
+        "character_variant": variant,
+        "unicode_codepoint": codepoint,
+        "context_before": context_before,
+        "context_after": context_after,
+        "context_full": context_full,
+        "ocr_confidence": confidence,
+        "secondary_ocr_result": secondary,
+        "verification_status": status,
+        "location_method": method,
+        "source_page_width": float(w),
+        "source_page_height": float(h),
+        "source_x0": x0,
+        "source_y0": y0,
+        "source_x1": x1,
+        "source_y1": y1,
+        "normalized_x0": x0 / w,
+        "normalized_y0": y0 / h,
+        "normalized_x1": x1 / w,
+        "normalized_y1": y1 / h,
+        "page_image_relpath": f"pages/{page_id}.png",
+        "crop_image_relpath": f"crops/{crop_id}.png",
+        "page_image_width": w,
+        "page_image_height": h,
+    }
+
+
+def _build_occurrences() -> list[dict[str, Any]]:
+    """6 条结果：简繁 × confirmed/needs_review/rejected × 2 文档多页。"""
+    doc1, doc2 = DEMO_DOCUMENTS[0], DEMO_DOCUMENTS[1]
+    page_size = (480, 640)
+    return [
+        _occ(
+            document=doc1, page_number=1, page_index=0, page_occurrence_index=1,
+            char="约", variant="simplified", codepoint="U+7EA6",
+            context_full="双方应按照本协议约定的期限完成交付",
+            context_before="双方应按照本协议", context_after="定的期限完成交付",
+            confidence=0.94, secondary="约", status="confirmed", method="pdf_text_layer",
+            bbox=(180, 240, 210, 280), page_size=page_size, page_id="doc1-p1", crop_id="crop-1",
+        ),
+        _occ(
+            document=doc1, page_number=2, page_index=1, page_occurrence_index=1,
+            char="約", variant="traditional", codepoint="U+7D04",
+            context_full="立約各方應誠實守信",
+            context_before="立", context_after="各方應誠實守信",
+            confidence=0.78, secondary="約", status="needs_review", method="pdf_ocr",
+            bbox=(120, 300, 150, 340), page_size=page_size, page_id="doc1-p2", crop_id="crop-2",
+        ),
+        _occ(
+            document=doc1, page_number=3, page_index=2, page_occurrence_index=1,
+            char="约", variant="simplified", codepoint="U+7EA6",
+            context_full="其数量大约为三百石",
+            context_before="其数量大", context_after="为三百石",
+            confidence=0.61, secondary="多", status="rejected", method="pdf_ocr",
+            bbox=(260, 180, 290, 220), page_size=page_size, page_id="doc1-p3", crop_id="crop-3",
+        ),
+        _occ(
+            document=doc2, page_number=1, page_index=0, page_occurrence_index=1,
+            char="約", variant="traditional", codepoint="U+7D04",
+            context_full="契約存於檔案庫中",
+            context_before="契", context_after="存於檔案庫中",
+            confidence=0.91, secondary="約", status="confirmed", method="djvu_text_layer",
+            bbox=(200, 200, 232, 244), page_size=page_size, page_id="doc2-p1", crop_id="crop-4",
+        ),
+        _occ(
+            document=doc2, page_number=3, page_index=2, page_occurrence_index=1,
+            char="约", variant="simplified", codepoint="U+7EA6",
+            context_full="约定不明者从俗",
+            context_before="", context_after="定不明者从俗",
+            confidence=0.74, secondary="约", status="needs_review", method="djvu_ocr",
+            bbox=(140, 420, 172, 464), page_size=page_size, page_id="doc2-p3", crop_id="crop-5",
+        ),
+        _occ(
+            document=doc2, page_number=5, page_index=4, page_occurrence_index=1,
+            char="約", variant="traditional", codepoint="U+7D04",
+            context_full="歲約絹帛若干",
+            context_before="歲", context_after="絹帛若干",
+            confidence=0.88, secondary="約", status="confirmed", method="djvu_ocr",
+            bbox=(300, 360, 332, 404), page_size=page_size, page_id="doc2-p5", crop_id="crop-6",
+        ),
+    ]
+
+
+def _render_images(pages_dir: Path, crops_dir: Path, occurrences: list[dict[str, Any]]) -> None:
+    """用 Pillow 生成简单的出处页（含字符红框）与字符截取图。"""
+    from PIL import Image, ImageDraw  # 延迟导入，避免 demo 模块强依赖
+
+    seen_pages: set[str] = set()
+    for occ in occurrences:
+        page_id = Path(occ["page_image_relpath"]).stem
+        if page_id not in seen_pages:
+            seen_pages.add(page_id)
+            w = int(occ["page_image_width"])
+            h = int(occ["page_image_height"])
+            img = Image.new("RGB", (w, h), (250, 246, 238))
+            draw = ImageDraw.Draw(img)
+            draw.rectangle([40, 40, w - 40, h - 40], outline=(190, 180, 160), width=2)
+            img.save(pages_dir / f"{page_id}.png")
+        # 字符位置红框（叠加在页图副本上）
+        w = int(occ["page_image_width"])
+        h = int(occ["page_image_height"])
+        page_img = Image.open(pages_dir / f"{page_id}.png").convert("RGB")
+        draw = ImageDraw.Draw(page_img)
+        draw.rectangle(
+            [occ["source_x0"], occ["source_y0"], occ["source_x1"], occ["source_y1"]],
+            outline=(196, 69, 22),
+            width=3,
+        )
+        page_img.save(pages_dir / f"{page_id}.png")
+        # 字符截取图（bbox 区域，加内边距）
+        pad = 16
+        cx0 = max(0, int(occ["source_x0"]) - pad)
+        cy0 = max(0, int(occ["source_y0"]) - pad)
+        cx1 = min(w, int(occ["source_x1"]) + pad)
+        cy1 = min(h, int(occ["source_y1"]) + pad)
+        crop = page_img.crop((cx0, cy0, cx1, cy1))
+        crop_id = Path(occ["crop_image_relpath"]).stem
+        crop.save(crops_dir / f"{crop_id}.png")
+
+
+def create_demo(store: TaskStore, workspace_root: Path) -> dict[str, Any]:
+    """创建演示任务：写正式 schema + 生成图片 + 标记 completed。"""
+    real_task_id = store.create_task(
+        source_dir="<演示数据>",
+        output_dir="",
+        workspace_dir="",
+        name="演示任务",
+        is_demo=True,
+        file_count=len(DEMO_DOCUMENTS),
+        total_pages=5,
+        status="running",
+    )
+    task_dir = workspace_root / real_task_id
+    pages_dir = task_dir / "pages"
+    crops_dir = task_dir / "crops"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    crops_dir.mkdir(parents=True, exist_ok=True)
+
+    occurrences = _build_occurrences()
+    _render_images(pages_dir, crops_dir, occurrences)
+
+    count = store.add_occurrences(real_task_id, occurrences)
+    store.update_task(
+        real_task_id,
+        status="completed",
+        processed_pages=5,
+        total_pages=5,
+        occurrence_count=count,
+        finished_at=now_iso(),
+        output_dir=str(task_dir),
+        workspace_dir=str(task_dir),
+    )
+
+    return {
+        "task_id": real_task_id,
+        "workspace_dir": str(task_dir),
+        "status": "completed",
+        "occurrence_count": count,
+        "is_demo": True,
+    }
+
+
+__all__ = ["create_demo", "DEMO_DOCUMENTS"]

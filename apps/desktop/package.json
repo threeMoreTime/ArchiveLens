@@ -1,0 +1,46 @@
+{
+  "name": "@archivelens/desktop",
+  "version": "0.1.0-alpha.11",
+  "private": true,
+  "description": "ArchiveLens 桌面应用",
+  "author": "ArchiveLens",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "test": "vitest run",
+    "test:contract": "vitest run tests/contract.spec.ts",
+    "build": "electron-vite build && node ../../scripts/write-build-metadata.mjs desktop apps/desktop/out/main/app.info.json apps/desktop/app.info.json",
+    "lint": "pnpm run typecheck",
+    "preview": "electron-vite preview",
+    "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
+    "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
+    "typecheck": "pnpm run /typecheck:/",
+    "dist": "pnpm run build && electron-builder"
+  },
+  "dependencies": {
+    "@archivelens/ipc-schema": "workspace:*",
+    "@fluentui/react-components": "^9.56.5",
+    "@fluentui/react-icons": "^2.0.265",
+    "@tanstack/react-query": "^5.51.23",
+    "@tanstack/react-virtual": "^3.8.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.52.2",
+    "react-router-dom": "^6.26.1",
+    "zod": "^3.23.8",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^20.14.15",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^31.4.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0",
+    "vitest": "^2.0.5"
+  }
+}

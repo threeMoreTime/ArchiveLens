@@ -1,0 +1,15 @@
+# ArchiveLens Engine —— 精确依赖锁
+#
+# 本文件由 Phase 1 在 Windows 开发机生成（Python 3.11.9）。
+# Phase 7 打包前将在 clean venv 中重新生成，并随 PyInstaller one-folder 审计。
+#
+# 运行时依赖（进入打包审计）：
+pypdfium2==5.11.0
+Pillow==12.1.1
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.24.4
+pytesseract==0.3.13
+#
+# 打包/测试工具（开发依赖，不随应用运行时安装到用户机器）：
+pyinstaller==6.14.1
+pytest==9.0.2
