@@ -836,16 +836,57 @@ def _h_demo_create(server: Server, params: dict) -> dict:
 
 def _h_results_query(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
-    total, items = server.store.query_occurrences(
+    limit = _validate_results_page_parameter(params, "limit", default=100, minimum=1, maximum=200)
+    offset = _validate_results_page_parameter(params, "offset", default=0, minimum=0)
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    filters = {
+        "document": params.get("document"),
+        "status": params.get("status"),
+        "character": params.get("character"),
+        "search": params.get("search"),
+    }
+    review_summary = server.store.get_occurrence_review_summary(task_id=task_id, **filters)
+    total = review_summary["reviewed_count"] + review_summary["unreviewed_count"]
+    _total, items = server.store.query_occurrences(
         task_id=task_id,
-        limit=int(params.get("limit", 100)),
-        offset=int(params.get("offset", 0)),
-        document=params.get("document"),
-        status=params.get("status"),
-        character=params.get("character"),
-        search=params.get("search"),
+        limit=limit,
+        offset=offset,
+        total_override=total,
+        **filters,
     )
-    return {"total": total, "items": items, "task_id": task_id}
+    scan_complete = task["status"] == "completed"
+    review_complete = scan_complete and review_summary["unreviewed_count"] == 0
+    return {
+        "total": total,
+        "items": items,
+        "task_id": task_id,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < total,
+        "review_summary": review_summary,
+        "task_status": task["status"],
+        "scan_complete": scan_complete,
+        "review_complete": review_complete,
+    }
+
+
+def _validate_results_page_parameter(
+    params: dict,
+    key: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    value = params.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, f"{key} 必须是整数")
+    if value < minimum or (maximum is not None and value > maximum):
+        upper = f"，且不大于 {maximum}" if maximum is not None else ""
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, f"{key} 必须不小于 {minimum}{upper}")
+    return value
 
 
 def _h_results_detail(server: Server, params: dict) -> dict:
@@ -890,11 +931,35 @@ def _export_dir(server: Server, task_id: str) -> Path:
     return exports_dir
 
 
+def _export_integrity(server: Server, task: dict, total: int) -> dict[str, Any]:
+    review_summary = server.store.get_occurrence_review_summary(task_id=task["task_id"])
+    scan_complete = task["status"] == "completed"
+    review_complete = scan_complete and review_summary["unreviewed_count"] == 0
+    return {
+        "task_id": task["task_id"],
+        "task_status": task["status"],
+        "search_text": task["search_text"],
+        "search_terms": task["search_terms"],
+        "search_mode": task["search_mode"],
+        "total_occurrences": total,
+        "exported_occurrences": total,
+        **review_summary,
+        "scan_complete": scan_complete,
+        "review_complete": review_complete,
+        "export_complete": True,
+        "fully_verified": scan_complete and review_complete,
+        "exported_at": now_iso(),
+    }
+
+
 def _h_export_json(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
     total, items = server.store.query_occurrences(task_id=task_id, limit=10**9, offset=0)
-    payload = {"task": task, "occurrences": items, "exported_at": now_iso()}
+    integrity = _export_integrity(server, task, total)
+    payload = {"task": task, "occurrences": items, "integrity": integrity, "exported_at": integrity["exported_at"]}
     out = _export_dir(server, task_id) / f"{task_id}-report.json"
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     server.store.add_export(task_id=task_id, kind="json", path=str(out))
@@ -914,7 +979,10 @@ def _h_export_review(server: Server, params: dict) -> dict:
 def _h_export_html(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
     total, items = server.store.query_occurrences(task_id=task_id, limit=10**9, offset=0)
+    integrity = _export_integrity(server, task, total)
     def escaped(value: Any) -> str:
         return html.escape(str(value or ""), quote=True)
 
@@ -926,15 +994,28 @@ def _h_export_html(server: Server, params: dict) -> dict:
         for i, r in enumerate(items)
     )
     search_text = escaped(task.get("search_text"))
+    if not integrity["scan_complete"]:
+        integrity_banner = "<aside class='warning'>此报告是扫描未完成时的阶段性快照，结果仍可能增加。</aside>"
+    elif not integrity["review_complete"]:
+        integrity_banner = (
+            f"<aside class='warning'>此报告包含未完成校对的结果：尚有 "
+            f"{integrity['unreviewed_count']} 条未校对。</aside>"
+        )
+    else:
+        integrity_banner = "<aside class='complete'>扫描和校对均已完成，报告结果已完整核验。</aside>"
     html_document = (
         "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
         f"<title>ArchiveLens 报告 — {search_text}</title>"
         "<style>body{font-family:'Microsoft YaHei',sans-serif;padding:24px}"
-        "table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px 8px;font-size:13px}</style>"
+        "table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px 8px;font-size:13px}"
+        "aside{padding:10px 12px;margin:12px 0}.warning{background:#fff4ce;border-left:4px solid #d38b00}.complete{background:#e7f5e9;border-left:4px solid #2b8a3e}</style>"
         "</head><body>"
         f"<h1>ArchiveLens 检索报告</h1>"
         f"<p>检索词：{search_text}</p>"
-        f"<p>任务：{escaped(task.get('name'))} · 命中：{total}</p>"
+        f"<p>任务：{escaped(task.get('name'))} · 命中：{total}</p>{integrity_banner}"
+        f"<p>已校对：{integrity['reviewed_count']} · 未校对：{integrity['unreviewed_count']} · "
+        f"扫描完成：{str(integrity['scan_complete']).lower()} · 校对完成：{str(integrity['review_complete']).lower()} · "
+        f"导出完整：true</p>"
         f"<table><thead><tr><th>#</th><th>文件</th><th>页</th><th>匹配词</th><th>上下文</th><th>校对</th><th>备注</th></tr></thead>"
         f"<tbody>{rows}</tbody></table></body></html>"
     )

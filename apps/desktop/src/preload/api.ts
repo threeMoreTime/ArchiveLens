@@ -75,6 +75,27 @@ export interface OccurrenceItem {
   normalized_y1: number;
 }
 
+export interface ReviewSummary {
+  reviewed_count: number;
+  unreviewed_count: number;
+  confirmed_count: number;
+  needs_review_count: number;
+  rejected_count: number;
+}
+
+export interface ResultsPage {
+  task_id: string;
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  review_summary: ReviewSummary;
+  task_status: string;
+  scan_complete: boolean;
+  review_complete: boolean;
+  items: OccurrenceItem[];
+}
+
 export interface DemoResult {
   task_id: string;
   workspace_dir: string;
@@ -136,7 +157,7 @@ export interface ArchiveLensApi {
       status?: string | null;
       character?: string | null;
       search?: string | null;
-    }): Promise<{ total: number; items: OccurrenceItem[] }>;
+    }): Promise<ResultsPage>;
     getDetail(p: { task_id: string; occurrence_id: string }): Promise<OccurrenceItem>;
   };
   review: {

@@ -995,37 +995,104 @@ class TaskStore:
         status: str | None = None,
         character: str | None = None,
         search: str | None = None,
+        total_override: int | None = None,
     ) -> tuple[int, list[dict[str, Any]]]:
-        where = ["o.task_id=?"]
-        params: list[Any] = [task_id]
-        if document:
-            where.append("(o.file_name=? OR o.relative_path=?)")
-            params.extend([document, document])
-        if status:
-            where.append("o.verification_status=?")
-            params.append(status)
-        if character:
-            where.append("o.character_variant=?")
-            params.append(character)
-        if search:
-            where.append("o.context_full LIKE ?")
-            params.append(f"%{search}%")
-        clause = " AND ".join(where)
+        clause, params = self._occurrence_filter_clause(
+            task_id=task_id,
+            document=document,
+            status=status,
+            character=character,
+            search=search,
+        )
         with self._lock:
-            total = self.conn.execute(
-                f"SELECT COUNT(*) AS n FROM occurrences AS o WHERE {clause}", params
-            ).fetchone()["n"]
+            total = total_override
+            if total is None:
+                total = self.conn.execute(
+                    f"SELECT COUNT(*) AS n FROM occurrences AS o LEFT JOIN review_records r "
+                    f"ON r.task_id = o.task_id AND r.occurrence_id = o.occurrence_id WHERE {clause}",
+                    params,
+                ).fetchone()["n"]
             rows = self.conn.execute(
                 f"""SELECT o.*, r.decision AS review_decision, r.note AS review_note
                     FROM occurrences o
                     LEFT JOIN review_records r
                       ON r.task_id = o.task_id AND r.occurrence_id = o.occurrence_id
                     WHERE {clause}
-                    ORDER BY o.file_name, o.page_number, o.page_occurrence_index
+                    ORDER BY COALESCE(o.file_name, ''),
+                             o.page_number, o.page_occurrence_index, o.occurrence_id
                     LIMIT ? OFFSET ?""",
                 params + [limit, offset],
             ).fetchall()
         return int(total), [dict(r) for r in rows]
+
+    @staticmethod
+    def _occurrence_filter_clause(
+        *,
+        task_id: str,
+        document: str | None,
+        status: str | None,
+        character: str | None,
+        search: str | None,
+    ) -> tuple[str, list[Any]]:
+        where = ["o.task_id=?"]
+        params: list[Any] = [task_id]
+        if document:
+            where.append("(o.file_name=? OR o.relative_path=?)")
+            params.extend([document, document])
+        if status:
+            if status == "unreviewed":
+                where.append("r.decision IS NULL")
+            else:
+                where.append("r.decision=?")
+                params.append(status)
+        if character:
+            where.append("o.character_variant=?")
+            params.append(character)
+        if search:
+            where.append("o.context_full LIKE ?")
+            params.append(f"%{search}%")
+        return " AND ".join(where), params
+
+    def get_occurrence_review_summary(
+        self,
+        *,
+        task_id: str,
+        document: str | None = None,
+        status: str | None = None,
+        character: str | None = None,
+        search: str | None = None,
+    ) -> dict[str, int]:
+        """返回与结果列表使用相同筛选条件的人工校对统计。"""
+        clause, params = self._occurrence_filter_clause(
+            task_id=task_id,
+            document=document,
+            status=status,
+            character=character,
+            search=search,
+        )
+        with self._lock:
+            row = self.conn.execute(
+                f"""SELECT
+                        COUNT(*) AS total_count,
+                        SUM(CASE WHEN r.decision IS NOT NULL THEN 1 ELSE 0 END) AS reviewed_count,
+                        SUM(CASE WHEN r.decision = 'confirmed' THEN 1 ELSE 0 END) AS confirmed_count,
+                        SUM(CASE WHEN r.decision = 'needs_review' THEN 1 ELSE 0 END) AS needs_review_count,
+                        SUM(CASE WHEN r.decision = 'rejected' THEN 1 ELSE 0 END) AS rejected_count
+                    FROM occurrences o
+                    LEFT JOIN review_records r
+                      ON r.task_id = o.task_id AND r.occurrence_id = o.occurrence_id
+                    WHERE {clause}""",
+                params,
+            ).fetchone()
+        total = int(row["total_count"] or 0)
+        reviewed = int(row["reviewed_count"] or 0)
+        return {
+            "reviewed_count": reviewed,
+            "unreviewed_count": total - reviewed,
+            "confirmed_count": int(row["confirmed_count"] or 0),
+            "needs_review_count": int(row["needs_review_count"] or 0),
+            "rejected_count": int(row["rejected_count"] or 0),
+        }
 
     def get_occurrence_detail(self, task_id: str, occurrence_id: str) -> dict[str, Any] | None:
         with self._lock:

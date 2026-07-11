@@ -237,6 +237,37 @@ export const TasksListResultSchema = z.object({
   offset: z.number().int().nonnegative(),
 });
 
+export const ReviewSummarySchema = z.object({
+  reviewed_count: z.number().int().nonnegative(),
+  unreviewed_count: z.number().int().nonnegative(),
+  confirmed_count: z.number().int().nonnegative(),
+  needs_review_count: z.number().int().nonnegative(),
+  rejected_count: z.number().int().nonnegative(),
+});
+
+export const ResultsQueryParamsSchema = z.object({
+  task_id: z.string().min(1),
+  limit: z.number().int().min(1).max(200).optional(),
+  offset: z.number().int().nonnegative().optional(),
+  document: z.string().nullable().optional(),
+  status: z.enum(["confirmed", "needs_review", "rejected", "unreviewed"]).nullable().optional(),
+  character: z.string().nullable().optional(),
+  search: z.string().nullable().optional(),
+});
+
+export const ResultsQueryResultSchema = z.object({
+  task_id: z.string().min(1),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().min(1).max(200),
+  offset: z.number().int().nonnegative(),
+  has_more: z.boolean(),
+  review_summary: ReviewSummarySchema,
+  task_status: z.string().min(1),
+  scan_complete: z.boolean(),
+  review_complete: z.boolean(),
+  items: z.array(z.record(z.string(), z.unknown())),
+});
+
 export const TaskSearchEventPayloadSchema = z.object({
   search_text: z.string().min(1),
   search_terms: z.array(z.string().min(1)).min(1),
@@ -247,6 +278,7 @@ export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "tasks.create") return TaskCreateResultSchema.parse(value);
   if (method === "tasks.get") return TaskSummarySchema.parse(value);
   if (method === "tasks.list") return TasksListResultSchema.parse(value);
+  if (method === "results.query") return ResultsQueryResultSchema.parse(value);
   return value;
 }
 
