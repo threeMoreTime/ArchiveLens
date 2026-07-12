@@ -97,7 +97,7 @@ describe("LifecycleController", () => {
     expect(timedOut.outcome).toBe("timed_out");
     expect(controller.getState().awaitingTimeoutResolution).toBe(true);
     expect(sidecar.call).toHaveBeenCalledTimes(2);
-    expect(sidecar.call).toHaveBeenCalledWith("tasks.pause", { task_id: "task-1" }, 500);
+    expect(sidecar.call).toHaveBeenCalledWith("tasks.pause", { task_id: "task-1" }, 5_000);
 
     const resumeWait = await controller.selectCloseAction("continue_waiting");
     expect(resumeWait.outcome).toBe("timed_out");
@@ -141,7 +141,7 @@ describe("LifecycleController", () => {
 
     const continued = await controller.selectCloseAction("continue_waiting");
     expect(continued.outcome).toBe("quit");
-    expect(sidecar.call).toHaveBeenCalledWith("tasks.pause", { task_id: "task-1" }, 500);
+    expect(sidecar.call).toHaveBeenCalledWith("tasks.pause", { task_id: "task-1" }, 5_000);
     expect(sidecar.stop).toHaveBeenCalledTimes(1);
     expect(appControl.exit).toHaveBeenCalledWith(0);
   });
@@ -164,7 +164,7 @@ describe("LifecycleController", () => {
     const cancelled = await controller.selectCloseAction("cancel");
 
     expect(cancelled.outcome).toBe("cancelled");
-    expect(sidecar.call).toHaveBeenCalledWith("tasks.resume", { task_id: "task-1" }, 500);
+    expect(sidecar.call).toHaveBeenCalledWith("tasks.resume", { task_id: "task-1" }, 5_000);
     expect(controller.getState().shutdownFlowRunning).toBe(false);
     expect(controller.getState().awaitingTimeoutResolution).toBe(false);
   });
@@ -181,7 +181,7 @@ describe("LifecycleController", () => {
     const stopped = await controller.selectCloseAction("stop_and_quit");
 
     expect(stopped.outcome).toBe("quit");
-    expect(sidecar.call).toHaveBeenCalledWith("tasks.cancel", { task_id: "task-1" }, 500);
+    expect(sidecar.call).toHaveBeenCalledWith("tasks.cancel", { task_id: "task-1" }, 5_000);
     expect(appControl.exit).toHaveBeenCalledWith(0);
   });
 });

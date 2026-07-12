@@ -75,6 +75,10 @@ export interface LifecycleController {
   reset(): void;
 }
 
+// The close-flow timeout controls how long we wait for a state transition, not
+// how long the sidecar gets to acknowledge a control command on a busy runner.
+const CONTROL_REQUEST_TIMEOUT_FLOOR_MS = 5_000;
+
 function initialState(): LifecycleState {
   return {
     shutdownFlowRunning: false,
@@ -87,10 +91,11 @@ function initialState(): LifecycleState {
 
 export function createLifecycleController(deps: LifecycleControllerDeps): LifecycleController {
   const state = initialState();
+  const controlRequestTimeoutMs = Math.max(deps.timeoutMs, CONTROL_REQUEST_TIMEOUT_FLOOR_MS);
 
   async function getTaskStatus(taskId: string): Promise<string | null> {
     try {
-      const task = await deps.sidecar.call<{ status?: unknown }>("tasks.get", { task_id: taskId }, deps.timeoutMs);
+      const task = await deps.sidecar.call<{ status?: unknown }>("tasks.get", { task_id: taskId }, controlRequestTimeoutMs);
       return typeof task?.status === "string" ? task.status : null;
     } catch {
       return null;
@@ -177,7 +182,7 @@ export function createLifecycleController(deps: LifecycleControllerDeps): Lifecy
           const status = await getTaskStatus(taskId);
           if (status !== null && status !== "running" && status !== "completed" && status !== "cancelled") {
             try {
-              await deps.sidecar.call("tasks.resume", { task_id: taskId }, deps.timeoutMs);
+              await deps.sidecar.call("tasks.resume", { task_id: taskId }, controlRequestTimeoutMs);
             } catch (error) {
               deps.logger.warn(`生命周期动作 cancel：恢复任务失败 task=${taskId} error=${String(error)}`);
             }
@@ -215,7 +220,7 @@ export function createLifecycleController(deps: LifecycleControllerDeps): Lifecy
 
       if (action === "pause_and_quit") {
         deps.logger.info(`生命周期动作 pause_and_quit：task=${taskId}`);
-        await deps.sidecar.call("tasks.pause", { task_id: taskId }, deps.timeoutMs);
+        await deps.sidecar.call("tasks.pause", { task_id: taskId }, controlRequestTimeoutMs);
         const paused = await waitForPausedState(taskId);
         if (!paused) {
           state.awaitingTimeoutResolution = true;
@@ -227,7 +232,7 @@ export function createLifecycleController(deps: LifecycleControllerDeps): Lifecy
 
       if (action === "stop_and_quit") {
         deps.logger.info(`生命周期动作 stop_and_quit：task=${taskId}`);
-        await deps.sidecar.call("tasks.cancel", { task_id: taskId }, deps.timeoutMs);
+        await deps.sidecar.call("tasks.cancel", { task_id: taskId }, controlRequestTimeoutMs);
         await waitForTaskState(taskId, "task.cancelled", "cancelled");
         return performQuit();
       }
