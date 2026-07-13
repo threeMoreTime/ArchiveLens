@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { Button, Input, Text, Textarea } from "@fluentui/react-components";
+import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
 
 const DEFAULT_PAGE_SIZE = 100;
 const PAGE_SIZES = [50, 100, 200] as const;
@@ -12,7 +13,7 @@ interface Occurrence {
   matched_text: string;
   character_variant: string | null;
   context_full: string;
-  ocr_confidence: number;
+  ocr_confidence: number | null;
   verification_status: string;
   review_decision: string | null;
   review_note: string | null;
@@ -48,8 +49,13 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "操作失败，请重试";
 }
 
+function confidenceLabel(value: number | null) {
+  return typeof value === "number" ? value.toFixed(2) : "未提供置信度";
+}
+
 export default function ReviewPage() {
   const { taskId = "" } = useParams();
+  const nav = useNavigate();
   const [items, setItems] = useState<Occurrence[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
@@ -297,6 +303,7 @@ export default function ReviewPage() {
 
   return (
     <div className="al-review">
+      <div className="al-review-title"><PageHeader title="校对工作台" description="逐条确认 OCR 命中结果，所有校对与备注均保存到本地任务。" /></div>
       <div className="al-review-toolbar">
         <select value={statusFilter} aria-label="校对状态筛选" onChange={(event) => resetToFirstPage(() => setStatusFilter(event.target.value))}>
           <option value="">全部校对状态</option>
@@ -318,6 +325,7 @@ export default function ReviewPage() {
         </select>
         <Text className="al-muted">{total === 0 ? "无结果" : `第 ${pageStart}–${pageEnd} 条，共 ${total} 条`}</Text>
         <div className="al-spacer" />
+        <Button onClick={() => nav(`/export/${taskId}`)}>导出中心</Button>
         <Button onClick={exportJson}>导出 JSON</Button>
         <Button appearance="primary" onClick={exportHtml}>导出 HTML</Button>
       </div>
@@ -328,13 +336,13 @@ export default function ReviewPage() {
         <span>确认 {reviewSummary.confirmed_count} · 待判断 {reviewSummary.needs_review_count} · 排除 {reviewSummary.rejected_count}</span>
         <strong>{reviewComplete ? "校对已完成" : "校对未完成"}</strong>
       </div>
-      {queryError && <div className="al-review-error" role="alert">查询失败：{queryError}</div>}
-      {actionError && <div className="al-review-error" role="alert">{actionError}</div>}
+      {queryError && <InlineFeedback>{`查询失败：${queryError}`}</InlineFeedback>}
+      {actionError && <InlineFeedback>{actionError}</InlineFeedback>}
 
       <div className="al-review-body">
         <div className="al-result-list" aria-busy={loading}>
-          {loading && items.length === 0 && <div className="al-muted al-list-message">正在加载结果…</div>}
-          {!loading && items.length === 0 && <div className="al-muted al-list-message">当前筛选没有结果</div>}
+          {loading && items.length === 0 && <div className="al-list-message"><LoadingState label="正在加载校对结果…" /></div>}
+          {!loading && items.length === 0 && <div className="al-list-message"><Text weight="semibold">当前筛选没有结果</Text><Text className="al-muted">调整筛选条件，或返回任务查看扫描状态。</Text></div>}
           {items.map((item) => (
             <div
               key={item.occurrence_id}
@@ -346,7 +354,7 @@ export default function ReviewPage() {
                 <span className={"al-tag al-tag-" + (item.review_decision || item.verification_status)}>{item.matched_text}</span>
                 <span className="al-filename" title={item.file_name}>{item.file_name}</span>
               </div>
-              <div className="al-result-line2">第 {item.page_number} 页 · 置信 {(item.ocr_confidence ?? 0).toFixed(2)}</div>
+              <div className="al-result-line2">第 {item.page_number} 页 · 置信 {confidenceLabel(item.ocr_confidence)}</div>
               <div className="al-result-ctx">{item.context_full}</div>
             </div>
           ))}
@@ -371,7 +379,7 @@ export default function ReviewPage() {
                 )}
                 {assetUrl(taskId, selected.crop_image_relpath) && <img className="al-crop" src={assetUrl(taskId, selected.crop_image_relpath)} alt="检索词截取" />}
               </div>
-              <div className="al-detail-meta"><div>上下文：{selected.context_full}</div><div className="al-muted">OCR 置信 {(selected.ocr_confidence ?? 0).toFixed(2)} · 状态 {selected.verification_status}</div></div>
+              <div className="al-detail-meta"><div>上下文：{selected.context_full}</div><div className="al-muted">OCR 置信 {confidenceLabel(selected.ocr_confidence)} · 状态 {selected.verification_status}</div></div>
               <div className="al-actions">
                 <Button appearance="primary" onClick={() => void applyDecision("confirmed")}>已确认 (A)</Button>
                 <Button onClick={() => void applyDecision("needs_review")}>待判断 (S)</Button>
@@ -391,6 +399,12 @@ export default function ReviewPage() {
             </>
           )}
         </div>
+        <aside className="al-review-aside" aria-label="校对摘要与快捷键">
+          <section className="al-review-aside-card"><Text weight="semibold">校对摘要</Text><dl><div><dt>全部结果</dt><dd>{total}</dd></div><div><dt>已校对</dt><dd>{reviewSummary.reviewed_count}</dd></div><div><dt>未校对</dt><dd>{reviewSummary.unreviewed_count}</dd></div></dl><div className="al-review-mini-progress"><span style={{ width: `${total ? reviewSummary.reviewed_count / total * 100 : 0}%` }} /></div><Text className="al-muted">确认 {reviewSummary.confirmed_count} · 待复核 {reviewSummary.needs_review_count} · 拒绝 {reviewSummary.rejected_count}</Text></section>
+          <section className="al-review-aside-card"><Text weight="semibold">当前状态</Text><Text>{scanComplete ? "扫描已完成" : `扫描仍在进行（${taskStatus || "状态未知"}）`}</Text><Text>{reviewComplete ? "全部结果已校对" : "仍有结果等待人工处理"}</Text></section>
+          <section className="al-review-aside-card"><Text weight="semibold">快捷键</Text><div className="al-shortcut-list"><span><kbd>A</kbd> 确认</span><span><kbd>S</kbd> 待复核</span><span><kbd>D</kbd> 拒绝</span><span><kbd>J</kbd>/<kbd>K</kbd> 下一条/上一条</span><span><kbd>N</kbd> 下一条未校对</span><span><kbd>Ctrl</kbd> + <kbd>Enter</kbd> 保存备注</span></div></section>
+          <section className="al-review-aside-card al-review-local-note"><Text weight="semibold">本地处理</Text><Text className="al-muted">校对决定与备注将保存到当前任务数据库。</Text></section>
+        </aside>
       </div>
     </div>
   );
