@@ -36,6 +36,7 @@ export default function App() {
   ) as { task_id: string } | undefined;
   const firstRecoverableTaskId = firstRecoverableTask?.task_id ?? null;
   const currentTaskId = firstRecoverableTaskId ?? latestTask?.task_id ?? null;
+  const exportPath = currentTaskId ? `/export/${currentTaskId}` : "/export";
 
   return (
     <div className="al-app">
@@ -50,7 +51,7 @@ export default function App() {
           </NavLink>
           {currentTaskId ? <NavLink to={`/tasks/${currentTaskId}`} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ClipboardTaskListLtrRegular /> 任务</NavLink> : <span className="al-navlink disabled" aria-disabled="true"><ClipboardTaskListLtrRegular /> 任务</span>}
           {currentTaskId ? <NavLink to={`/review/${currentTaskId}`} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><EditRegular /> 校对</NavLink> : <span className="al-navlink disabled" aria-disabled="true"><EditRegular /> 校对</span>}
-          <NavLink to="/export" className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ShareRegular /> 导出</NavLink>
+          <NavLink to={exportPath} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ShareRegular /> 导出</NavLink>
         </nav>
         {recoverable.length > 0 && (
           <div className="al-recoverable">

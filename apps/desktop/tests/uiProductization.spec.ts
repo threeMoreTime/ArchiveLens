@@ -7,6 +7,7 @@ function source(relativePath: string) {
 }
 
 const welcome = source("pages/Welcome.tsx");
+const app = source("App.tsx");
 const newScan = source("pages/NewScan.tsx");
 const taskPage = source("pages/TaskPage.tsx");
 const reviewPage = source("pages/ReviewPage.tsx");
@@ -18,6 +19,11 @@ describe("桌面端产品化 UI contract", () => {
     expect(welcome).toContain("window.archiveLens.app");
     expect(welcome).toContain("当前任务");
     expect(welcome).toContain("最近任务");
+  });
+
+  it("当前任务存在时，侧栏导出入口保留真实任务上下文", () => {
+    expect(app).toContain('const exportPath = currentTaskId ? `/export/${currentTaskId}` : "/export"');
+    expect(app).toContain("<NavLink to={exportPath}");
   });
 
   it("新建扫描展示三种来源，但明确单文件和多文件尚未接入任务协议", () => {
