@@ -34,7 +34,8 @@ describe("校对全量访问 UI contract", () => {
   });
 
   it("详情在历史或合成结果缺少 OCR 置信度时仍可渲染", () => {
-    expect(reviewPage).toContain("(selected.ocr_confidence ?? 0).toFixed(2)");
+    expect(reviewPage).toContain("confidenceLabel(selected.ocr_confidence)");
+    expect(reviewPage).toContain('"未提供置信度"');
   });
 
   it("未完成扫描或校对时要求确认导出", () => {

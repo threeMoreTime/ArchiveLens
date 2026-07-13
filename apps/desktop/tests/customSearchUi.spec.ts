@@ -16,7 +16,7 @@ describe("自定义检索词 UI wiring", () => {
     expect(source).toContain("SearchTextSchema.safeParse");
     expect(source).toContain("search_text: searchText");
     expect(source).toContain("请输入检索文字或词语");
-    expect(source).toContain("role=\"alert\"");
+    expect(source).toContain("<InlineFeedback>{searchError}</InlineFeedback>");
     expect(source).toContain("区分大小写");
     expect(source).toContain("sourceDir");
   });
