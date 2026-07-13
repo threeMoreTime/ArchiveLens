@@ -57,4 +57,8 @@ describe("桌面端产品化 UI contract", () => {
     expect(exportPage).toContain("window.archiveLens.export.html(taskId)");
     expect(exportPage).toContain("而非当前校对页或已加载的项目");
   });
+
+  it("切换导出任务时不会沿用上一任务的导出成功状态", () => {
+    expect(exportPage).toContain("setResult(null);");
+  });
 });

@@ -44,6 +44,8 @@ export default function ExportPage() {
 
   useEffect(() => {
     let active = true;
+    // Export feedback belongs to one task only; never carry it into a new task.
+    setResult(null);
     if (!taskId) {
       setTask(null);
       setSummary(null);
