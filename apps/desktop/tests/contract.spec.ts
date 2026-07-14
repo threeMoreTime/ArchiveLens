@@ -10,6 +10,7 @@ import {
   TaskCreateParamsSchema,
   EngineReadyEventSchema,
   TaskCreateResultSchema,
+  TaskDeleteResultSchema,
   TaskSummarySchema,
   TasksListResultSchema,
   normalizeSearchText,
@@ -85,6 +86,14 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     }
   });
 
+  it("任务来源兼容文件夹、单文件和多文件清单，并限制文件数量", () => {
+    expect(TaskCreateParamsSchema.safeParse({ source_dir: "E:\\OCR", search_text: "档案" }).success).toBe(true);
+    expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: ["E:\\OCR\\a.pdf"], search_text: "档案" }).success).toBe(true);
+    expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: ["E:\\a.pdf", "F:\\b.djvu"], search_text: "档案" }).success).toBe(true);
+    expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: [], search_text: "档案" }).success).toBe(false);
+    expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: Array.from({ length: 201 }, (_, index) => `E:\\${index}.pdf`), search_text: "档案" }).success).toBe(false);
+  });
+
   it("review-update 合法 decision 通过", () => {
     expect(RequestSchema.safeParse(load("review-update.json")).success).toBe(true);
   });
@@ -147,9 +156,11 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
       search_mode: "exact_literal", processed_pages: 3, total_pages: 10, occurrence_count: 2,
       worker_generation: 1, last_event_sequence: 5,
     };
-    expect(TaskSummarySchema.safeParse(task).success).toBe(true);
-    expect(TasksListResultSchema.safeParse({ items: [task], limit: 50, offset: 0 }).success).toBe(true);
-    expect(TaskCreateResultSchema.safeParse({ ...task, file_count: 1, source_dir: "E:\\OCR" }).success).toBe(true);
+    expect(TaskSummarySchema.safeParse({ ...task, failures: [{ file_path: "破损.pdf", page_number: 2, stage: "page_process", error_type: "DecodeError", error_message: "页面无法解码", possible_missed_hits: true }] }).success).toBe(true);
+    expect(TasksListResultSchema.safeParse({ items: [task], limit: 50, offset: 0, total: 1 }).success).toBe(true);
+    expect(TaskCreateResultSchema.safeParse({ ...task, file_count: 1, source_dir: "E:\\OCR", source_kind: "files", source_label: "a.pdf", source_files: ["E:\\OCR\\a.pdf"] }).success).toBe(true);
+    expect(TaskDeleteResultSchema.safeParse({ task_id: "task-1", deleted: true }).success).toBe(true);
+    expect(TaskDeleteResultSchema.safeParse({ task_id: "task-1", deleted: false }).success).toBe(false);
     expect(TaskSummarySchema.safeParse({ ...task, search_terms: undefined }).success).toBe(false);
   });
 

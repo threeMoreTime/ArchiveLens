@@ -238,7 +238,7 @@ async function waitForProcessedAtLeast(win: Page, taskId: string, pageNo: number
   await expect.poll(async () => {
     const ids = await getProcessedPageIds(win, taskId);
     return ids[ids.length - 1] ?? 0;
-  }, { timeout: timeoutMs }).toBeGreaterThanOrEqual(pageNo);
+  }, { timeout: timeoutMs, intervals: [50, 100, 100, 100] }).toBeGreaterThanOrEqual(pageNo);
   return getProcessedPageIds(win, taskId);
 }
 
@@ -402,7 +402,7 @@ async function restartAndResumeTask(userDataDir: string, taskId: string, previou
   try {
     win = await firstWindow(app);
     await expect(win.getByText(/发现 1 个未完成任务/)).toBeVisible();
-    await win.getByRole("button", { name: "查看" }).click();
+    await win.getByRole("button", { name: "查看", exact: true }).click();
     await navigateToTask(win, taskId);
     await expect(win.getByRole("button", { name: "继续" })).toBeVisible();
 
@@ -460,6 +460,14 @@ async function runPauseResumeScenario(pausePage: number, attempt = 1): Promise<P
   await selectCloseAction(firstWin, "pause_and_quit").catch(() => ({ outcome: "quit" }));
   await waitForPidExit(firstAppPid);
   await waitForPidExit(firstEnginePid);
+
+  const snapshotAfterExit = await readPersistedTaskSnapshot(userDataDir, taskId);
+  if (snapshotAfterExit.task?.status === "completed") {
+    if (attempt >= 2) {
+      throw new Error(`page ${pausePage} 在暂停请求到达前连续自然完成`);
+    }
+    return runPauseResumeScenario(pausePage, attempt + 1);
+  }
 
   const resumedSnapshot = await restartAndResumeTask(userDataDir, taskId, firstEnginePid);
   expect(resumedSnapshot.task?.status).toBe("completed");
@@ -644,7 +652,7 @@ test("Lifecycle: restart recover resumes from checkpoint without duplicates or m
   try {
     secondWin = await firstWindow(secondApp);
     await expect(secondWin.getByText(/发现 1 个未完成任务/)).toBeVisible();
-    await secondWin.getByRole("button", { name: "查看" }).click();
+    await secondWin.getByRole("button", { name: "查看", exact: true }).click();
     await navigateToTask(secondWin, taskId);
     await expect(secondWin.getByRole("button", { name: "继续" })).toBeVisible();
 
@@ -764,7 +772,7 @@ test("Lifecycle: sidecar crash is recoverable after relaunch and resume preserve
   try {
     secondWin = await firstWindow(secondApp);
     await expect(secondWin.getByText(/发现 1 个未完成任务/)).toBeVisible();
-    await secondWin.getByRole("button", { name: "查看" }).click();
+    await secondWin.getByRole("button", { name: "查看", exact: true }).click();
     await navigateToTask(secondWin, taskId);
     await secondWin.getByRole("button", { name: "继续" }).click();
     await waitForTaskCompletion(secondWin, taskId);

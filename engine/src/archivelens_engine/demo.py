@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -141,8 +142,73 @@ def _build_occurrences() -> list[dict[str, Any]]:
 
 
 def _render_images(pages_dir: Path, crops_dir: Path, occurrences: list[dict[str, Any]]) -> None:
-    """用 Pillow 生成简单的出处页（含字符红框）与字符截取图。"""
-    from PIL import Image, ImageDraw  # 延迟导入，避免 demo 模块强依赖
+    """用 Pillow 生成完整档案页，并将命中框定位到正文中的实际文字。"""
+    from PIL import Image, ImageDraw, ImageFont  # 延迟导入，避免 demo 模块强依赖
+
+    def load_font(size: int) -> Any:
+        candidates = [
+            Path(os.environ.get("WINDIR", r"C:\\Windows")) / "Fonts" / "msyh.ttc",
+            Path(os.environ.get("WINDIR", r"C:\\Windows")) / "Fonts" / "simhei.ttf",
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                try:
+                    return ImageFont.truetype(str(candidate), size)
+                except OSError:
+                    continue
+        return ImageFont.load_default()
+
+    title_font = load_font(20)
+    meta_font = load_font(14)
+    body_font = load_font(16)
+
+    def document_lines(occurrence: dict[str, Any]) -> list[str]:
+        """构造一页可供校对的完整档案正文，命中上下文保留为其中一行。"""
+        return [
+            "兹将本卷所载事由，依原件顺序录列如下。",
+            "本案所涉往来文书、收讫日期，均已核对存档。",
+            "经办人员应按既定章程办理，不得擅改原始记载。",
+            "凡需交付之物，应具明细并由双方留存凭据。",
+            "如遇字迹漫漶，仍以卷内原文及旁注为准。",
+            str(occurrence["context_full"]),
+            "其余条款照前页办理，相关附件随卷备查。",
+            "本页所列事项，经复核后归入本案档案库。",
+            "谨此载明，以便日后检索、校勘与追溯。",
+            "立卷日期、卷宗编号及保管信息详见卷首。",
+            "以上文字均为本页完整内容的演示性摘录。",
+        ]
+
+    def update_bbox_from_body_text(
+        occurrence: dict[str, Any], draw: Any, body_x: int, body_y: int
+    ) -> tuple[int, int, int, int]:
+        """返回正文中命中字符的像素框，同时同步 occurrence 的坐标字段。"""
+        before = str(occurrence["context_before"])
+        character = str(occurrence["matched_character"])
+        char_x = body_x + round(draw.textlength(before, font=body_font))
+        raw_x0, raw_y0, raw_x1, raw_y1 = draw.textbbox(
+            (char_x, body_y), character, font=body_font
+        )
+        x0, y0 = max(0, raw_x0 - 2), max(0, raw_y0 - 2)
+        x1, y1 = min(int(occurrence["page_image_width"]), raw_x1 + 2), min(
+            int(occurrence["page_image_height"]), raw_y1 + 2
+        )
+        width = float(occurrence["page_image_width"])
+        height = float(occurrence["page_image_height"])
+        occurrence.update(
+            {
+                "source_x0": float(x0),
+                "source_y0": float(y0),
+                "source_x1": float(x1),
+                "source_y1": float(y1),
+                "normalized_x0": x0 / width,
+                "normalized_y0": y0 / height,
+                "normalized_x1": x1 / width,
+                "normalized_y1": y1 / height,
+            }
+        )
+        return x0, y0, x1, y1
 
     seen_pages: set[str] = set()
     for occ in occurrences:
@@ -154,18 +220,25 @@ def _render_images(pages_dir: Path, crops_dir: Path, occurrences: list[dict[str,
             img = Image.new("RGB", (w, h), (250, 246, 238))
             draw = ImageDraw.Draw(img)
             draw.rectangle([40, 40, w - 40, h - 40], outline=(190, 180, 160), width=2)
+            draw.text((64, 68), "ArchiveLens 档案校对副本", fill=(65, 54, 40), font=title_font)
+            draw.text(
+                (64, 102),
+                f"{occ['file_name']} · 第 {occ['page_number']} 页 · 演示全文页",
+                fill=(90, 78, 60),
+                font=meta_font,
+            )
+            draw.line([64, 132, w - 64, 132], fill=(205, 196, 181), width=1)
+            body_x, body_y, line_height = 68, 158, 34
+            for line_index, line in enumerate(document_lines(occ)):
+                line_y = body_y + line_index * line_height
+                draw.text((body_x, line_y), line, fill=(55, 48, 38), font=body_font)
+                if line == str(occ["context_full"]):
+                    update_bbox_from_body_text(occ, draw, body_x, line_y)
             img.save(pages_dir / f"{page_id}.png")
-        # 字符位置红框（叠加在页图副本上）
+        # 详情页由前端叠加命中框；截取图单独保留边框，避免整页出现双重高亮。
         w = int(occ["page_image_width"])
         h = int(occ["page_image_height"])
         page_img = Image.open(pages_dir / f"{page_id}.png").convert("RGB")
-        draw = ImageDraw.Draw(page_img)
-        draw.rectangle(
-            [occ["source_x0"], occ["source_y0"], occ["source_x1"], occ["source_y1"]],
-            outline=(196, 69, 22),
-            width=3,
-        )
-        page_img.save(pages_dir / f"{page_id}.png")
         # 字符截取图（bbox 区域，加内边距）
         pad = 16
         cx0 = max(0, int(occ["source_x0"]) - pad)
@@ -173,6 +246,8 @@ def _render_images(pages_dir: Path, crops_dir: Path, occurrences: list[dict[str,
         cx1 = min(w, int(occ["source_x1"]) + pad)
         cy1 = min(h, int(occ["source_y1"]) + pad)
         crop = page_img.crop((cx0, cy0, cx1, cy1))
+        crop_draw = ImageDraw.Draw(crop)
+        crop_draw.rectangle([1, 1, crop.width - 2, crop.height - 2], outline=(196, 69, 22), width=2)
         crop_id = Path(occ["crop_image_relpath"]).stem
         crop.save(crops_dir / f"{crop_id}.png")
 

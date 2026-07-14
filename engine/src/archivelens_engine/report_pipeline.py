@@ -78,6 +78,7 @@ class DocumentRecord:
     file_hash_sha256: str
     modified_time: float
     page_count: int
+    source_id: str = ""
 
 
 class ReportPipeline:
@@ -89,6 +90,7 @@ class ReportPipeline:
         page_limit: int | None = None,
         document_limit: int | None = None,
         include_paths: set[str] | None = None,
+        source_files: list[dict[str, Any]] | None = None,
         start_page_index: int | None = None,
         end_page_index_exclusive: int | None = None,
         config: EngineConfig | None = None,
@@ -113,6 +115,7 @@ class ReportPipeline:
         self.page_limit = page_limit
         self.document_limit = document_limit
         self.include_paths = include_paths or set()
+        self.source_files = [dict(source) for source in source_files] if source_files else []
         self.start_page_index = start_page_index
         self.end_page_index_exclusive = end_page_index_exclusive
         if TESSDATA_DIR.exists():
@@ -206,6 +209,17 @@ class ReportPipeline:
 
     def _scan_documents(self) -> list[DocumentRecord]:
         results: list[DocumentRecord] = []
+        if self.source_files:
+            for source in self.source_files:
+                path = Path(str(source["file_path"]))
+                results.append(
+                    self._make_document_record(
+                        path,
+                        relative_path=str(source.get("display_path") or path.name),
+                        source_id=str(source["source_id"]),
+                    )
+                )
+            return results
         for path in sorted(self.root_dir.rglob("*")):
             if not path.is_file():
                 continue
@@ -221,12 +235,20 @@ class ReportPipeline:
             results.append(self._make_document_record(path))
         return results
 
-    def _make_document_record(self, path: Path) -> DocumentRecord:
+    def _make_document_record(
+        self,
+        path: Path,
+        *,
+        relative_path: str | None = None,
+        source_id: str | None = None,
+    ) -> DocumentRecord:
         page_count = self._page_count(path)
+        display_path = relative_path or str(path.relative_to(self.root_dir))
         return DocumentRecord(
             document_id=str(uuid.uuid4()),
             file_path=path,
-            relative_path=str(path.relative_to(self.root_dir)),
+            relative_path=display_path,
+            source_id=source_id or display_path,
             file_type=path.suffix.lower().lstrip(".").upper(),
             file_size_bytes=path.stat().st_size,
             file_hash_sha256=self._sha256(path),
@@ -311,7 +333,7 @@ class ReportPipeline:
         if self.end_page_index_exclusive is not None:
             page_stop = min(page_stop, self.end_page_index_exclusive)
         start = self.start_page_index or 0
-        state = self.resume_state_by_source.get(document.relative_path, {})
+        state = self.resume_state_by_source.get(document.source_id or document.relative_path, {})
         processed = {int(page_no) for page_no in state.get("processed_page_ids", [])}
         return [index for index in range(start, page_stop) if index + 1 not in processed]
 

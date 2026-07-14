@@ -25,6 +25,9 @@ export interface TaskSummary {
   task_id: string;
   name: string;
   source_dir: string;
+  source_kind?: "folder" | "files";
+  source_label?: string;
+  source_files?: string[];
   output_dir: string;
   workspace_dir: string;
   status: string;
@@ -43,6 +46,25 @@ export interface TaskSummary {
   search_text: string;
   search_terms: string[];
   search_mode: "exact_literal" | "legacy_fixed_pair";
+  failures?: TaskFailure[];
+}
+
+export interface TaskFailure {
+  failure_id?: string;
+  file_path: string;
+  page_number: number | null;
+  stage: string;
+  error_type: string;
+  error_message: string;
+  possible_missed_hits: boolean;
+}
+
+export interface ExportRecord {
+  export_id: string;
+  task_id: string;
+  kind: string;
+  path: string;
+  created_at: string;
 }
 
 export interface OccurrenceItem {
@@ -116,6 +138,7 @@ export interface ArchiveLensApi {
   dialog: {
     selectFolder(): Promise<string | null>;
     selectFile(): Promise<string | null>;
+    selectFiles(p: { multiple: boolean }): Promise<string[] | null>;
   };
   subscribe: {
     onEvent(cb: (event: Event) => void): () => void;
@@ -123,8 +146,13 @@ export interface ArchiveLensApi {
     onRecoverable(cb: (tasks: unknown[]) => void): () => void;
   };
   tasks: {
-    create(p: {
+    create(p: ({
+      source_type?: "folder";
       source_dir: string;
+    } | {
+      source_type: "files";
+      source_files: string[];
+    }) & {
       search_text: string;
       output_dir?: string;
       name?: string;
@@ -133,6 +161,9 @@ export interface ArchiveLensApi {
       task_id: string;
       status: string;
       source_dir: string;
+      source_kind?: "folder" | "files";
+      source_label?: string;
+      source_files?: string[];
       file_count: number;
       search_text: string;
       search_terms: string[];
@@ -140,10 +171,11 @@ export interface ArchiveLensApi {
     }>;
     start(task_id: string): Promise<{ task_id: string; status: string }>;
     get(task_id: string): Promise<TaskSummary>;
-    list(p?: { limit?: number; offset?: number; status?: string }): Promise<{ items: TaskSummary[]; limit: number; offset: number }>;
+    list(p?: { limit?: number; offset?: number; status?: string; query?: string }): Promise<{ items: TaskSummary[]; limit: number; offset: number; total: number }>;
     pause(task_id: string): Promise<{ task_id: string; status: string }>;
     resume(task_id: string): Promise<{ task_id: string; status: string }>;
     cancel(task_id: string): Promise<{ task_id: string; status: string }>;
+    delete(task_id: string): Promise<{ task_id: string; deleted: true }>;
   };
   demo: {
     create(): Promise<DemoResult>;
@@ -176,6 +208,7 @@ export interface ArchiveLensApi {
     json(task_id: string): Promise<{ path: string; occurrence_count: number }>;
     review(task_id: string): Promise<{ path: string; record_count: number }>;
     html(task_id: string): Promise<{ path: string; occurrence_count: number }>;
+    list(task_id: string, p?: { limit?: number; offset?: number }): Promise<{ task_id: string; items: ExportRecord[]; limit: number; offset: number }>;
   };
   files: {
     openFolder(path: string): Promise<{ ok: boolean }>;

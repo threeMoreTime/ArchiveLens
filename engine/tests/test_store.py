@@ -37,6 +37,60 @@ class TaskStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get_task(tid)["status"], "running")
         self.assertEqual(len(self.store.list_tasks()), 1)
 
+    def test_task_list_supports_search_status_and_total_count(self) -> None:
+        first = self.store.create_task(source_dir=r"C:\档案\县志", name="县志检索", search_terms=["契约"], search_mode="exact_literal")
+        second = self.store.create_task(source_dir=r"C:\档案\报纸", name="报纸检索", search_terms=["新闻"], search_mode="exact_literal")
+        self.store.update_task(first, status="completed")
+        self.store.update_task(second, status="running")
+
+        self.assertEqual([task["task_id"] for task in self.store.list_tasks(query="县志")], [first])
+        self.assertEqual([task["task_id"] for task in self.store.list_tasks(query="新闻")], [second])
+        self.assertEqual(self.store.count_tasks(status="completed"), 1)
+        self.assertEqual(self.store.count_tasks(query="档案"), 2)
+
+    def test_file_sources_are_persisted_and_searchable(self) -> None:
+        task_id = self.store.create_task(
+            source_kind="files",
+            source_label="2 个已选文件",
+            source_files=[
+                {"source_id": "source-a", "file_path": r"C:\甲\同名.pdf", "display_path": "甲/同名.pdf"},
+                {"source_id": "source-b", "file_path": r"D:\乙\同名.pdf", "display_path": "乙/同名.pdf"},
+            ],
+            search_terms=["档案"],
+            search_mode="exact_literal",
+        )
+        task = self.store.get_task(task_id)
+        assert task is not None
+        self.assertEqual(task["source_kind"], "files")
+        self.assertEqual(task["source_label"], "2 个已选文件")
+        self.assertEqual(task["source_files"], [r"C:\甲\同名.pdf", r"D:\乙\同名.pdf"])
+        self.assertEqual([row["source_id"] for row in self.store.list_task_sources(task_id)], ["source-a", "source-b"])
+        self.assertEqual([row["task_id"] for row in self.store.list_tasks(query="乙/同名")], [task_id])
+
+    def test_task_failures_and_export_history_roundtrip(self) -> None:
+        task_id = self.store.create_task()
+        self.store.replace_task_failures(
+            task_id,
+            [{
+                "failure_id": "failure-1",
+                "file_path": r"C:\档案\破损.pdf",
+                "page_number": 12,
+                "stage": "page_process",
+                "error_type": "DecodeError",
+                "error_message": "页面无法解码",
+                "possible_missed_hits": True,
+            }],
+        )
+        failures = self.store.list_task_failures(task_id)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["page_number"], 12)
+        self.assertEqual(failures[0]["error_message"], "页面无法解码")
+
+        self.store.add_export(task_id=task_id, kind="json", path=r"C:\exports\first.json")
+        self.store.add_export(task_id=task_id, kind="html", path=r"C:\exports\second.html")
+        exports = self.store.list_exports(task_id=task_id)
+        self.assertEqual([item["kind"] for item in exports], ["html", "json"])
+
     def test_create_task_persists_single_exact_literal_search_term(self) -> None:
         tid = self.store.create_task(search_terms=["档案"], search_mode="exact_literal")
         task = self.store.get_task(tid)

@@ -1,6 +1,6 @@
 import { ipcMain, shell } from "electron";
 import type { SidecarManager } from "../sidecar/manager";
-import { registerResourceRoot } from "../security/protocol";
+import { registerResourceRoot, unregisterResourceRoot } from "../security/protocol";
 
 /**
  * 转发类 IPC：把 Renderer 请求经 Sidecar 投递到 Python Engine。
@@ -33,6 +33,11 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
   ipcMain.handle("tasks.pause", async (_e, params) => sidecar.call("tasks.pause", params));
   ipcMain.handle("tasks.resume", async (_e, params) => sidecar.call("tasks.resume", params));
   ipcMain.handle("tasks.cancel", async (_e, params) => sidecar.call("tasks.cancel", params));
+  ipcMain.handle("tasks.delete", async (_e, params: { task_id: string }) => {
+    const result = await sidecar.call<{ task_id: string; deleted: true }>("tasks.delete", params);
+    unregisterResourceRoot(result.task_id);
+    return result;
+  });
 
   ipcMain.handle("results.query", async (_e, params) => sidecar.call("results.query", params));
   ipcMain.handle("results.getDetail", async (_e, params) => sidecar.call("results.getDetail", params));
@@ -45,13 +50,16 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
   ipcMain.handle("export.json", async (_e, params) => sidecar.call("export.json", params));
   ipcMain.handle("export.review", async (_e, params) => sidecar.call("export.review", params));
   ipcMain.handle("export.html", async (_e, params) => sidecar.call("export.html", params));
+  ipcMain.handle("exports.list", async (_e, params) => sidecar.call("exports.list", params));
 
   ipcMain.handle("files.openFolder", async (_e, params: { path: string }) => {
-    await shell.openPath(params.path);
+    const failure = await shell.openPath(params.path);
+    if (failure) throw new Error(`无法打开文件夹：${failure}`);
     return { ok: true };
   });
   ipcMain.handle("files.openOriginal", async (_e, params: { path: string }) => {
-    await shell.openPath(params.path);
+    const failure = await shell.openPath(params.path);
+    if (failure) throw new Error(`无法打开文件：${failure}`);
     return { ok: true };
   });
 }

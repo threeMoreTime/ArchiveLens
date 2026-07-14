@@ -56,6 +56,22 @@ class SqliteResumePlanTests(unittest.TestCase):
             pipeline._checkpoint_path(document("copies/a.pdf")),
         )
 
+    def test_explicit_file_sources_do_not_scan_siblings_and_resume_by_source_id(self) -> None:
+        pipeline = object.__new__(ReportPipeline)
+        pipeline.source_files = [
+            {"file_path": "C:/first/a.pdf", "display_path": "first/a.pdf", "source_id": "source-a"},
+            {"file_path": "D:/second/b.pdf", "display_path": "second/b.pdf", "source_id": "source-b"},
+        ]
+        pipeline.root_dir = Path("C:/ignored-root")
+        pipeline._make_document_record = lambda path, **kwargs: (path, kwargs)  # type: ignore[method-assign]
+        documents = pipeline._scan_documents()
+        self.assertEqual([item[0] for item in documents], [Path("C:/first/a.pdf"), Path("D:/second/b.pdf")])
+        self.assertEqual([item[1]["source_id"] for item in documents], ["source-a", "source-b"])
+        resumed = document("visible-a.pdf")
+        resumed.source_id = "source-a"
+        state_pipeline = self.pipeline({"source-a": {"processed_page_ids": [1, 2]}})
+        self.assertEqual([index + 1 for index in state_pipeline._page_indexes_for_document(resumed)], list(range(3, 11)))
+
 
 if __name__ == "__main__":
     unittest.main()

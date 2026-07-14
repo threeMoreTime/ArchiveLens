@@ -22,6 +22,9 @@
 | HTML 离线导出 smoke | ✅ | 本地真实 OCR fixtures 回归 |
 | electron-builder 安装包/portable | ✅ 配置完成 | 仅接受同一候选 SHA 的 clean rebuild 产物 |
 | 正式发布证据链 | ✅ 自动校验 | manifest / SHA256SUMS / release-chain |
+| 任务中心与任务上下文 | ✅ | 服务端搜索/分页 + URL/本地持久化上下文 |
+| 失败恢复与诊断 | ✅ | 结构化失败明细 + 影响/建议 + 日志入口 |
+| 校对与导出保护 | ✅ | 备注自动保存 + 系统/人工状态分离 + 应用内阶段性导出确认 |
 
 详见 [docs/architecture.md](docs/architecture.md) 与最终阶段报告。
 

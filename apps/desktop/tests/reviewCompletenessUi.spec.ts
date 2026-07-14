@@ -6,6 +6,10 @@ const reviewPage = readFileSync(
   path.resolve(__dirname, "../src/renderer/src/pages/ReviewPage.tsx"),
   "utf-8",
 );
+const exportPage = readFileSync(
+  path.resolve(__dirname, "../src/renderer/src/pages/ExportPage.tsx"),
+  "utf-8",
+);
 
 describe("校对全量访问 UI contract", () => {
   it("使用服务端 offset 分页，且页面大小受控", () => {
@@ -26,11 +30,13 @@ describe("校对全量访问 UI contract", () => {
     expect(reviewPage).toContain("下一条待处理");
   });
 
-  it("校对与备注失败不会显示为成功，并实现 Ctrl+Enter 保存", () => {
+  it("校对与备注失败不会显示为成功，并实现自动保存与 Ctrl+Enter 立即保存", () => {
     expect(reviewPage).toContain("校对状态保存失败");
     expect(reviewPage).toContain("备注保存失败");
     expect(reviewPage).toContain('event.ctrlKey && event.key === "Enter"');
-    expect(reviewPage).toContain("保存 (Ctrl+Enter)");
+    expect(reviewPage).toContain("persistNote");
+    expect(reviewPage).toContain("停顿后自动保存");
+    expect(reviewPage).toContain("立即保存 (Ctrl+Enter)");
   });
 
   it("详情在历史或合成结果缺少 OCR 置信度时仍可渲染", () => {
@@ -38,8 +44,11 @@ describe("校对全量访问 UI contract", () => {
     expect(reviewPage).toContain('"未提供置信度"');
   });
 
-  it("未完成扫描或校对时要求确认导出", () => {
-    expect(reviewPage).toContain("导出文件会明确标记为未完成校对");
-    expect(reviewPage).toContain("window.confirm");
+  it("校对页统一进入导出中心，未完成结果使用应用内确认", () => {
+    expect(reviewPage).toContain("前往导出中心");
+    expect(reviewPage).not.toContain("window.confirm");
+    expect(exportPage).toContain("仍然导出阶段性结果");
+    expect(exportPage).toContain("setAwaitingConfirmation(true)");
+    expect(exportPage).not.toContain("window.confirm");
   });
 });

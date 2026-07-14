@@ -20,6 +20,7 @@ function createHarness() {
     warn: vi.fn(),
     error: vi.fn(),
   };
+  const waitForTaskEvent = vi.fn(async () => false);
 
   const controller = createLifecycleController({
     sidecar,
@@ -35,7 +36,7 @@ function createHarness() {
     destroyTray: vi.fn(),
     appControl,
     timeoutMs: 500,
-    waitForTaskEvent: vi.fn(async () => false),
+    waitForTaskEvent,
     findActiveTask: vi.fn(async () => ({
       task_id: "task-1",
       status: "running",
@@ -44,7 +45,7 @@ function createHarness() {
     })),
   });
 
-  return { controller, hide, show, focus, isVisible, sidecar, appControl, logger };
+  return { controller, hide, show, focus, isVisible, sidecar, appControl, logger, waitForTaskEvent };
 }
 
 describe("LifecycleController", () => {
@@ -103,6 +104,27 @@ describe("LifecycleController", () => {
     expect(resumeWait.outcome).toBe("timed_out");
     expect(sidecar.call).toHaveBeenCalledTimes(3);
     expect(sidecar.call.mock.calls.filter(([method]) => method === "tasks.pause")).toHaveLength(1);
+  });
+
+  it("pause and quit accepts a task that completes before paused is emitted", async () => {
+    const { controller, sidecar, appControl, waitForTaskEvent } = createHarness();
+    sidecar.call.mockImplementation(async (method: string) => {
+      if (method === "tasks.pause") return { task_id: "task-1", status: "pausing" };
+      if (method === "tasks.get") return { task_id: "task-1", status: "completed" };
+      return {};
+    });
+
+    await controller.requestClose();
+    const result = await controller.selectCloseAction("pause_and_quit");
+
+    expect(result.outcome).toBe("quit");
+    expect(waitForTaskEvent).toHaveBeenCalledWith(
+      ["task.paused", "task.completed", "task.failed", "task.cancelled"],
+      "task-1",
+      500,
+    );
+    expect(sidecar.stop).toHaveBeenCalledTimes(1);
+    expect(appControl.exit).toHaveBeenCalledWith(0);
   });
 
   it("force quit after timeout stops the sidecar and exits the app", async () => {

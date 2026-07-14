@@ -65,7 +65,32 @@ export function registerAppHandlers(sidecar: SidecarManager): void {
     return result.filePaths[0]!;
   });
 
+  ipcMain.handle("dialog.selectFiles", async (_event, params: { multiple?: boolean } = {}) => {
+    const multiple = params.multiple === true;
+    const e2eFiles = process.env["ARCHIVELENS_E2E"] === "1"
+      ? process.env["ARCHIVELENS_E2E_SELECT_FILES"]
+      : undefined;
+    if (e2eFiles) {
+      try {
+        const values = JSON.parse(e2eFiles);
+        if (Array.isArray(values) && values.every((value) => typeof value === "string")) {
+          return multiple ? values : values.slice(0, 1);
+        }
+      } catch {
+        logger.warn("ARCHIVELENS_E2E_SELECT_FILES 必须是 JSON 字符串数组");
+      }
+    }
+    const result = await dialog.showOpenDialog({
+      properties: multiple ? ["openFile", "multiSelections"] : ["openFile"],
+      title: "选择要扫描的文件",
+      filters: [{ name: "支持的档案文件", extensions: ["pdf", "djvu", "djv"] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return multiple ? result.filePaths : result.filePaths.slice(0, 1);
+  });
+
   ipcMain.handle("app.openLogDirectory", async () => {
-    await shell.openPath(logger.logDirectory);
+    const failure = await shell.openPath(logger.logDirectory);
+    if (failure) throw new Error(`无法打开日志目录：${failure}`);
   });
 }

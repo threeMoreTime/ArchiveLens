@@ -29,11 +29,16 @@ describe("自定义检索词 UI wiring", () => {
     expect(source).toContain("使用原目录新建任务");
   });
 
-  it("校对页显示 matched_text，且仅 legacy 任务显示简繁筛选", () => {
+  it("校对页显示 matched_text，且以页内淡红高亮替代截取图", () => {
     const source = page("ReviewPage.tsx");
     expect(source).toContain("matched_text");
     expect(source).toContain('searchMode === "legacy_fixed_pair"');
-    expect(source).toContain("检索词截取");
+    expect(source).toContain('className="al-page-canvas"');
+    expect(source).toContain('className="al-highlight"');
+    expect(source).toContain('className="al-result-thumbnail"');
+    expect(source).toContain('className="al-result-thumbnail-highlight"');
+    expect(source).not.toContain('className="al-result-ctx"');
+    expect(source).not.toContain("检索词截取");
   });
 
   it("欢迎页展示 Sidecar 启动和退出错误而不是永久检测中", () => {

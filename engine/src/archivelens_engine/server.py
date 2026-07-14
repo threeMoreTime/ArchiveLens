@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import os
 import shutil
@@ -21,7 +22,7 @@ from typing import Any, Callable
 from . import PROTOCOL_VERSION, __version__
 from .build_info import load_build_info
 from .config import DEFAULT_CONFIG, EngineConfig
-from .db.store import LEGACY_TASK_REQUIRES_REVIEW, TaskStore, now_iso
+from .db.store import LEGACY_TASK_REQUIRES_REVIEW, TaskStore, new_id, now_iso
 from .diagnostics import detect_all
 from .ocr_core import build_bbox_hash
 from .protocol import (
@@ -34,11 +35,13 @@ from .protocol import (
     safe_parse,
 )
 from .runtime.task_control import TaskControl
-from .runtime.task_state import LEGAL_TRANSITIONS, TaskStateConflict
+from .runtime.task_state import LEGAL_TRANSITIONS, TERMINAL_TASK_STATUSES, TaskStateConflict
 from .search_terms import EXACT_LITERAL_SEARCH_MODE, normalize_search_text, unicode_sequence
 
 Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
 SLOWFAKE_SOURCE_ID = "source-main"
+MAX_SOURCE_FILES = 200
+SUPPORTED_SOURCE_SUFFIXES = {".pdf", ".djvu", ".djv"}
 
 
 def _write_protocol_line(line: str) -> None:
@@ -220,6 +223,7 @@ class Server:
                 "tasks.pause": _h_tasks_pause,
                 "tasks.resume": _h_tasks_resume,
                 "tasks.cancel": _h_tasks_cancel,
+                "tasks.delete": _h_tasks_delete,
                 "tasks.inspectState": _h_tasks_inspect_state,
                 "demo.create": _h_demo_create,
                 "results.query": _h_results_query,
@@ -229,6 +233,7 @@ class Server:
                 "export.json": _h_export_json,
                 "export.review": _h_export_review,
                 "export.html": _h_export_html,
+                "exports.list": _h_exports_list,
             }
         )
 
@@ -443,7 +448,7 @@ class Server:
         page_payload: dict[str, Any] | None,
         page_occurrences: list[dict[str, Any]],
     ) -> None:
-        source_id = str(getattr(document, "relative_path", "") or getattr(document, "document_id", "") or "")
+        source_id = str(getattr(document, "source_id", "") or getattr(document, "relative_path", "") or getattr(document, "document_id", "") or "")
         if not source_id:
             raise ValueError("real scan page completion requires a stable source_id")
         outcome = self.store.record_page_completion(
@@ -505,6 +510,7 @@ class Server:
                 workspace_dir=scan_workspace,
                 config=self.config,
                 search_terms=task["search_terms"],
+                source_files=self.store.list_task_sources(task_id) if task.get("source_kind") == "files" else None,
                 resume_state_by_source=self.store.list_task_resume_states(task_id),
                 task_control=tc,
                 ocr_engine=self.ocr_engine,
@@ -522,8 +528,12 @@ class Server:
                 pipeline.close()
             final_total_pages = int(report.get("stats", {}).get("document_total_pages", 0) or 0)
             final_occurrence_count = self.store._count_occurrences(task_id)
+            report_failures = report.get("failures", [])
+            if not isinstance(report_failures, list):
+                report_failures = []
+            failure_count = self.store.replace_task_failures(task_id, report_failures)
             if tc.should_cancel():
-                self.store.update_task(task_id, status="cancelled", finished_at=now_iso())
+                self.store.update_task(task_id, status="cancelled", failure_count=failure_count, finished_at=now_iso())
                 self.emit_task_event(
                     "task.cancelled",
                     task_id,
@@ -538,6 +548,9 @@ class Server:
                     processed_pages=int(final_task.get("processed_pages", final_total_pages) or final_total_pages),
                     total_pages=final_total_pages,
                     occurrence_count=final_occurrence_count,
+                    failure_count=failure_count,
+                    error_code="PARTIAL_FAILURE" if failure_count else None,
+                    error_message=f"{failure_count} 个页面处理失败，结果可能不完整。" if failure_count else None,
                     finished_at=now_iso(),
                 )
                 self.emit_task_event(
@@ -547,13 +560,26 @@ class Server:
                         "processed_pages": int(final_task.get("processed_pages", final_total_pages) or final_total_pages),
                         "total_pages": final_total_pages,
                         "occurrence_count": final_occurrence_count,
+                        "failure_count": failure_count,
                     },
                     worker_generation=worker_generation,
                 )
         except Exception as exc:  # noqa: BLE001
+            self.store.replace_task_failures(
+                task_id,
+                [{
+                    "file_path": str(task.get("source_dir") or ""),
+                    "stage": "task_scan",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "page_number": None,
+                    "possible_missed_hits": True,
+                }],
+            )
             self.store.update_task(
                 task_id,
                 status="failed",
+                failure_count=1,
                 finished_at=now_iso(),
                 error_code="TASK_RECOVERABLE" if self.store.get_task(task_id)["processed_pages"] > 0 else None,
                 error_message=str(exc),
@@ -627,17 +653,110 @@ def _h_shutdown(server: Server, params: dict) -> dict:
     return {"status": "shutting_down"}
 
 
+def _file_source_display_paths(paths: list[Path]) -> list[str]:
+    names = [path.name for path in paths]
+    duplicate_names = {name for name in names if names.count(name) > 1}
+    displays = [f"{path.parent.name}/{path.name}" if path.name in duplicate_names else path.name for path in paths]
+    duplicate_displays = {name for name in displays if displays.count(name) > 1}
+    return [str(path) if display in duplicate_displays else display for path, display in zip(paths, displays, strict=True)]
+
+
+def _validate_file_sources(params: dict[str, Any]) -> tuple[list[dict[str, str]], str, str]:
+    raw_files = params.get("source_files")
+    if not isinstance(raw_files, list) or not all(isinstance(value, str) and value.strip() for value in raw_files):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "source_files 必须是至少包含一个路径的字符串数组")
+    normalized: list[Path] = []
+    seen: set[str] = set()
+    invalid_files: list[dict[str, str]] = []
+    for raw in raw_files:
+        path = Path(raw).expanduser()
+        try:
+            resolved = path.resolve(strict=False)
+        except OSError:
+            resolved = path.absolute()
+        canonical = os.path.normcase(str(resolved))
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        try:
+            if not resolved.exists():
+                invalid_files.append({"path": raw, "reason": "文件不存在"})
+                continue
+            if not resolved.is_file():
+                invalid_files.append({"path": raw, "reason": "不是文件"})
+                continue
+        except (OSError, ValueError):
+            invalid_files.append({"path": raw, "reason": "路径无效"})
+            continue
+        if resolved.suffix.lower() not in SUPPORTED_SOURCE_SUFFIXES:
+            invalid_files.append({"path": raw, "reason": "仅支持 PDF、DJVU 或 DJV 文件"})
+            continue
+        try:
+            with resolved.open("rb") as handle:
+                handle.read(1)
+        except (OSError, ValueError):
+            invalid_files.append({"path": raw, "reason": "文件不可读取"})
+            continue
+        normalized.append(resolved)
+    if invalid_files:
+        preview = "；".join(
+            f"{Path(item['path']).name or item['path']}：{item['reason']}" for item in invalid_files[:5]
+        )
+        suffix = "；其余文件请查看错误详情" if len(invalid_files) > 5 else ""
+        raise ProtocolError(
+            ErrorCode.VALIDATION_ERROR,
+            f"文件清单包含无效文件，未创建任务：{preview}{suffix}",
+            {"invalid_files": invalid_files},
+        )
+    if not normalized:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "请至少选择一个有效文件")
+    if len(normalized) > MAX_SOURCE_FILES:
+        raise ProtocolError(
+            ErrorCode.VALIDATION_ERROR,
+            f"单个文件清单任务最多支持 {MAX_SOURCE_FILES} 个文件",
+            {"max_source_files": MAX_SOURCE_FILES, "file_count": len(normalized)},
+        )
+    displays = _file_source_display_paths(normalized)
+    records = [
+        {
+            "file_path": str(path),
+            "file_name": path.name,
+            "display_path": display,
+            "source_id": f"source-{index + 1:03d}-{hashlib.sha256(os.path.normcase(str(path)).encode('utf-8')).hexdigest()[:12]}",
+        }
+        for index, (path, display) in enumerate(zip(normalized, displays, strict=True))
+    ]
+    try:
+        common_parent = Path(os.path.commonpath([str(path.parent) for path in normalized]))
+        source_dir = str(common_parent)
+    except ValueError:
+        source_dir = ""
+    source_label = normalized[0].name if len(normalized) == 1 else f"{len(normalized)} 个已选文件"
+    return records, source_dir, source_label
+
+
 def _h_tasks_create(server: Server, params: dict) -> dict:
-    source_dir = _require(params, "source_dir", str)
     if "parallel_workers" in params and (type(params["parallel_workers"]) is not int or params["parallel_workers"] != 1):
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "parallel_workers 当前仅支持整数 1")
     try:
         search_text = normalize_search_text(_require(params, "search_text", str))
     except ValueError as exc:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
-    src = Path(source_dir)
-    if not src.exists() or not src.is_dir():
-        raise ProtocolError(ErrorCode.PATH_NOT_FOUND, f"来源目录不存在：{source_dir}")
+    source_type = params.get("source_type") or ("files" if "source_files" in params else "folder")
+    if source_type not in {"folder", "files"}:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "source_type 仅支持 folder 或 files")
+    source_files: list[dict[str, str]] | None = None
+    if source_type == "folder":
+        source_dir = _require(params, "source_dir", str)
+        src = Path(source_dir)
+        if not src.exists() or not src.is_dir():
+            raise ProtocolError(ErrorCode.PATH_NOT_FOUND, f"来源目录不存在：{source_dir}")
+        source_kind = "folder"
+        source_label = src.name or str(src)
+    else:
+        source_files, source_dir, source_label = _validate_file_sources(params)
+        src = Path(source_dir) if source_dir else Path.cwd()
+        source_kind = "files"
     output_dir = params.get("output_dir") or str(server.workspace_root / "tasks")
     out = Path(output_dir)
     try:
@@ -647,29 +766,39 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
     except OSError as exc:
         raise ProtocolError(ErrorCode.PERMISSION_DENIED, f"输出目录不可写：{output_dir}", {"error": str(exc)})
 
-    # 统计 PDF/DJVU/DJV
     counts = {"pdf": 0, "djvu": 0, "djv": 0}
-    for p in src.rglob("*"):
-        if not p.is_file():
-            continue
-        suffix = p.suffix.lower().lstrip(".")
-        if suffix in counts:
-            counts[suffix] += 1
+    if source_files is None:
+        for p in src.rglob("*"):
+            if not p.is_file():
+                continue
+            suffix = p.suffix.lower().lstrip(".")
+            if suffix in counts:
+                counts[suffix] += 1
+    else:
+        for source in source_files:
+            counts[Path(source["file_path"]).suffix.lower().lstrip(".")] += 1
     file_count = sum(counts.values())
 
     payload = {
-        "source_dir": str(src),
+        "source_dir": source_dir,
+        "source_kind": source_kind,
+        "source_label": source_label,
         "file_count": file_count,
         "counts": counts,
         "search_text": search_text,
         "search_terms": [search_text],
         "search_mode": EXACT_LITERAL_SEARCH_MODE,
     }
+    if source_files is not None:
+        payload["source_files"] = [source["file_path"] for source in source_files]
     task_id, event = server.store.create_task_with_event(
-        source_dir=str(src),
+        source_dir=source_dir,
+        source_kind=source_kind,
+        source_label=source_label,
+        source_files=source_files,
         output_dir=str(out),
         workspace_dir="",
-        name=params.get("name") or src.name,
+        name=params.get("name") or source_label,
         file_count=file_count,
         status="draft",
         search_terms=[search_text],
@@ -696,15 +825,21 @@ def _h_tasks_get(server: Server, params: dict) -> dict:
     task = server.store.get_task(task_id)
     if task is None:
         raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
-    return task
+    return {**task, "failures": server.store.list_task_failures(task_id)}
 
 
 def _h_tasks_list(server: Server, params: dict) -> dict:
-    limit = int(params.get("limit", 50))
-    offset = int(params.get("offset", 0))
+    limit = _validate_results_page_parameter(params, "limit", default=50, minimum=1, maximum=100)
+    offset = _validate_results_page_parameter(params, "offset", default=0, minimum=0)
     status = params.get("status")
-    items = server.store.list_tasks(limit=limit, offset=offset, status=status)
-    return {"items": items, "limit": limit, "offset": offset}
+    query = params.get("query")
+    if status is not None and not isinstance(status, str):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "status 必须是字符串")
+    if query is not None and not isinstance(query, str):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "query 必须是字符串")
+    items = server.store.list_tasks(limit=limit, offset=offset, status=status, query=query)
+    total = server.store.count_tasks(status=status, query=query)
+    return {"items": items, "limit": limit, "offset": offset, "total": total}
 
 
 def _h_tasks_pause(server: Server, params: dict) -> dict:
@@ -787,6 +922,64 @@ def _h_tasks_cancel(server: Server, params: dict) -> dict:
     return {"task_id": task_id, "status": "cancelled"}
 
 
+def _task_workspace_dirs_for_delete(server: Server, task_id: str) -> list[Path]:
+    """返回该任务可安全清理的应用自有目录，绝不从任务记录读取任意路径。"""
+    if not task_id or Path(task_id).name != task_id:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "任务标识无效，无法清理本地数据")
+    workspace_root = server.workspace_root.resolve()
+    task_dirs = [workspace_root / "tasks" / task_id, workspace_root / task_id]
+    return [path for path in task_dirs if path.exists()]
+
+
+def _h_tasks_delete(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    if task["status"] not in TERMINAL_TASK_STATUSES:
+        raise ProtocolError(
+            ErrorCode.TASK_STATE_CONFLICT,
+            "任务仍可执行或恢复，必须先取消后才能删除",
+            {"status": task["status"]},
+        )
+
+    staged_dirs: list[tuple[Path, Path]] = []
+    try:
+        for task_dir in _task_workspace_dirs_for_delete(server, task_id):
+            staged_dir = task_dir.with_name(f".deleting-{task_id}-{new_id()}")
+            task_dir.rename(staged_dir)
+            staged_dirs.append((task_dir, staged_dir))
+    except OSError as exc:
+        for original_dir, staged_dir in reversed(staged_dirs):
+            if staged_dir.exists():
+                staged_dir.rename(original_dir)
+        raise ProtocolError(
+            ErrorCode.DATABASE_ERROR,
+            "无法准备清理任务生成数据，任务未删除",
+            {"task_id": task_id, "error": str(exc)},
+        )
+
+    try:
+        if not server.store.delete_task(task_id):
+            raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    except Exception:
+        for original_dir, staged_dir in reversed(staged_dirs):
+            if staged_dir.exists():
+                staged_dir.rename(original_dir)
+        raise
+
+    try:
+        for _original_dir, staged_dir in staged_dirs:
+            shutil.rmtree(staged_dir)
+    except OSError as exc:
+        raise ProtocolError(
+            ErrorCode.DATABASE_ERROR,
+            "任务记录已删除，但部分生成数据清理失败",
+            {"task_id": task_id, "error": str(exc)},
+        )
+    return {"task_id": task_id, "deleted": True}
+
+
 def _h_tasks_inspect_state(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     requested_source_id = params.get("source_id")
@@ -856,7 +1049,7 @@ def _h_results_query(server: Server, params: dict) -> dict:
         total_override=total,
         **filters,
     )
-    scan_complete = task["status"] == "completed"
+    scan_complete = task["status"] == "completed" and int(task.get("failure_count", 0) or 0) == 0
     review_complete = scan_complete and review_summary["unreviewed_count"] == 0
     return {
         "total": total,
@@ -933,7 +1126,7 @@ def _export_dir(server: Server, task_id: str) -> Path:
 
 def _export_integrity(server: Server, task: dict, total: int) -> dict[str, Any]:
     review_summary = server.store.get_occurrence_review_summary(task_id=task["task_id"])
-    scan_complete = task["status"] == "completed"
+    scan_complete = task["status"] == "completed" and int(task.get("failure_count", 0) or 0) == 0
     review_complete = scan_complete and review_summary["unreviewed_count"] == 0
     return {
         "task_id": task["task_id"],
@@ -974,6 +1167,16 @@ def _h_export_review(server: Server, params: dict) -> dict:
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     server.store.add_export(task_id=task_id, kind="review", path=str(out))
     return {"path": str(out), "record_count": len(reviews)}
+
+
+def _h_exports_list(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    if server.store.get_task(task_id) is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    limit = _validate_results_page_parameter(params, "limit", default=20, minimum=1, maximum=100)
+    offset = _validate_results_page_parameter(params, "offset", default=0, minimum=0)
+    items = server.store.list_exports(task_id=task_id, limit=limit, offset=offset)
+    return {"task_id": task_id, "items": items, "limit": limit, "offset": offset}
 
 
 def _h_export_html(server: Server, params: dict) -> dict:

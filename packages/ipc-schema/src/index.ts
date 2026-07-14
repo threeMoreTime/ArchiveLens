@@ -13,6 +13,8 @@ import { z } from "zod";
 export const PROTOCOL_VERSION = 2 as const;
 
 export const MAX_SEARCH_TEXT_LENGTH = 32;
+export const MAX_SOURCE_FILES = 200;
+export const ScanSourceKindSchema = z.enum(["folder", "files"]);
 
 export function normalizeSearchText(value: string): string {
   const normalized = value.replace(/^ +| +$/g, "").normalize("NFC");
@@ -34,13 +36,29 @@ export const SearchTextSchema = z.string().transform((value, context) => {
   }
 });
 
-export const TaskCreateParamsSchema = z.object({
-  source_dir: z.string().min(1),
+const TaskCreateCommonSchema = {
   search_text: SearchTextSchema,
   output_dir: z.string().optional(),
   name: z.string().optional(),
   parallel_workers: z.literal(1).optional(),
-});
+};
+
+/**
+ * 兼容既有 source_dir 调用；source_type="files" 时改用明确的文件清单。
+ * 实际路径可读性、去重与上限以 Engine 端校验为准。
+ */
+export const TaskCreateParamsSchema = z.union([
+  z.object({
+    ...TaskCreateCommonSchema,
+    source_type: z.literal("folder").optional(),
+    source_dir: z.string().min(1),
+  }),
+  z.object({
+    ...TaskCreateCommonSchema,
+    source_type: z.literal("files"),
+    source_files: z.array(z.string().min(1)).min(1).max(MAX_SOURCE_FILES),
+  }),
+]);
 
 // --------------------------------------------------------------------------- //
 // 错误码（与 Python protocol.ErrorCode 一一对应）
@@ -142,6 +160,7 @@ export const MethodNameSchema = z.enum([
   "tasks.pause",
   "tasks.resume",
   "tasks.cancel",
+  "tasks.delete",
   "tasks.list",
   "tasks.get",
   "results.query",
@@ -151,6 +170,7 @@ export const MethodNameSchema = z.enum([
   "export.html",
   "export.json",
   "export.review",
+  "exports.list",
   "files.openOriginal",
   "files.openFolder",
   "settings.get",
@@ -208,6 +228,17 @@ export type DiagnosticsResult = z.infer<typeof DiagnosticsResultSchema>;
 
 export const SearchModeSchema = z.enum(["exact_literal", "legacy_fixed_pair"]);
 
+export const TaskFailureSchema = z.object({
+  failure_id: z.string().min(1).optional(),
+  file_path: z.string().default(""),
+  page_number: z.number().int().positive().nullable().default(null),
+  stage: z.string().default(""),
+  error_type: z.string().default(""),
+  error_message: z.string().default(""),
+  possible_missed_hits: z.boolean().default(true),
+}).passthrough();
+export type TaskFailure = z.infer<typeof TaskFailureSchema>;
+
 export const TaskSummarySchema = z.object({
   task_id: z.string().min(1),
   status: z.string().min(1),
@@ -219,21 +250,49 @@ export const TaskSummarySchema = z.object({
   occurrence_count: z.number().int().nonnegative(),
   worker_generation: z.number().int().nonnegative(),
   last_event_sequence: z.number().int().nonnegative(),
+  source_kind: ScanSourceKindSchema.optional(),
+  source_label: z.string().optional(),
+  source_files: z.array(z.string()).optional(),
+  failures: z.array(TaskFailureSchema).optional(),
 }).passthrough();
 
 export const TaskCreateResultSchema = z.object({
   task_id: z.string().min(1),
   status: z.string().min(1),
   source_dir: z.string(),
+  source_kind: ScanSourceKindSchema.optional(),
+  source_label: z.string().optional(),
+  source_files: z.array(z.string()).optional(),
   file_count: z.number().int().nonnegative(),
   search_text: z.string().min(1),
   search_terms: z.array(z.string().min(1)).min(1),
   search_mode: SearchModeSchema,
 }).passthrough();
 
+export const TaskDeleteResultSchema = z.object({
+  task_id: z.string().min(1),
+  deleted: z.literal(true),
+}).passthrough();
+
 export const TasksListResultSchema = z.object({
   items: z.array(TaskSummarySchema),
   limit: z.number().int().nonnegative(),
+  offset: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+
+export const ExportRecordSchema = z.object({
+  export_id: z.string().min(1),
+  task_id: z.string().min(1),
+  kind: z.string().min(1),
+  path: z.string().min(1),
+  created_at: z.string().min(1),
+});
+
+export const ExportsListResultSchema = z.object({
+  task_id: z.string().min(1),
+  items: z.array(ExportRecordSchema),
+  limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
 });
 
@@ -276,8 +335,10 @@ export const TaskSearchEventPayloadSchema = z.object({
 
 export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "tasks.create") return TaskCreateResultSchema.parse(value);
+  if (method === "tasks.delete") return TaskDeleteResultSchema.parse(value);
   if (method === "tasks.get") return TaskSummarySchema.parse(value);
   if (method === "tasks.list") return TasksListResultSchema.parse(value);
+  if (method === "exports.list") return ExportsListResultSchema.parse(value);
   if (method === "results.query") return ResultsQueryResultSchema.parse(value);
   return value;
 }

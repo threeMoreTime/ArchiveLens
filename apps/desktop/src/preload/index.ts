@@ -11,6 +11,7 @@ const api: ArchiveLensApi = {
   dialog: {
     selectFolder: () => ipcRenderer.invoke("dialog.selectFolder"),
     selectFile: () => ipcRenderer.invoke("dialog.selectFile"),
+    selectFiles: (p) => ipcRenderer.invoke("dialog.selectFiles", p),
   },
   subscribe: {
     onEvent: (cb: (event: Event) => void) => {
@@ -37,6 +38,7 @@ const api: ArchiveLensApi = {
     pause: (task_id) => ipcRenderer.invoke("tasks.pause", { task_id }),
     resume: (task_id) => ipcRenderer.invoke("tasks.resume", { task_id }),
     cancel: (task_id) => ipcRenderer.invoke("tasks.cancel", { task_id }),
+    delete: (task_id) => ipcRenderer.invoke("tasks.delete", { task_id }),
   },
   demo: {
     create: () => ipcRenderer.invoke("demo.create"),
@@ -53,6 +55,7 @@ const api: ArchiveLensApi = {
     json: (task_id) => ipcRenderer.invoke("export.json", { task_id }),
     review: (task_id) => ipcRenderer.invoke("export.review", { task_id }),
     html: (task_id) => ipcRenderer.invoke("export.html", { task_id }),
+    list: (task_id, p) => ipcRenderer.invoke("exports.list", { task_id, ...(p ?? {}) }),
   },
   files: {
     openFolder: (path) => ipcRenderer.invoke("files.openFolder", { path }),

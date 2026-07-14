@@ -107,8 +107,9 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     await searchInput.fill("档案");
     await startButton.click();
     await expect(page).toHaveURL(/#\/tasks\/task_/);
-    await expect(page.getByText("检索词：档案")).toBeVisible();
-    await expect(page.getByText("匹配模式：精确匹配")).toBeVisible();
+    const taskFacts = page.locator(".al-task-keyfacts");
+    await expect(taskFacts).toContainText("检索词档案");
+    await expect(taskFacts).toContainText("匹配模式精确匹配");
 
     const taskId = page.url().split("/tasks/")[1]!;
     await expect.poll(async () => page.evaluate(async (id) => {
@@ -118,11 +119,34 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     await page.getByRole("button", { name: "进入校对工作台" }).click();
     await expect(page.getByText("档案", { exact: true }).first()).toBeVisible();
     await expect(page.locator('img[alt="出处页"]')).toBeVisible();
-    await expect(page.locator('img[alt="检索词截取"]')).toBeVisible();
+    const resultThumbnail = page.locator(".al-result-thumbnail").first();
+    await expect(resultThumbnail.locator("img")).toBeVisible();
+    await expect(resultThumbnail.locator(".al-result-thumbnail-highlight")).toBeVisible();
+    await expect(page.locator('img[alt="检索词截取"]')).toHaveCount(0);
     const highlight = await page.locator(".al-highlight").boundingBox();
     expect(highlight).not.toBeNull();
     expect(highlight!.width).toBeGreaterThan(20);
     expect(highlight!.height).toBeGreaterThan(10);
+    await expect(page.locator(".al-highlight")).toHaveCSS("border-top-width", "0px");
+    await expect(page.locator(".al-highlight")).toHaveCSS("background-color", "rgba(196, 69, 22, 0.18)");
+    const pageImage = page.locator('img[alt="出处页"]');
+    const pageWrap = page.locator(".al-page-wrap");
+    const imageBeforeDrag = await pageImage.boundingBox();
+    const highlightBeforeDrag = await page.locator(".al-highlight").boundingBox();
+    const wrapBox = await pageWrap.boundingBox();
+    expect(imageBeforeDrag).not.toBeNull();
+    expect(highlightBeforeDrag).not.toBeNull();
+    expect(wrapBox).not.toBeNull();
+    await page.mouse.move(wrapBox!.x + wrapBox!.width / 2, wrapBox!.y + wrapBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(wrapBox!.x + wrapBox!.width / 2 + 48, wrapBox!.y + wrapBox!.height / 2 - 32);
+    await page.mouse.up();
+    const imageAfterDrag = await pageImage.boundingBox();
+    const highlightAfterDrag = await page.locator(".al-highlight").boundingBox();
+    expect(imageAfterDrag).not.toBeNull();
+    expect(highlightAfterDrag).not.toBeNull();
+    expect(Math.abs((highlightAfterDrag!.x - imageAfterDrag!.x) - (highlightBeforeDrag!.x - imageBeforeDrag!.x))).toBeLessThan(1);
+    expect(Math.abs((highlightAfterDrag!.y - imageAfterDrag!.y) - (highlightBeforeDrag!.y - imageBeforeDrag!.y))).toBeLessThan(1);
     const dimensions = await page.evaluate(() => ({
       viewportWidth: window.innerWidth,
       bodyWidth: document.documentElement.scrollWidth,
@@ -193,8 +217,89 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     expect(externalRequests).toEqual([]);
     await reportPage.close();
     reportPage = null;
+
+    await page.getByRole("link", { name: "任务中心" }).click();
+    await expect(page.getByRole("button", { name: "校对" })).toBeEnabled();
+    const moreActions = page.getByRole("button", { name: /更多操作$/ });
+    await expect(moreActions).toBeEnabled();
+    await moreActions.click();
+    await expect(page.getByRole("menuitem", { name: "详情" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "导出" })).toBeVisible();
+    const deleteMenuItem = page.getByRole("menuitem", { name: "删除任务" });
+    await expect(deleteMenuItem).toBeVisible();
+    await deleteMenuItem.click();
+    const deleteDialog = page.getByRole("dialog");
+    await expect(deleteDialog).toContainText("不会删除原始文件");
+    await expect(deleteDialog).toContainText("生成的页面图片");
+    await deleteDialog.getByRole("button", { name: "取消" }).click();
+    await moreActions.click();
+    await page.getByRole("menuitem", { name: "删除任务" }).click();
+    await deleteDialog.getByRole("button", { name: "删除任务" }).click();
+    await expect.poll(async () => page.evaluate(async (id) => {
+      try {
+        await (window as any).archiveLens.tasks.get(id);
+        return false;
+      } catch {
+        return true;
+      }
+    }, taskId)).toBe(true);
+    await access(path.join(sourceDir, path.basename(FIXTURE)));
   } finally {
     if (reportPage) await reportPage.close().catch(() => undefined);
+    if (app) await app.close().catch(() => undefined);
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});
+
+test("multiple file selection creates one cross-directory task", async () => {
+  const runRoot = await mkdtemp(path.join(os.tmpdir(), `archivelens-ocr-temp-${RUN_ID}-multi-file-ui-`));
+  const userDataDir = path.join(runRoot, "user-data");
+  const firstDir = path.join(runRoot, "first");
+  const secondDir = path.join(runRoot, "second");
+  const firstFile = path.join(firstDir, "first.pdf");
+  const secondFile = path.join(secondDir, "second.pdf");
+  await mkdir(firstDir, { recursive: true });
+  await mkdir(secondDir, { recursive: true });
+  await copyFile(FIXTURE, firstFile);
+  await copyFile(FIXTURE, secondFile);
+
+  let app: ElectronApplication | null = null;
+  try {
+    const python = await resolvePythonExecutable();
+    app = await electron.launch({
+      args: [APP_DIR],
+      cwd: APP_DIR,
+      env: {
+        ...process.env,
+        ARCHIVELENS_E2E: "1",
+        ARCHIVELENS_E2E_SELECT_FILES: JSON.stringify([firstFile, secondFile]),
+        ARCHIVELENS_USER_DATA_DIR: userDataDir,
+        AL_SLOWFAKE_PAGES: "1",
+        AL_DEBUG: "1",
+        AL_ENGINE_DEV: python,
+        AL_ENGINE_SRC: ENGINE_SRC,
+      },
+    });
+    const page = await app.firstWindow();
+    await page.waitForLoadState("domcontentloaded");
+    await waitForSidecar(page);
+    await page.getByRole("link", { name: "新建扫描" }).click();
+    await page.getByRole("radio", { name: /多个文件/ }).click();
+    await page.getByRole("button", { name: "添加文件" }).click();
+    await expect(page.getByLabel("已选文件清单")).toContainText("first.pdf");
+    await expect(page.getByLabel("已选文件清单")).toContainText("second.pdf");
+    await page.getByRole("textbox", { name: "检索文字或词语" }).fill("档案");
+    await page.getByRole("button", { name: "开始扫描" }).click();
+    await expect(page).toHaveURL(/#\/tasks\/task_/);
+    const taskId = page.url().split("/tasks/")[1]!;
+    await expect.poll(async () => page.evaluate(async (id) => {
+      const task = await (window as any).archiveLens.tasks.get(id);
+      return { source_kind: task.source_kind, file_count: task.file_count, source_files: task.source_files };
+    }, taskId)).toEqual({ source_kind: "files", file_count: 2, source_files: [firstFile, secondFile] });
+    await expect.poll(async () => page.evaluate(async (id) => {
+      return (await (window as any).archiveLens.tasks.get(id)).status;
+    }, taskId)).toBe("completed");
+  } finally {
     if (app) await app.close().catch(() => undefined);
     await rm(runRoot, { recursive: true, force: true });
   }

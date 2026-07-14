@@ -25,6 +25,10 @@ export function registerResourceRoot(host: string, realDir: string): void {
   resourceRoots.set(host, realDir);
 }
 
+export function unregisterResourceRoot(host: string): void {
+  resourceRoots.delete(host);
+}
+
 export function clearResourceRoots(): void {
   resourceRoots.clear();
 }

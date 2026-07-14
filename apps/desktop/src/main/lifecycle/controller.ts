@@ -63,7 +63,7 @@ export interface LifecycleControllerDeps {
   destroyTray: () => void;
   appControl: AppControlLike;
   timeoutMs: number;
-  waitForTaskEvent: (eventName: string, taskId: string, timeoutMs: number) => Promise<boolean>;
+  waitForTaskEvent: (eventNames: readonly string[], taskId: string, timeoutMs: number) => Promise<boolean>;
   findActiveTask: () => Promise<ActiveTaskSummary | null>;
 }
 
@@ -78,6 +78,8 @@ export interface LifecycleController {
 // The close-flow timeout controls how long we wait for a state transition, not
 // how long the sidecar gets to acknowledge a control command on a busy runner.
 const CONTROL_REQUEST_TIMEOUT_FLOOR_MS = 5_000;
+const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const TERMINAL_TASK_EVENTS = ["task.completed", "task.failed", "task.cancelled"] as const;
 
 function initialState(): LifecycleState {
   return {
@@ -107,11 +109,16 @@ export function createLifecycleController(deps: LifecycleControllerDeps): Lifecy
   }
 
   async function waitForTaskState(taskId: string, eventName: string, expectedStatus: string): Promise<boolean> {
-    const observed = await deps.waitForTaskEvent(eventName, taskId, deps.timeoutMs);
+    const terminalStateAlsoFinishesTransition = expectedStatus === "paused" || expectedStatus === "cancelled";
+    const acceptedEvents = terminalStateAlsoFinishesTransition
+      ? [eventName, ...TERMINAL_TASK_EVENTS]
+      : [eventName];
+    const observed = await deps.waitForTaskEvent(acceptedEvents, taskId, deps.timeoutMs);
     if (observed) {
       return true;
     }
-    return (await getTaskStatus(taskId)) === expectedStatus;
+    const status = await getTaskStatus(taskId);
+    return status === expectedStatus || (terminalStateAlsoFinishesTransition && status !== null && TERMINAL_TASK_STATUSES.has(status));
   }
 
   async function performQuit(reason: "app_shutdown" | "forced_shutdown" = "app_shutdown"): Promise<CloseSelectionResult> {

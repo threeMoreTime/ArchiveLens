@@ -366,50 +366,74 @@ export class SidecarManager extends EventEmitter {
   async stop(reason: SidecarExitReason = "app_shutdown"): Promise<void> {
     const proc = this.proc;
     if (!proc) return;
+    const pid = proc.pid;
+    const exitObserved = new Promise<void>((resolve) => {
+      if (proc.exitCode !== null || proc.signalCode !== null) {
+        resolve();
+        return;
+      }
+      proc.once("exit", () => resolve());
+    });
+    const waitForExit = (timeoutMs: number): Promise<boolean> => new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      void exitObserved.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+    const forceTerminate = (): Promise<void> => new Promise((resolve) => {
+      if (!pid) {
+        resolve();
+        return;
+      }
+      if (process.platform === "win32") {
+        execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 3000 }, (error) => {
+          if (error && proc.exitCode === null) {
+            logger.warn(`Sidecar taskkill failed pid=${pid} error=${error.message}`);
+          }
+          resolve();
+        });
+        return;
+      }
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // The exit listener will already have resolved if the process ended first.
+      }
+      resolve();
+    });
+
     this.ready = false;
     this.requestedExitReason = reason;
-    logger.info(`Sidecar stop begin pid=${proc.pid ?? "unknown"} reason=${reason}`);
+    logger.info(`Sidecar stop begin pid=${pid ?? "unknown"} reason=${reason}`);
     if (reason === "app_shutdown" && this.proc?.stdin) {
       try {
         await this.call("app.shutdown", {}, 3000);
-        logger.info(`Sidecar app.shutdown acknowledged pid=${proc.pid ?? "unknown"}`);
+        logger.info(`Sidecar app.shutdown acknowledged pid=${pid ?? "unknown"}`);
       } catch (error) {
-        logger.warn(`Sidecar app.shutdown failed pid=${proc.pid ?? "unknown"} error=${String(error)}`);
+        logger.warn(`Sidecar app.shutdown failed pid=${pid ?? "unknown"} error=${String(error)}`);
       }
     }
     try {
       proc.stdin?.end();
-      logger.info(`Sidecar stop stdin.end sent pid=${proc.pid ?? "unknown"}`);
+      logger.info(`Sidecar stop stdin.end sent pid=${pid ?? "unknown"}`);
     } catch {
       // 忽略
     }
-    await new Promise<void>((resolve) => {
-      const forceKill = () => {
-        if (!proc.pid) {
-          logger.warn("Sidecar force-kill skipped because pid is missing");
-          resolve();
-          return;
-        }
-        logger.warn(`Sidecar force-kill pid=${proc.pid} reason=${reason}`);
-        if (process.platform === "win32") {
-          execFile("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { windowsHide: true }, () => undefined);
-          return;
-        }
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          resolve();
-        }
-      };
-      const forceKillTimer = setTimeout(() => {
-        forceKill();
-      }, 3000);
-      proc.once("exit", () => {
-        clearTimeout(forceKillTimer);
-        logger.info(`Sidecar stop observed exit pid=${proc.pid ?? "unknown"} reason=${reason}`);
-        resolve();
-      });
-    });
+    if (await waitForExit(3000)) {
+      logger.info(`Sidecar stop observed graceful exit pid=${pid ?? "unknown"} reason=${reason}`);
+      return;
+    }
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      logger.warn(`Sidecar force-kill attempt=${attempt} pid=${pid ?? "unknown"} reason=${reason}`);
+      await forceTerminate();
+      if (await waitForExit(5000)) {
+        logger.info(`Sidecar stop confirmed exit after force-kill attempt=${attempt} pid=${pid ?? "unknown"}`);
+        return;
+      }
+    }
+    throw new EngineError("ENGINE_STOPPED", `Sidecar process ${pid ?? "unknown"} did not exit after repeated termination attempts`);
   }
 
   simulateCrash(): boolean {

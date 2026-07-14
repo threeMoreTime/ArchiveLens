@@ -125,14 +125,14 @@ async function promptShutdown(task: TaskSummary): Promise<CloseAction> {
   return choices[res.response] ?? "cancel";
 }
 
-function waitForEvent(eventName: string, taskId: string, timeoutMs: number): Promise<boolean> {
+function waitForEvent(eventNames: readonly string[], taskId: string, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       sidecar.off("event", handler);
       resolve(false);
     }, timeoutMs);
     const handler = (e: { event?: string; task_id?: string }) => {
-      if (e.event === eventName && e.task_id === taskId) {
+      if (e.event !== undefined && eventNames.includes(e.event) && e.task_id === taskId) {
         clearTimeout(timer);
         sidecar.off("event", handler);
         resolve(true);

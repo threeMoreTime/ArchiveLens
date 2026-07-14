@@ -61,6 +61,18 @@ Main 只有在外层和 payload 的 `protocol_version` 都严格为整数 `2`，
 }
 ```
 
+文件夹来源兼容旧调用（可省略 `source_type` 或传入 `"folder"`）。单文件和多文件通过同一任务创建接口传入文件清单：
+
+```json
+{
+  "source_type": "files",
+  "source_files": ["C:\\档案\\甲.pdf", "D:\\馆藏\\乙.djvu"],
+  "search_text": "档案管理"
+}
+```
+
+文件清单按规范化绝对路径自动去重，去重后必须有 1–200 个文件；可跨目录。每个路径必须存在、是可读取的普通文件，且扩展名为 `.pdf`、`.djvu` 或 `.djv`。任一文件无效时返回 `VALIDATION_ERROR` 与 `invalid_files`，不会创建部分任务。任务响应包含 `source_kind`、`source_label`，文件清单任务还包含 `source_files`；原有 `source_dir` 保留以兼容旧调用。
+
 `search_text` 为必填字段：仅移除首尾 ASCII SPACE（U+0020），再执行 NFC 规范化；
 结果必须为 1～32 个 Unicode code point。内部及非 ASCII 空格保留；拒绝 Cc、Cs、
 U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内查找；不支持正则或
@@ -70,7 +82,14 @@ U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内
 | --- | --- | --- |
 | `app.info` | 引擎版本 / 协议版本 / python 路径 | ✅ |
 | `diagnostics.run` | 环境自检（Tesseract / DjVu / 语言包 / RapidOCR / onnx） | ✅ |
-| `tasks.*` / `results.*` / `review.*` / `export.*` / `files.*` / `settings.*` | 见 `MethodNameSchema` | ✅ |
+| `tasks.*` / `results.*` / `review.*` / `export.*` / `exports.list` / `files.*` / `settings.*` | 见 `MethodNameSchema` | ✅ |
+
+### 任务与导出列表扩展
+
+- `tasks.list` 接受 `limit`（1～100）、`offset`、可选 `status` 和可选 `query`；响应包含 `items`、`limit`、`offset` 与符合筛选条件的 `total`。`query` 在任务名称、来源目录、来源标签、文件清单展示名与检索词中做本地包含匹配。
+- `tasks.get` 除任务摘要外返回最多 100 条结构化 `failures`，供任务页解释部分成功或失败原因。
+- `tasks.delete` 仅接受已完成、失败或已取消的任务；调用方必须先取消其他状态的任务。删除会清理本地任务记录、扫描结果、校对/导出记录和应用生成的页面图片，不会删除来源 PDF/DJVU/DJV 文件。
+- `exports.list` 按最近写入顺序返回指定任务的持久化导出记录；导出文件仍保存在该任务本地工作区。
 
 ## 健壮性保证
 

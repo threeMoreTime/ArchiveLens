@@ -1,8 +1,10 @@
 # 数据库迁移说明
 
-## Schema v3
+## Schema v5
 
-A11 使用 SQLite schema v3。迁移在单个事务中执行；失败会 rollback，未来高于 v3 的 schema 会 fail-closed 且不修改数据库。已是 v3 的数据库重复打开不会执行回填或索引重建。
+A11 使用 SQLite schema v5。迁移在单个事务中执行；失败会 rollback，未来高于 v5 的 schema 会 fail-closed 且不修改数据库。已是 v5 的数据库重复打开不会执行回填或索引重建。
+
+v4 → v5 是仅新增结构的迁移：任务表增加 `source_kind` 与 `source_label`，并新增 `task_sources` 表保存文件清单的顺序、展示名和稳定 source ID。旧任务默认标记为 `folder`，来源标签回填为原 `source_dir`；旧任务的 occurrence、校对、备注、checkpoint、事件与导出记录不会被删除或改写。
 
 ## Alpha10 已完成任务
 

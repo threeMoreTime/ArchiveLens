@@ -33,7 +33,7 @@ from ..search_terms import (
     unicode_sequence,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 LEGACY_TASK_REQUIRES_REVIEW = "LEGACY_TASK_REQUIRES_REVIEW"
 
 SCHEMA_SQL = """
@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
     source_dir TEXT NOT NULL DEFAULT '',
+    source_kind TEXT NOT NULL DEFAULT 'folder',
+    source_label TEXT NOT NULL DEFAULT '',
     output_dir TEXT NOT NULL DEFAULT '',
     workspace_dir TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'draft',
@@ -141,6 +143,32 @@ CREATE TABLE IF NOT EXISTS exports (
     path TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS task_failures (
+    failure_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    file_path TEXT NOT NULL DEFAULT '',
+    page_number INTEGER,
+    stage TEXT NOT NULL DEFAULT '',
+    error_type TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    possible_missed_hits INTEGER NOT NULL DEFAULT 1,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_failures_task ON task_failures(task_id);
+CREATE TABLE IF NOT EXISTS task_sources (
+    task_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    source_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    display_path TEXT NOT NULL,
+    file_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, ordinal),
+    UNIQUE (task_id, source_id),
+    UNIQUE (task_id, file_path)
+);
+CREATE INDEX IF NOT EXISTS idx_task_sources_task ON task_sources(task_id, ordinal);
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -223,6 +251,8 @@ class TaskStore:
         )
 
     def _migrate_schema(self, current: int) -> None:
+        self._ensure_column("tasks", "source_kind", "TEXT NOT NULL DEFAULT 'folder'")
+        self._ensure_column("tasks", "source_label", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("tasks", "last_event_sequence", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("tasks", "worker_generation", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("tasks", "search_terms_json", "TEXT NOT NULL DEFAULT '[\"约\",\"約\"]'")
@@ -241,6 +271,12 @@ class TaskStore:
         self.conn.execute(
             "UPDATE tasks SET search_mode=? WHERE search_mode IS NULL OR TRIM(search_mode)=''",
             (LEGACY_SEARCH_MODE,),
+        )
+        self.conn.execute(
+            "UPDATE tasks SET source_kind='folder' WHERE source_kind IS NULL OR TRIM(source_kind)=''",
+        )
+        self.conn.execute(
+            "UPDATE tasks SET source_label=source_dir WHERE source_label IS NULL OR TRIM(source_label)=''",
         )
         self.conn.execute(
             "UPDATE occurrences SET matched_text=matched_character "
@@ -316,6 +352,23 @@ class TaskStore:
             """
         )
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_task_events_sequence ON task_events(task_id, sequence)")
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_sources (
+                task_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                source_id TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                display_path TEXT NOT NULL,
+                file_name TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, ordinal),
+                UNIQUE (task_id, source_id),
+                UNIQUE (task_id, file_path)
+            )
+            """
+        )
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_task_sources_task ON task_sources(task_id, ordinal)")
         if current < 2:
             self._mark_untrusted_legacy_tasks_for_review()
 
@@ -364,6 +417,9 @@ class TaskStore:
         self,
         *,
         source_dir: str = "",
+        source_kind: str = "folder",
+        source_label: str = "",
+        source_files: Iterable[dict[str, Any]] | None = None,
         output_dir: str = "",
         workspace_dir: str = "",
         name: str = "",
@@ -383,6 +439,8 @@ class TaskStore:
                     task_id=task_id,
                     created_at=created,
                     source_dir=source_dir,
+                    source_kind=source_kind,
+                    source_label=source_label,
                     output_dir=output_dir,
                     workspace_dir=workspace_dir,
                     name=name,
@@ -393,6 +451,7 @@ class TaskStore:
                     search_terms=normalized_terms,
                     search_mode=search_mode,
                 )
+                self._insert_task_sources_locked(task_id, source_files, created)
         return task_id
 
     def create_task_with_event(
@@ -401,6 +460,9 @@ class TaskStore:
         event_type: str,
         event_payload: dict[str, Any] | None = None,
         source_dir: str = "",
+        source_kind: str = "folder",
+        source_label: str = "",
+        source_files: Iterable[dict[str, Any]] | None = None,
         output_dir: str = "",
         workspace_dir: str = "",
         name: str = "",
@@ -421,6 +483,8 @@ class TaskStore:
                         task_id=task_id,
                         created_at=created,
                         source_dir=source_dir,
+                        source_kind=source_kind,
+                        source_label=source_label,
                         output_dir=output_dir,
                         workspace_dir=workspace_dir,
                         name=name,
@@ -431,6 +495,7 @@ class TaskStore:
                         search_terms=normalized_terms,
                         search_mode=search_mode,
                     )
+                    self._insert_task_sources_locked(task_id, source_files, created)
                     event = self._append_task_event_locked(
                         task_id=task_id,
                         event_type=event_type,
@@ -459,6 +524,8 @@ class TaskStore:
         task_id: str,
         created_at: str,
         source_dir: str,
+        source_kind: str,
+        source_label: str,
         output_dir: str,
         workspace_dir: str,
         name: str,
@@ -471,38 +538,109 @@ class TaskStore:
     ) -> None:
         self.conn.execute(
             """INSERT INTO tasks
-               (task_id, name, source_dir, output_dir, workspace_dir, status,
+               (task_id, name, source_dir, source_kind, source_label, output_dir, workspace_dir, status,
                 is_demo, file_count, total_pages, created_at, updated_at, search_terms_json, search_mode)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                task_id, name, source_dir, output_dir, workspace_dir, status,
+                task_id, name, source_dir, source_kind, source_label or source_dir, output_dir, workspace_dir, status,
                 1 if is_demo else 0, file_count, total_pages, created_at, created_at,
                 json.dumps(search_terms, ensure_ascii=False, separators=(",", ":")), search_mode,
             ),
         )
 
+    def _insert_task_sources_locked(
+        self,
+        task_id: str,
+        source_files: Iterable[dict[str, Any]] | None,
+        created_at: str,
+    ) -> None:
+        if source_files is None:
+            return
+        for ordinal, source in enumerate(source_files):
+            file_path = str(source["file_path"])
+            source_id = str(source["source_id"])
+            display_path = str(source.get("display_path") or file_path)
+            self.conn.execute(
+                """
+                INSERT INTO task_sources(task_id, ordinal, source_id, file_path, display_path, file_name, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (task_id, ordinal, source_id, file_path, display_path, str(source.get("file_name") or Path(file_path).name), created_at),
+            )
+
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self.conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
-        return self._task_for_api(dict(row)) if row else None
+            sources = self._list_task_sources_locked(task_id) if row else []
+        return self._task_for_api(dict(row), sources=sources) if row else None
 
     def list_tasks(
-        self, *, limit: int = 50, offset: int = 0, status: str | None = None
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        query: str | None = None,
     ) -> list[dict[str, Any]]:
+        where_sql, params = self._task_list_filter(status=status, query=query)
         with self._lock:
-            if status:
-                cur = self.conn.execute(
-                    "SELECT * FROM tasks WHERE status=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                    (status, limit, offset),
-                )
-            else:
-                cur = self.conn.execute(
-                    "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                    (limit, offset),
-                )
-            return [self._task_for_api(dict(row)) for row in cur.fetchall()]
+            cur = self.conn.execute(
+                f"SELECT * FROM tasks{where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+            source_map = self._list_task_sources_for_tasks_locked([str(row["task_id"]) for row in rows])
+            return [self._task_for_api(row, sources=source_map.get(str(row["task_id"]), [])) for row in rows]
 
-    def _task_for_api(self, task: dict[str, Any]) -> dict[str, Any]:
+    def count_tasks(self, *, status: str | None = None, query: str | None = None) -> int:
+        where_sql, params = self._task_list_filter(status=status, query=query)
+        with self._lock:
+            row = self.conn.execute(f"SELECT COUNT(*) AS count FROM tasks{where_sql}", params).fetchone()
+        return int(row["count"] if row else 0)
+
+    @staticmethod
+    def _task_list_filter(*, status: str | None, query: str | None) -> tuple[str, tuple[Any, ...]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status=?")
+            params.append(status)
+        normalized_query = (query or "").strip()
+        if normalized_query:
+            clauses.append(
+                "(instr(name, ?) > 0 OR instr(source_dir, ?) > 0 OR instr(source_label, ?) > 0 "
+                "OR instr(search_terms_json, ?) > 0 OR EXISTS (SELECT 1 FROM task_sources "
+                "WHERE task_sources.task_id=tasks.task_id AND (instr(display_path, ?) > 0 OR instr(file_path, ?) > 0)))"
+            )
+            params.extend([normalized_query] * 6)
+        return (f" WHERE {' AND '.join(clauses)}" if clauses else "", tuple(params))
+
+    def _list_task_sources_locked(self, task_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT source_id, file_path, display_path, file_name, ordinal FROM task_sources WHERE task_id=? ORDER BY ordinal",
+            (task_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _list_task_sources_for_tasks_locked(self, task_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        if not task_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in task_ids)
+        rows = self.conn.execute(
+            f"SELECT task_id, source_id, file_path, display_path, file_name, ordinal FROM task_sources WHERE task_id IN ({placeholders}) ORDER BY task_id, ordinal",
+            task_ids,
+        ).fetchall()
+        result: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            source = dict(row)
+            result.setdefault(str(source.pop("task_id")), []).append(source)
+        return result
+
+    def list_task_sources(self, task_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            return self._list_task_sources_locked(task_id)
+
+    def _task_for_api(self, task: dict[str, Any], *, sources: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         raw_terms = task.get("search_terms_json")
         try:
             search_terms = json.loads(raw_terms) if isinstance(raw_terms, str) else list(LEGACY_SEARCH_TERMS)
@@ -513,6 +651,10 @@ class TaskStore:
         task["search_terms"] = search_terms
         task["search_mode"] = task.get("search_mode") or LEGACY_SEARCH_MODE
         task["search_text"] = search_terms[0] if len(search_terms) == 1 else " / ".join(search_terms)
+        task["source_kind"] = task.get("source_kind") or "folder"
+        task["source_label"] = task.get("source_label") or task.get("source_dir") or ""
+        if task["source_kind"] == "files":
+            task["source_files"] = [str(source["file_path"]) for source in (sources or [])]
         return task
 
     def update_task(self, task_id: str, **fields: Any) -> None:
@@ -526,6 +668,24 @@ class TaskStore:
         with self._lock:
             self.conn.execute(f"UPDATE tasks SET {cols} WHERE task_id=?", vals)
             self.conn.commit()
+
+    def delete_task(self, task_id: str) -> bool:
+        """删除一个任务及其全部本地派生记录；不处理任何来源文件。"""
+        with self._lock:
+            with self.conn:
+                for table in (
+                    "review_records",
+                    "occurrences",
+                    "task_processed_pages",
+                    "task_checkpoints",
+                    "task_events",
+                    "exports",
+                    "task_failures",
+                    "task_sources",
+                ):
+                    self.conn.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
+                cursor = self.conn.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
+        return cursor.rowcount == 1
 
     def allocate_worker_generation(self, task_id: str) -> int:
         with self._lock:
@@ -1168,6 +1328,61 @@ class TaskStore:
             )
             self.conn.commit()
         return export_id
+
+    def list_exports(self, *, task_id: str, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM exports WHERE task_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?",
+                (task_id, limit, offset),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    # ---- task failures ----
+    def replace_task_failures(self, task_id: str, failures: Iterable[dict[str, Any]]) -> int:
+        rows = [dict(failure) for failure in failures]
+        created_at = now_iso()
+        with self._lock:
+            with self.conn:
+                self.conn.execute("DELETE FROM task_failures WHERE task_id=?", (task_id,))
+                for failure in rows:
+                    failure_id = str(failure.get("failure_id") or new_id("fail_"))
+                    self.conn.execute(
+                        """
+                        INSERT INTO task_failures (
+                            failure_id, task_id, file_path, page_number, stage, error_type,
+                            error_message, possible_missed_hits, payload_json, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            failure_id,
+                            task_id,
+                            str(failure.get("file_path") or ""),
+                            failure.get("page_number"),
+                            str(failure.get("stage") or ""),
+                            str(failure.get("error_type") or ""),
+                            str(failure.get("error_message") or ""),
+                            1 if failure.get("possible_missed_hits", True) else 0,
+                            json.dumps({**failure, "failure_id": failure_id}, ensure_ascii=False),
+                            created_at,
+                        ),
+                    )
+        return len(rows)
+
+    def list_task_failures(self, task_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT payload_json FROM task_failures WHERE task_id=? ORDER BY rowid LIMIT ?",
+                (task_id, limit),
+            ).fetchall()
+        failures: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict):
+                failures.append(payload)
+        return failures
 
     # ---- lifecycle ----
     def close(self) -> None:

@@ -84,10 +84,13 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
         Check(
             key="tesseract",
             label="Tesseract OCR",
-            status=CHECK_PASS if cfg.has_tesseract else CHECK_FAIL,
+            # Tesseract only provides the secondary single-character check. The
+            # RapidOCR pipeline can still scan without it, so this is degraded
+            # capability rather than an application-wide outage.
+            status=CHECK_PASS if cfg.has_tesseract else CHECK_WARN,
             detail=tesseract_ver or "未找到 tesseract.exe",
             impact="单字符二次识别将不可用，confirmed 判定降级为 needs_review。" if not cfg.has_tesseract else "",
-            remedy="重新安装 OCR 组件，或在设置中选择有效的 Tesseract 目录。" if not cfg.has_tesseract else "",
+            remedy="安装 Tesseract OCR，并确保 tesseract.exe 可从系统 PATH 或应用支持的组件目录访问。" if not cfg.has_tesseract else "",
             extra={"path": str(cfg.tesseract_cmd)},
         )
     )
@@ -97,7 +100,9 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
         Check(
             key="djvulibre",
             label="DjVuLibre",
-            status=CHECK_PASS if cfg.has_djvu else CHECK_FAIL,
+            # Missing DjVu tools limit supported input formats but do not block
+            # PDF scanning.
+            status=CHECK_PASS if cfg.has_djvu else CHECK_WARN,
             detail="ddjvu / djvused 就绪" if cfg.has_djvu else "未找到 ddjvu.exe / djvused.exe",
             impact="无法扫描 DJVU / DJV 文件（PDF 不受影响）。" if not cfg.has_djvu else "",
             remedy="安装 DjVuLibre，或仅扫描 PDF 目录。" if not cfg.has_djvu else "",
@@ -110,7 +115,7 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
         Check(
             key="lang_simplified",
             label="简体中文语言包",
-            status=CHECK_PASS if cfg.has_simplified_lang else CHECK_FAIL,
+            status=CHECK_PASS if cfg.has_simplified_lang else CHECK_WARN,
             detail=", ".join(_lang_present(cfg, simplified=True)) or "缺少 chi_sim.traineddata",
             impact="简体“约”的二次识别不可用。" if not cfg.has_simplified_lang else "",
             remedy="在 tessdata 目录放入 chi_sim.traineddata。" if not cfg.has_simplified_lang else "",
@@ -149,6 +154,7 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
             status=CHECK_PASS if rapid_ver else CHECK_FAIL,
             detail=rapid_ver or "rapidocr_onnxruntime 未安装",
             impact="无法执行 OCR，扫描不可用。" if not rapid_ver else "",
+            remedy="修复或重新安装 ArchiveLens Engine；开发环境请按锁定依赖重新安装 rapidocr-onnxruntime。" if not rapid_ver else "",
         )
     )
     checks.append(
@@ -157,6 +163,8 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
             label="ONNX Runtime",
             status=CHECK_PASS if onnx_ver else CHECK_FAIL,
             detail=onnx_ver or "onnxruntime 未安装",
+            impact="RapidOCR 无法加载模型，扫描不可用。" if not onnx_ver else "",
+            remedy="修复或重新安装 ArchiveLens Engine；开发环境请按锁定依赖重新安装 onnxruntime。" if not onnx_ver else "",
         )
     )
 
@@ -177,6 +185,7 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
                 status=CHECK_PASS if writable else CHECK_FAIL,
                 detail=f"{workspace_dir}（剩余 {_format_bytes(free)}）",
                 impact="任务数据无法写入。" if not writable else "",
+                remedy="检查目录权限和可用磁盘空间；修复后重新运行环境诊断。" if not writable else "",
                 extra={"free_bytes": str(free) if free is not None else ""},
             )
         )
