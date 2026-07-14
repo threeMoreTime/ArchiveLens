@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { createMainWindow } from "./windows/main";
 import { sidecar, registerIpc } from "./ipc";
 import { createLifecycleController, type CloseAction } from "./lifecycle/controller";
+import { installNativeCloseHandler } from "./lifecycle/nativeClose";
 import { registerAssetProtocol, registerPrivilegedSchemes } from "./security/protocol";
 import { createTray, destroyTray } from "./tray";
 import { logger } from "./logging/logger";
@@ -28,10 +29,11 @@ interface TaskSummary {
 
 const ACTIVE_STATUSES = ["starting", "running", "pausing", "stopping"];
 const RECOVERABLE_STATUSES = ["paused", "recoverable", "stale", "running", "pausing", "starting"];
+let mainWindow: BrowserWindow | null = null;
 const lifecycle = createLifecycleController({
   sidecar,
   logger,
-  getMainWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+  getMainWindow: () => mainWindow,
   destroyTray,
   appControl: { exit: (code) => app.exit(code), quit: () => app.quit() },
   timeoutMs: Number(process.env["ARCHIVELENS_E2E_SHUTDOWN_TIMEOUT_MS"] ?? 15_000),
@@ -44,7 +46,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    const main = BrowserWindow.getAllWindows()[0];
+    const main = mainWindow;
     if (main) {
       if (main.isMinimized()) main.restore();
       main.show();
@@ -64,55 +66,54 @@ if (!gotLock) {
       logger.error(`Sidecar 启动失败：${(err as Error).message}`);
     }
 
-    createTray(() => BrowserWindow.getAllWindows()[0] ?? null);
-    await createMainWindow();
+    createTray(() => mainWindow);
+    mainWindow = await createMainWindow();
+    installNativeCloseHandler({ win: mainWindow, lifecycle, prompt: promptShutdown, logger });
+    mainWindow.once("closed", () => {
+      mainWindow = null;
+    });
 
     // 重启恢复：查询未完成/可恢复任务并通知 Renderer（不自动恢复、不自动删除）
     void reportRecoverableTasks();
   });
 
   app.on("window-all-closed", () => {
+    logger.info(`window-all-closed：approved=${lifecycle.getState().approvedQuit}`);
     // 触发 before-quit 协调器（由其决定最小化/暂停/停止/退出）
     if (process.platform !== "darwin") {
       app.quit();
     }
   });
 
-  app.on("before-quit", async (event) => {
+  app.on("before-quit", (event) => {
+    logger.info(`before-quit：approved=${lifecycle.getState().approvedQuit} hasWindow=${mainWindow !== null}`);
     if (lifecycle.getState().approvedQuit) {
       return; // 已批准真正退出
     }
     event.preventDefault();
-    try {
-      const request = await lifecycle.requestClose();
-      if (!request.requiresAction) {
-        return;
-      }
-
-      const choice = await promptShutdown(request.activeTask ?? { task_id: "", status: "running" });
-      await lifecycle.selectCloseAction(choice);
-    } catch (err) {
-      logger.error(`关闭流程异常：${(err as Error).message}`);
-      lifecycle.reset();
-    }
+    // 应用内退出也复用仍然存活的主窗口关闭路径。
+    mainWindow?.close();
   });
 }
 
 async function findActiveTask(): Promise<TaskSummary | null> {
   if (!sidecar.isReady) {
+    logger.warn("关闭流程查询活动任务：Sidecar 未就绪");
     return null;
   }
   try {
     const res = await sidecar.call<{ items: TaskSummary[] }>("tasks.list", { limit: 50 });
-    return (res.items || []).find((t) => ACTIVE_STATUSES.includes(t.status)) ?? null;
-  } catch {
+    const active = (res.items || []).find((t) => ACTIVE_STATUSES.includes(t.status)) ?? null;
+    logger.info(`关闭流程查询活动任务：count=${res.items?.length ?? 0} active=${active?.task_id ?? "none"}`);
+    return active;
+  } catch (error) {
+    logger.warn(`关闭流程查询活动任务失败：${String(error)}`);
     return null;
   }
 }
 
-async function promptShutdown(task: TaskSummary): Promise<CloseAction> {
-  const win = BrowserWindow.getAllWindows()[0];
-  const res = await dialog.showMessageBox(win ?? new BrowserWindow({ show: false }), {
+async function promptShutdown(win: BrowserWindow, task: TaskSummary): Promise<CloseAction> {
+  const res = await dialog.showMessageBox(win, {
     type: "warning",
     title: "ArchiveLens",
     message: "当前仍有扫描任务正在运行",

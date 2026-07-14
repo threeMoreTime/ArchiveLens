@@ -219,6 +219,16 @@ async function requestClose(win: Page) {
   });
 }
 
+async function triggerNativeClose(app: ElectronApplication, dialogResponse: number): Promise<void> {
+  await app.evaluate(
+    async ({ BrowserWindow, dialog }, response) => {
+      (dialog as any).showMessageBox = async () => ({ response, checkboxChecked: false });
+      BrowserWindow.getAllWindows()[0]?.close();
+    },
+    dialogResponse,
+  );
+}
+
 async function selectCloseAction(
   win: Page,
   action: "minimize" | "cancel" | "pause_and_quit" | "stop_and_quit" | "continue_waiting" | "force_quit",
@@ -511,6 +521,42 @@ async function closeAppForceQuit(app: ElectronApplication, win: Page): Promise<v
   await waitForPidExit(appPid);
   await app.close().catch(() => undefined);
 }
+
+test("Lifecycle: native window close keeps the task running and restores from tray", async () => {
+  const sourceDir = await makeOwnedTempDir("source", "native-close");
+  const userDataDir = await makeOwnedTempDir("userData", "native-close");
+  await mkdir(sourceDir, { recursive: true });
+
+  let app: ElectronApplication | undefined;
+  let win: Page | undefined;
+  try {
+    app = await launchDesktop({ userDataDir });
+    win = await firstWindow(app);
+
+    const taskId = await createSlowFakeTask(win, sourceDir);
+    await waitForProcessedAtLeast(win, taskId, 3);
+
+    const pidBefore = await getEnginePid(win);
+    expect(pidBefore).not.toBeNull();
+
+    await triggerNativeClose(app, 0);
+
+    await expect.poll(() => getWindowState(win)).toMatchObject({ exists: true, visible: false });
+    const pagesBefore = (await getProcessedPageIds(win, taskId)).length;
+    await waitForProgressIncrease(win, taskId, pagesBefore);
+
+    const restored = await restoreWindow(win);
+    expect(restored.restored).toBe(true);
+    await expect.poll(() => getWindowState(win)).toMatchObject({ exists: true, visible: true, focused: true });
+
+    expect(await getEnginePid(win)).toBe(pidBefore);
+    expect((await getTaskState(win, taskId)).status).toBe("running");
+  } finally {
+    if (app && win) {
+      await closeAppForceQuit(app, win);
+    }
+  }
+});
 
 test("Lifecycle: tray minimize keeps task running and tray restore returns the window", async () => {
   const sourceDir = await makeOwnedTempDir("source");
