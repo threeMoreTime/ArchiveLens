@@ -3,6 +3,7 @@ import { SidecarManager } from "../sidecar/manager";
 import { registerAppHandlers } from "./app";
 import { registerE2eHandlers } from "./e2e";
 import { registerEngineHandlers } from "./engine";
+import { registerSettingsHandlers } from "./settings";
 import { logger } from "../logging/logger";
 import type { LifecycleController } from "../lifecycle/controller";
 
@@ -17,6 +18,7 @@ export function registerIpc(lifecycle?: LifecycleController): void {
   registered = true;
   registerAppHandlers(sidecar);
   registerEngineHandlers(sidecar);
+  registerSettingsHandlers();
   if (lifecycle) {
     registerE2eHandlers(sidecar, lifecycle);
   }

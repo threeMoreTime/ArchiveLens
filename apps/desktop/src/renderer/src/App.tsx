@@ -9,6 +9,7 @@ import TaskPage from "./pages/TaskPage";
 import ReviewPage from "./pages/ReviewPage";
 import TaskCenter from "./pages/TaskCenter";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
+import SettingsPage from "./pages/SettingsPage";
 import { taskDisplayName, taskStatusView } from "./utils/presentation";
 
 const CURRENT_TASK_STORAGE_KEY = "archivelens.currentTaskId";
@@ -113,7 +114,6 @@ export default function App() {
           {currentTaskId ? <NavLink to={`/tasks/${currentTaskId}`} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ClipboardTaskListLtrRegular /> 任务详情</NavLink> : <span className="al-navlink disabled" aria-disabled="true"><ClipboardTaskListLtrRegular /> 任务详情</span>}
           {currentTaskId ? <NavLink to={`/review/${currentTaskId}`} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><EditRegular /> 校对</NavLink> : <span className="al-navlink disabled" aria-disabled="true"><EditRegular /> 校对</span>}
           <NavLink to={exportPath} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ShareRegular /> 导出</NavLink>
-          <NavLink to="/diagnostics" className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><SettingsRegular /> 环境诊断</NavLink>
         </nav>
         {recoverable.length > 0 && (
           <div className="al-recoverable">
@@ -123,7 +123,10 @@ export default function App() {
             </button>
           </div>
         )}
-        {sidebarTask && <div className="al-sidebar-task" title={sidebarTask.source_dir}><span>当前任务</span><strong>{taskDisplayName(sidebarTask)}</strong><small>{taskStatusView(sidebarTask).label}</small></div>}
+        <div className="al-sidebar-footer">
+          {sidebarTask && <div className="al-sidebar-task" title={sidebarTask.source_dir}><span>当前任务</span><strong>{taskDisplayName(sidebarTask)}</strong><small>{taskStatusView(sidebarTask).label}</small></div>}
+          <NavLink to="/settings" className={({ isActive }) => "al-navlink al-settings-navlink" + (isActive || location.pathname === "/diagnostics" ? " active" : "")}><SettingsRegular /> 设置</NavLink>
+        </div>
       </aside>
       <main className="al-main">
         <Routes>
@@ -135,6 +138,7 @@ export default function App() {
           <Route path="/export" element={<ExportPage />} />
           <Route path="/export/:taskId" element={<ExportPage />} />
           <Route path="/diagnostics" element={<DiagnosticsPage />} />
+          <Route path="/settings" element={<SettingsPage currentTaskId={currentTaskId} />} />
         </Routes>
       </main>
     </div>

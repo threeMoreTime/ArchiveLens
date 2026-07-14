@@ -11,9 +11,11 @@ const app = source("App.tsx");
 const newScan = source("pages/NewScan.tsx");
 const taskPage = source("pages/TaskPage.tsx");
 const reviewPage = source("pages/ReviewPage.tsx");
+const reviewHighlightSettings = source("components/ReviewHighlightSettings.tsx");
 const exportPage = source("pages/ExportPage.tsx");
 const taskCenter = source("pages/TaskCenter.tsx");
 const diagnosticsPage = source("pages/DiagnosticsPage.tsx");
+const settingsPage = source("pages/SettingsPage.tsx");
 
 describe("桌面端产品化 UI contract", () => {
   it("首页使用真实任务与环境数据，而非硬编码任务列表", () => {
@@ -39,7 +41,9 @@ describe("桌面端产品化 UI contract", () => {
     expect(newScan).toContain("source_type: \"files\"");
     expect(newScan).toContain("MAX_SOURCE_FILES");
     expect(newScan).toContain("自动移除");
-    expect(newScan).toContain("支持跨目录选择");
+    expect(newScan).toContain("支持跨目录和格式混合选择");
+    expect(newScan).toContain("SUPPORTED_SOURCE_FORMAT_LABEL");
+    expect(newScan).toContain("图片会校验真实格式、尺寸和页数");
     expect(newScan).toContain('aria-label="检索文字或词语"');
     expect(newScan).toContain("startError");
     expect(taskPage).toContain('task.status === "draft"');
@@ -65,6 +69,30 @@ describe("桌面端产品化 UI contract", () => {
     expect(reviewPage).toContain('role="listbox"');
     expect(reviewPage).toContain("NOTE_DRAFT_PREFIX");
     expect(reviewPage).toContain("if (!(await flushCurrentNote())) return");
+    expect(reviewPage).toContain("--al-review-highlight");
+    expect(reviewPage).toContain("window.archiveLens.settings.get(taskId)");
+    expect(reviewPage).not.toContain("<ReviewHighlightSettings");
+    expect(reviewHighlightSettings).toContain("HIGHLIGHT_PRESETS");
+    expect(reviewHighlightSettings).toContain('scope: "global"');
+    expect(reviewHighlightSettings).toContain('scope: "task"');
+    expect(reviewHighlightSettings).toContain("恢复跟随全局");
+    expect(reviewHighlightSettings).toContain("仅影响校对工作台显示");
+    expect(reviewHighlightSettings).toContain('type="color"');
+    expect(reviewHighlightSettings).toContain('type="range"');
+  });
+
+  it("设置页集中承载显示偏好，并从设置进入独立环境诊断页", () => {
+    expect(app).toContain('to="/settings"');
+    expect(app).toContain('path="/settings"');
+    expect(app).not.toContain('to="/diagnostics"');
+    expect(settingsPage).toContain("ReviewHighlightSettings");
+    expect(settingsPage).toContain("loadAllTasks");
+    expect(settingsPage).toContain("currentTaskId");
+    expect(reviewHighlightSettings).toContain("全局默认");
+    expect(reviewHighlightSettings).toContain("指定任务");
+    expect(reviewHighlightSettings).toContain("选择任务");
+    expect(settingsPage).toContain('nav("/diagnostics")');
+    expect(settingsPage).toContain("打开环境诊断");
   });
 
   it("导出页读取任务全量结果，并使用受限的预加载导出 API", () => {

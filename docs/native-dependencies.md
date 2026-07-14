@@ -2,6 +2,8 @@
 
 ArchiveLens 的 PDF 主链路随包包含 pypdfium2/PDFium、RapidOCR 与 ONNX Runtime。可选二次复核和 DJVU 支持仍依赖宿主原生组件（见 [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)）。
 
+TIFF、JPEG、PNG 由随 Engine 安装的 Pillow 解码，不要求用户另外安装图片查看器或系统编解码包。环境诊断会检查 JPEG、PNG 与 libtiff 能力；任一能力缺失时对应图片格式不可用。
+
 ## 当前状态
 
 packaged Engine 对以下可选能力依赖宿主已安装的原生工具：

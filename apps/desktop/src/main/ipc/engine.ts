@@ -1,6 +1,8 @@
 import { ipcMain, shell } from "electron";
 import type { SidecarManager } from "../sidecar/manager";
 import { registerResourceRoot, unregisterResourceRoot } from "../security/protocol";
+import { getSettingsStore } from "./settings";
+import { logger } from "../logging/logger";
 
 /**
  * 转发类 IPC：把 Renderer 请求经 Sidecar 投递到 Python Engine。
@@ -36,6 +38,9 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
   ipcMain.handle("tasks.delete", async (_e, params: { task_id: string }) => {
     const result = await sidecar.call<{ task_id: string; deleted: true }>("tasks.delete", params);
     unregisterResourceRoot(result.task_id);
+    await getSettingsStore().removeTaskOverride(result.task_id).catch((error) => {
+      logger.warn(`清理任务高亮设置失败：${(error as Error).message}`);
+    });
     return result;
   });
 

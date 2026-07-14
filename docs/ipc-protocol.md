@@ -71,7 +71,7 @@ Main 只有在外层和 payload 的 `protocol_version` 都严格为整数 `2`，
 }
 ```
 
-文件清单按规范化绝对路径自动去重，去重后必须有 1–200 个文件；可跨目录。每个路径必须存在、是可读取的普通文件，且扩展名为 `.pdf`、`.djvu` 或 `.djv`。任一文件无效时返回 `VALIDATION_ERROR` 与 `invalid_files`，不会创建部分任务。任务响应包含 `source_kind`、`source_label`，文件清单任务还包含 `source_files`；原有 `source_dir` 保留以兼容旧调用。
+文件清单按规范化绝对路径自动去重，去重后必须有 1–200 个文件；可跨目录并混合格式。每个路径必须存在、是可读取的普通文件，且扩展名为 `.pdf`、`.djvu`、`.djv`、`.tif`、`.tiff`、`.jpg`、`.jpeg` 或 `.png`。图片在创建任务时校验扩展名与真实格式、尺寸和页数；单页最多 2 亿像素、最长边 30000 像素，多页 TIFF 最多 5000 页，动态 PNG/APNG 不受支持。任一文件无效时返回 `VALIDATION_ERROR` 与 `invalid_files`，不会创建部分任务。任务响应包含 `source_kind`、`source_label`，文件清单任务还包含 `source_files`；原有 `source_dir` 保留以兼容旧调用。
 
 `search_text` 为必填字段：仅移除首尾 ASCII SPACE（U+0020），再执行 NFC 规范化；
 结果必须为 1～32 个 Unicode code point。内部及非 ASCII 空格保留；拒绝 Cc、Cs、
@@ -88,8 +88,15 @@ U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内
 
 - `tasks.list` 接受 `limit`（1～100）、`offset`、可选 `status` 和可选 `query`；响应包含 `items`、`limit`、`offset` 与符合筛选条件的 `total`。`query` 在任务名称、来源目录、来源标签、文件清单展示名与检索词中做本地包含匹配。
 - `tasks.get` 除任务摘要外返回最多 100 条结构化 `failures`，供任务页解释部分成功或失败原因。
-- `tasks.delete` 仅接受已完成、失败或已取消的任务；调用方必须先取消其他状态的任务。删除会清理本地任务记录、扫描结果、校对/导出记录和应用生成的页面图片，不会删除来源 PDF/DJVU/DJV 文件。
+- `tasks.delete` 仅接受已完成、失败或已取消的任务；调用方必须先取消其他状态的任务。删除会清理本地任务记录、扫描结果、校对/导出记录和应用生成的页面图片，不会删除任何来源文件。
 - `exports.list` 按最近写入顺序返回指定任务的持久化导出记录；导出文件仍保存在该任务本地工作区。
+
+### 本地显示设置
+
+- `settings.get` 与 `settings.update` 是 Renderer 到 Electron Main 的本地 IPC，不经过 Python Sidecar。
+- 校对高亮样式由 6 位十六进制 `color` 和 `0.1`～`0.6` 的 `opacity` 组成，保存在 `userData/settings.json`。
+- `settings.update` 支持修改 `global` 全局默认，或按 `task_id` 保存/清除 `task` 覆盖；读取时返回全局值、任务覆盖和最终生效值。
+- 删除任务时会清理对应的任务高亮覆盖，但不会影响全局设置或其他任务。
 
 ## 健壮性保证
 

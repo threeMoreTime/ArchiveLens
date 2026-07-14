@@ -80,7 +80,7 @@ export default function Welcome() {
     <div className="al-welcome al-home-page">
       <PageHeader
         title={taskTotal > 0 ? "欢迎回来，继续处理档案" : "欢迎使用 ArchiveLens"}
-        description="在本机扫描 PDF、DJVU、DJV 文件，定位你指定的文字或词语；档案内容不会上传到网络。"
+        description="在本机扫描 PDF、DJVU、DJV、TIFF、JPEG 和 PNG 文件，定位你指定的文字或词语；档案内容不会上传到网络。"
       />
       {error && <InlineFeedback>无法完成部分本地检查：{error} <Button size="small" onClick={() => nav("/diagnostics")}>查看诊断</Button></InlineFeedback>}
 

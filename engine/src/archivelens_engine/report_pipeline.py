@@ -24,6 +24,7 @@ from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 
 from .config import DEFAULT_CONFIG, EngineConfig
+from .documents.formats import SUPPORTED_SOURCE_SUFFIXES, document_type
 from .runtime.task_control import TaskControl
 from .documents import DocumentBackendRegistry
 from .ocr_core import (
@@ -228,7 +229,7 @@ class ReportPipeline:
             if path == self.output_html:
                 continue
             suffix = path.suffix.lower()
-            if suffix not in {".pdf", ".djvu", ".djv"}:
+            if suffix not in SUPPORTED_SOURCE_SUFFIXES:
                 continue
             if self.include_paths and str(path) not in self.include_paths:
                 continue
@@ -249,7 +250,7 @@ class ReportPipeline:
             file_path=path,
             relative_path=display_path,
             source_id=source_id or display_path,
-            file_type=path.suffix.lower().lstrip(".").upper(),
+            file_type=document_type(path),
             file_size_bytes=path.stat().st_size,
             file_hash_sha256=self._sha256(path),
             modified_time=path.stat().st_mtime,
@@ -551,7 +552,13 @@ class ReportPipeline:
             "context_full": context_fields["context_full"],
             "text_line": context_fields["text_line"],
             "text_block": context_fields["text_block"],
-            "location_method": "pdf_ocr" if document.file_type == "PDF" else "djvu_ocr",
+            "location_method": (
+                "pdf_ocr"
+                if document.file_type == "PDF"
+                else "djvu_ocr"
+                if document.file_type in {"DJVU", "DJV"}
+                else "image_ocr"
+            ),
             "detection_sources": ["ocr"],
             "ocr_engine": "rapidocr-onnxruntime",
             "ocr_confidence": round(line_confidence, 6),
@@ -776,6 +783,10 @@ class ReportPipeline:
             "pdf_file_count": file_types.get("PDF", 0),
             "djvu_file_count": file_types.get("DJVU", 0),
             "djv_file_count": file_types.get("DJV", 0),
+            "tiff_file_count": file_types.get("TIFF", 0),
+            "jpeg_file_count": file_types.get("JPEG", 0),
+            "png_file_count": file_types.get("PNG", 0),
+            "image_file_count": sum(file_types.get(kind, 0) for kind in ("TIFF", "JPEG", "PNG")),
             "success_file_count": len(documents),
             "failure_file_count": len(failures),
             "document_total_pages": sum(item["page_count"] for item in documents),
@@ -792,9 +803,10 @@ class ReportPipeline:
             "traditional_needs_review": status_counter.get(("約", "needs_review"), 0),
             "rejected_total": sum(1 for item in occurrences if item["verification_status"] == "rejected"),
             "text_layer_hits": methods.get("pdf_text_layer", 0) + methods.get("djvu_text_layer", 0),
-            "ocr_hits": methods.get("pdf_ocr", 0) + methods.get("djvu_ocr", 0),
+            "ocr_hits": methods.get("pdf_ocr", 0) + methods.get("djvu_ocr", 0) + methods.get("image_ocr", 0),
             "pdf_ocr_hits": methods.get("pdf_ocr", 0),
             "djvu_ocr_hits": methods.get("djvu_ocr", 0),
+            "image_ocr_hits": methods.get("image_ocr", 0),
             "only_simplified_files": only_simplified,
             "only_traditional_files": only_traditional,
             "both_variant_files": both_variants,
@@ -2355,6 +2367,11 @@ def prepare_report_for_output(report: dict[str, Any], workspace_dir: Path) -> No
     stats.setdefault("pdf_ocr_hits", 0)
     stats.setdefault("djvu_text_layer_hits", 0)
     stats.setdefault("djvu_ocr_hits", 0)
+    stats.setdefault("tiff_file_count", 0)
+    stats.setdefault("jpeg_file_count", 0)
+    stats.setdefault("png_file_count", 0)
+    stats.setdefault("image_file_count", 0)
+    stats.setdefault("image_ocr_hits", 0)
     stats.setdefault("only_simplified_files", 0)
     stats.setdefault("only_traditional_files", 0)
     stats.setdefault("both_variant_files", 0)

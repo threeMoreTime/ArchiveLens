@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button, Input, Text, Textarea } from "@fluentui/react-components";
+import { DEFAULT_REVIEW_HIGHLIGHT_STYLE, type ReviewHighlightStyle } from "@shared/index";
 import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
+import { highlightBackground } from "../components/ReviewHighlightSettings";
 
 const DEFAULT_PAGE_SIZE = 100;
 const PAGE_SIZES = [50, 100, 200] as const;
@@ -112,6 +114,7 @@ export default function ReviewPage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [highlightStyle, setHighlightStyle] = useState<ReviewHighlightStyle>(DEFAULT_REVIEW_HIGHLIGHT_STYLE);
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const noteRef = useRef<HTMLTextAreaElement | null>(null);
   const requestSequenceRef = useRef(0);
@@ -192,6 +195,18 @@ export default function ReviewPage() {
     setReviewComplete(false);
     setQueryError("");
     setActionError("");
+  }, [taskId]);
+
+  useEffect(() => {
+    let active = true;
+    window.archiveLens.settings.get(taskId).then((result: { effective: ReviewHighlightStyle }) => {
+      if (active) setHighlightStyle(result.effective);
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setHighlightStyle(DEFAULT_REVIEW_HIGHLIGHT_STYLE);
+      setActionError(`读取高亮设置失败：${errorMessage(error)}。当前使用默认颜色。`);
+    });
+    return () => { active = false; };
   }, [taskId]);
 
   useEffect(() => {
@@ -427,7 +442,10 @@ export default function ReviewPage() {
   };
 
   return (
-    <div className="al-review">
+    <div
+      className="al-review"
+      style={{ "--al-review-highlight": highlightBackground(highlightStyle) } as CSSProperties}
+    >
       <div className="al-review-title"><PageHeader title="校对工作台" description="逐条确认 OCR 命中结果，所有校对与备注均保存到本地任务。" /></div>
       <div className="al-review-toolbar">
         <select value={statusFilter} aria-label="校对状态筛选" onChange={(event) => void resetToFirstPage(() => setStatusFilter(event.target.value))}>

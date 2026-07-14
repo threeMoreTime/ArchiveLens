@@ -1,15 +1,20 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button, Card, Input, Text } from "@fluentui/react-components";
-import { MAX_SOURCE_FILES, SearchTextSchema, TaskCreateParamsSchema } from "@archivelens/ipc-schema";
+import {
+  MAX_SOURCE_FILES,
+  SUPPORTED_SOURCE_FORMAT_LABEL,
+  SearchTextSchema,
+  TaskCreateParamsSchema,
+} from "@archivelens/ipc-schema";
 import { InlineFeedback, PageHeader } from "../components/feedback";
 import { buildTaskName, sourceBaseName } from "../utils/presentation";
 
 type SourceType = "folder" | "single" | "multiple";
 
 const SOURCE_OPTIONS: Array<{ id: SourceType; title: string; detail: string }> = [
-  { id: "folder", title: "整个文件夹", detail: "递归扫描文件夹中的 PDF、DJVU 和 DJV 档案。" },
-  { id: "single", title: "单个文件", detail: "只扫描一个指定的 PDF、DJVU 或 DJV 文件。" },
+  { id: "folder", title: "整个文件夹", detail: `递归扫描文件夹中的 ${SUPPORTED_SOURCE_FORMAT_LABEL} 档案。` },
+  { id: "single", title: "单个文件", detail: `只扫描一个指定的 ${SUPPORTED_SOURCE_FORMAT_LABEL} 文件。` },
   { id: "multiple", title: "多个文件", detail: `将 1–${MAX_SOURCE_FILES} 个指定文件放进同一个任务，可跨目录选择。` },
 ];
 
@@ -55,7 +60,7 @@ export default function NewScan() {
   const disabledReason = busy
     ? "正在创建任务，请稍候"
     : sourceType === "folder" && !dir
-      ? "请先选择包含 PDF、DJVU 或 DJV 的文件夹"
+      ? `请先选择包含 ${SUPPORTED_SOURCE_FORMAT_LABEL} 的文件夹`
       : isFileSource && files.length === 0
         ? "请先选择要扫描的文件"
         : files.length > MAX_SOURCE_FILES
@@ -136,9 +141,9 @@ export default function NewScan() {
           {sourceType === "folder" ? (
             <Card className="al-card"><Text weight="semibold">步骤 2：选择文件夹</Text><div className="al-field-row"><Input value={dir} readOnly placeholder="点击右侧按钮选择文件夹" aria-label="扫描文件夹" /><Button onClick={() => void selectFolder()}>选择文件夹</Button></div><Text className="al-muted">将递归读取该目录下受支持的档案文件；文件夹扫描不受 200 个文件上限限制。</Text></Card>
           ) : sourceType === "single" ? (
-            <Card className="al-card"><Text weight="semibold">步骤 2：选择文件</Text><div className="al-field-row"><Input value={files[0] ?? ""} readOnly placeholder="点击右侧按钮选择一个文件" aria-label="扫描文件" /><Button onClick={() => void selectFiles(false)}>选择文件</Button></div><Text className="al-muted">仅接受一个 PDF、DJVU 或 DJV 文件。开始前会再次验证文件是否存在且可读取。</Text></Card>
+            <Card className="al-card"><Text weight="semibold">步骤 2：选择文件</Text><div className="al-field-row"><Input value={files[0] ?? ""} readOnly placeholder="点击右侧按钮选择一个文件" aria-label="扫描文件" /><Button onClick={() => void selectFiles(false)}>选择文件</Button></div><Text className="al-muted">仅接受一个 {SUPPORTED_SOURCE_FORMAT_LABEL} 文件。图片会校验真实格式、尺寸和页数。</Text></Card>
           ) : (
-            <Card className="al-card"><div className="al-card-heading-row"><Text weight="semibold">步骤 2：选择多个文件</Text><Text className="al-muted">{files.length}/{MAX_SOURCE_FILES} 个</Text></div><div className="al-task-actions"><Button onClick={() => void selectFiles(true)}>添加文件</Button><Button disabled={files.length === 0} onClick={() => { setFiles([]); setSelectionNote(null); }}>清空清单</Button></div><Text className="al-muted">支持跨目录选择。去重后必须保留 1–{MAX_SOURCE_FILES} 个有效 PDF、DJVU 或 DJV 文件。</Text>{files.length > 0 && <div className="al-failure-list" aria-label="已选文件清单">{files.map((file) => <div key={file}><strong title={file}>{sourceBaseName(file)}</strong><span title={file}>{file}</span><Button size="small" onClick={() => removeFile(file)}>移除</Button></div>)}</div>}{selectionNote && <InlineFeedback tone="info">{selectionNote}</InlineFeedback>}</Card>
+            <Card className="al-card"><div className="al-card-heading-row"><Text weight="semibold">步骤 2：选择多个文件</Text><Text className="al-muted">{files.length}/{MAX_SOURCE_FILES} 个</Text></div><div className="al-task-actions"><Button onClick={() => void selectFiles(true)}>添加文件</Button><Button disabled={files.length === 0} onClick={() => { setFiles([]); setSelectionNote(null); }}>清空清单</Button></div><Text className="al-muted">支持跨目录和格式混合选择。去重后必须保留 1–{MAX_SOURCE_FILES} 个有效文件。</Text>{files.length > 0 && <div className="al-failure-list" aria-label="已选文件清单">{files.map((file) => <div key={file}><strong title={file}>{sourceBaseName(file)}</strong><span title={file}>{file}</span><Button size="small" onClick={() => removeFile(file)}>移除</Button></div>)}</div>}{selectionNote && <InlineFeedback tone="info">{selectionNote}</InlineFeedback>}</Card>
           )}
 
           <Card className="al-card"><Text weight="semibold">步骤 3：设置检索词</Text><div className="al-search-input-wrap"><Input value={searchText} onChange={(_, data) => { setSearchText(data.value); setError(null); }} placeholder="输入 1～32 个文字，按 OCR 结果进行精确匹配" aria-label="检索文字或词语" /><span>{Array.from(searchText).length}/32</span></div><Text className="al-muted">支持 1–32 个 Unicode 字符。精确匹配、区分大小写；不支持正则、通配符或跨 OCR 行匹配。</Text>{searchError && <InlineFeedback>{searchError}</InlineFeedback>}</Card>

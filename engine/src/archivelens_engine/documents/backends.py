@@ -1,10 +1,11 @@
 """文档渲染后端抽象（任务 §五）。
 
-把对具体 PDF/DJVU 库的依赖从 ``ReportPipeline`` 中剥离，统一到
+把对具体 PDF/DJVU/图片库的依赖从 ``ReportPipeline`` 中剥离，统一到
 :class:`DocumentBackend`。当前实现：
 
 * :class:`PdfiumBackend` —— 基于 pypdfium2（BSD-3），替代 PyMuPDF（AGPL）；
 * :class:`DjvuLibreBackend` —— DjVuLibre 外部组件（GPL，可选，不随包）。
+* :class:`RasterImageBackend` —— Pillow TIFF/JPEG/PNG 后端。
 
 统一错误码：
 ``DOCUMENT_BACKEND_UNAVAILABLE`` / ``DOCUMENT_OPEN_FAILED`` /
@@ -19,7 +20,18 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from PIL import Image, ImageOps, UnidentifiedImageError
+
 from ..config import DEFAULT_CONFIG, EngineConfig
+from .formats import RASTER_FORMAT_BY_SUFFIX
+
+
+MAX_IMAGE_PIXELS = 200_000_000
+MAX_IMAGE_EDGE = 30_000
+MAX_TIFF_PAGES = 5_000
+# Pillow 默认阈值低于产品允许的 2 亿像素。后端在解码前执行更严格的
+# 宽高与总像素校验，因此把全局炸弹阈值对齐为产品上限。
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 
 class DocumentBackendError(Exception):
@@ -133,6 +145,139 @@ class DjvuLibreBackend:
             ppm_path.unlink(missing_ok=True)
 
 
+class RasterImageBackend:
+    """基于 Pillow 的 TIFF/JPEG/PNG 后端。"""
+
+    def supports(self, path: Path) -> bool:
+        return path.suffix.lower() in RASTER_FORMAT_BY_SUFFIX
+
+    def _open(self, path: Path) -> Image.Image:
+        expected = RASTER_FORMAT_BY_SUFFIX.get(path.suffix.lower())
+        if expected is None:
+            raise DocumentBackendError("UNSUPPORTED_DOCUMENT", f"不支持的图片类型：{path.suffix}")
+        try:
+            image = Image.open(path)
+        except (Image.DecompressionBombError, OSError, UnidentifiedImageError, ValueError) as exc:
+            raise DocumentBackendError(
+                "DOCUMENT_OPEN_FAILED",
+                f"图片打开失败：{exc}",
+                {"path": str(path)},
+            ) from exc
+        if image.format != expected:
+            actual = image.format or "未知"
+            image.close()
+            raise DocumentBackendError(
+                "UNSUPPORTED_DOCUMENT",
+                f"文件扩展名与实际格式不一致：期望 {expected}，实际格式 {actual}",
+                {"path": str(path), "expected_format": expected, "actual_format": actual},
+            )
+        return image
+
+    def _validate_frame(self, image: Image.Image, path: Path, frame_index: int) -> None:
+        try:
+            image.seek(frame_index)
+        except EOFError as exc:
+            raise DocumentBackendError(
+                "PAGE_COUNT_FAILED",
+                f"图片页索引无效：{frame_index + 1}",
+                {"path": str(path), "page": frame_index + 1},
+            ) from exc
+        width, height = image.size
+        if width <= 0 or height <= 0:
+            raise DocumentBackendError("DOCUMENT_OPEN_FAILED", "图片宽高必须大于 0", {"path": str(path)})
+        if width > MAX_IMAGE_EDGE or height > MAX_IMAGE_EDGE:
+            raise DocumentBackendError(
+                "DOCUMENT_OPEN_FAILED",
+                f"图片边长超过 {MAX_IMAGE_EDGE} 像素上限",
+                {"path": str(path), "width": width, "height": height, "max_edge": MAX_IMAGE_EDGE},
+            )
+        pixels = width * height
+        if pixels > MAX_IMAGE_PIXELS:
+            raise DocumentBackendError(
+                "DOCUMENT_OPEN_FAILED",
+                f"图片单页超过 {MAX_IMAGE_PIXELS} 像素上限",
+                {"path": str(path), "pixels": pixels, "max_pixels": MAX_IMAGE_PIXELS},
+            )
+
+    def _validate_open_image(self, image: Image.Image, path: Path) -> int:
+        frame_count = int(getattr(image, "n_frames", 1) or 1)
+        if image.format == "PNG" and frame_count > 1:
+            raise DocumentBackendError("UNSUPPORTED_DOCUMENT", "不支持动态 PNG/APNG", {"path": str(path)})
+        if image.format != "TIFF" and frame_count != 1:
+            raise DocumentBackendError("UNSUPPORTED_DOCUMENT", "该图片格式仅支持单页文件", {"path": str(path)})
+        if image.format == "TIFF" and frame_count > MAX_TIFF_PAGES:
+            raise DocumentBackendError(
+                "PAGE_COUNT_FAILED",
+                f"多页 TIFF 超过 {MAX_TIFF_PAGES} 页数上限",
+                {"path": str(path), "page_count": frame_count, "max_pages": MAX_TIFF_PAGES},
+            )
+        for frame_index in range(frame_count):
+            self._validate_frame(image, path, frame_index)
+        return frame_count
+
+    def validate(self, path: Path) -> int:
+        image = self._open(path)
+        try:
+            return self._validate_open_image(image, path)
+        finally:
+            image.close()
+
+    def page_count(self, path: Path) -> int:
+        return self.validate(path)
+
+    @staticmethod
+    def _to_rgb(image: Image.Image) -> Image.Image:
+        normalized = ImageOps.exif_transpose(image)
+        if normalized.mode in {"RGBA", "LA"} or "transparency" in normalized.info:
+            rgba = normalized.convert("RGBA")
+            background = Image.new("RGB", rgba.size, "white")
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            return background
+        return normalized.convert("RGB")
+
+    def render_page(self, path: Path, page_index: int, dpi: int) -> Path:
+        del dpi  # 图片来源使用原始像素，不按文档 DPI 重采样。
+        image = self._open(path)
+        try:
+            frame_count = self._validate_open_image(image, path)
+            if page_index < 0 or page_index >= frame_count:
+                raise DocumentBackendError(
+                    "PAGE_RENDER_FAILED",
+                    f"图片页码超出范围：{page_index + 1}",
+                    {"path": str(path), "page": page_index + 1, "page_count": frame_count},
+                )
+            image.seek(page_index)
+            output = self._to_rgb(image.copy())
+        except DocumentBackendError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise DocumentBackendError(
+                "PAGE_RENDER_FAILED",
+                f"图片渲染失败：{exc}",
+                {"path": str(path), "page": page_index + 1},
+            ) from exc
+        finally:
+            image.close()
+
+        import os
+
+        fd, name = tempfile.mkstemp(suffix=".png", prefix="al-image-")
+        os.close(fd)
+        try:
+            try:
+                output.save(name, "PNG")
+            except (OSError, ValueError) as exc:
+                Path(name).unlink(missing_ok=True)
+                raise DocumentBackendError(
+                    "PAGE_RENDER_FAILED",
+                    f"图片渲染结果写入失败：{exc}",
+                    {"path": str(path), "page": page_index + 1},
+                ) from exc
+        finally:
+            output.close()
+        return Path(name)
+
+
 class DocumentBackendRegistry:
     """按扩展名选择后端；业务层不再散判 ``.pdf`` / 拼接 ddjvu 路径。"""
 
@@ -140,13 +285,21 @@ class DocumentBackendRegistry:
         self.config = config or DEFAULT_CONFIG
         self.pdfium = PdfiumBackend()
         self.djvu = DjvuLibreBackend(self.config.djvu_bin_dir)
+        self.raster = RasterImageBackend()
 
-    def select(self, path: Path) -> PdfiumBackend | DjvuLibreBackend:
+    def select(self, path: Path) -> PdfiumBackend | DjvuLibreBackend | RasterImageBackend:
         if self.pdfium.supports(path):
             return self.pdfium
         if self.djvu.supports(path):
             return self.djvu
+        if self.raster.supports(path):
+            return self.raster
         raise DocumentBackendError("UNSUPPORTED_DOCUMENT", f"不支持的文档类型：{path.suffix}")
+
+    def validate_source(self, path: Path) -> None:
+        backend = self.select(path)
+        if isinstance(backend, RasterImageBackend):
+            backend.validate(path)
 
     def page_count(self, path: Path) -> int:
         return self.select(path).page_count(path)
@@ -169,5 +322,6 @@ __all__ = [
     "DocumentBackendError",
     "PdfiumBackend",
     "DjvuLibreBackend",
+    "RasterImageBackend",
     "DocumentBackendRegistry",
 ]

@@ -1,4 +1,10 @@
-import type { AppInfoResult, DiagnosticsResult, Event } from "@shared/index";
+import type {
+  AppInfoResult,
+  DiagnosticsResult,
+  Event,
+  ReviewHighlightSettingsResult,
+  ReviewHighlightSettingsUpdateParams,
+} from "@shared/index";
 
 export interface EnvironmentInfo {
   appVersion: string;
@@ -213,6 +219,10 @@ export interface ArchiveLensApi {
   files: {
     openFolder(path: string): Promise<{ ok: boolean }>;
     openOriginal(path: string): Promise<{ ok: boolean }>;
+  };
+  settings: {
+    get(task_id?: string): Promise<ReviewHighlightSettingsResult>;
+    update(p: ReviewHighlightSettingsUpdateParams): Promise<ReviewHighlightSettingsResult>;
   };
   test?: {
     lifecycle: {

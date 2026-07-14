@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "archivelens-engine"
 version = "0.1.0-alpha.11"
-description = "ArchiveLens local OCR engine — retrieves user-defined literal text in PDF/DJVU archives."
+description = "ArchiveLens local OCR engine — retrieves user-defined literal text in PDF, DjVu, TIFF, JPEG, and PNG archives."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "MIT" }

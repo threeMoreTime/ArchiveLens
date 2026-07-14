@@ -104,9 +104,33 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
             # PDF scanning.
             status=CHECK_PASS if cfg.has_djvu else CHECK_WARN,
             detail="ddjvu / djvused 就绪" if cfg.has_djvu else "未找到 ddjvu.exe / djvused.exe",
-            impact="无法扫描 DJVU / DJV 文件（PDF 不受影响）。" if not cfg.has_djvu else "",
-            remedy="安装 DjVuLibre，或仅扫描 PDF 目录。" if not cfg.has_djvu else "",
+            impact="无法扫描 DJVU / DJV 文件（PDF 和图片格式不受影响）。" if not cfg.has_djvu else "",
+            remedy="安装 DjVuLibre，或仅扫描 PDF、TIFF、JPEG、PNG 文件。" if not cfg.has_djvu else "",
             extra={"path": str(cfg.djvu_bin_dir)},
+        )
+    )
+
+    # ---- Pillow 图片解码能力 ----
+    try:
+        from PIL import features
+
+        raster_features = {
+            "JPEG": features.check("jpg"),
+            "PNG": features.check("zlib"),
+            "TIFF": features.check("libtiff"),
+        }
+    except Exception:
+        raster_features = {"JPEG": False, "PNG": False, "TIFF": False}
+    missing_raster = [name for name, available in raster_features.items() if not available]
+    checks.append(
+        Check(
+            key="raster_formats",
+            label="图片格式解码",
+            status=CHECK_PASS if not missing_raster else CHECK_FAIL,
+            detail="TIFF / JPEG / PNG 就绪" if not missing_raster else f"缺少解码能力：{', '.join(missing_raster)}",
+            impact="对应图片格式无法扫描。" if missing_raster else "",
+            remedy="修复或重新安装 ArchiveLens Engine 的 Pillow 运行组件。" if missing_raster else "",
+            extra={name.lower(): "available" if available else "missing" for name, available in raster_features.items()},
         )
     )
 

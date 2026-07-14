@@ -33,6 +33,7 @@ class DiagnosticsSeverityTests(unittest.TestCase):
         self.assertEqual(result["overall"], CHECK_WARN)
         self.assertEqual(by_key["tesseract"]["status"], CHECK_WARN)
         self.assertEqual(by_key["djvulibre"]["status"], CHECK_WARN)
+        self.assertEqual(by_key["raster_formats"]["status"], "PASS")
         self.assertEqual(by_key["lang_simplified"]["status"], CHECK_WARN)
 
 

@@ -1,6 +1,6 @@
 import { app, dialog, ipcMain, shell, BrowserWindow } from "electron";
 import type { SidecarManager } from "../sidecar/manager";
-import { AppInfoResultSchema, DiagnosticsResultSchema } from "@shared/index";
+import { AppInfoResultSchema, DiagnosticsResultSchema, SUPPORTED_SOURCE_EXTENSIONS } from "@shared/index";
 import { logger } from "../logging/logger";
 import { loadDesktopBuildInfo } from "../buildInfo";
 
@@ -83,7 +83,7 @@ export function registerAppHandlers(sidecar: SidecarManager): void {
     const result = await dialog.showOpenDialog({
       properties: multiple ? ["openFile", "multiSelections"] : ["openFile"],
       title: "选择要扫描的文件",
-      filters: [{ name: "支持的档案文件", extensions: ["pdf", "djvu", "djv"] }],
+      filters: [{ name: "支持的档案文件", extensions: [...SUPPORTED_SOURCE_EXTENSIONS] }],
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     return multiple ? result.filePaths : result.filePaths.slice(0, 1);

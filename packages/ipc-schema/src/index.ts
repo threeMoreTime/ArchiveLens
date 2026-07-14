@@ -14,7 +14,57 @@ export const PROTOCOL_VERSION = 2 as const;
 
 export const MAX_SEARCH_TEXT_LENGTH = 32;
 export const MAX_SOURCE_FILES = 200;
+export const SUPPORTED_SOURCE_EXTENSIONS = ["pdf", "djvu", "djv", "tif", "tiff", "jpg", "jpeg", "png"] as const;
+export const SUPPORTED_SOURCE_FORMAT_LABEL = "PDF、DJVU、DJV、TIFF、JPEG 或 PNG";
 export const ScanSourceKindSchema = z.enum(["folder", "files"]);
+
+export const ReviewHighlightStyleSchema = z.object({
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, "高亮颜色必须是 6 位十六进制颜色").transform((value) => value.toUpperCase()),
+  opacity: z.number().min(0.1).max(0.6),
+});
+export type ReviewHighlightStyle = z.infer<typeof ReviewHighlightStyleSchema>;
+
+export const DEFAULT_REVIEW_HIGHLIGHT_STYLE: ReviewHighlightStyle = {
+  color: "#C44516",
+  opacity: 0.18,
+};
+
+export const AppSettingsFileSchema = z.object({
+  version: z.literal(1).default(1),
+  appearance: z.object({
+    review_highlight: ReviewHighlightStyleSchema.default(DEFAULT_REVIEW_HIGHLIGHT_STYLE),
+  }).default({ review_highlight: DEFAULT_REVIEW_HIGHLIGHT_STYLE }),
+  task_overrides: z.record(z.string().min(1), z.object({
+    review_highlight: ReviewHighlightStyleSchema,
+  })).default({}),
+});
+export type AppSettingsFile = z.infer<typeof AppSettingsFileSchema>;
+
+export const ReviewHighlightSettingsResultSchema = z.object({
+  global: ReviewHighlightStyleSchema,
+  task_override: ReviewHighlightStyleSchema.nullable(),
+  effective: ReviewHighlightStyleSchema,
+  scope: z.enum(["global", "task"]),
+});
+export type ReviewHighlightSettingsResult = z.infer<typeof ReviewHighlightSettingsResultSchema>;
+
+export const ReviewHighlightSettingsGetParamsSchema = z.object({
+  task_id: z.string().min(1).optional(),
+});
+
+export const ReviewHighlightSettingsUpdateParamsSchema = z.union([
+  z.object({
+    scope: z.literal("global"),
+    highlight: ReviewHighlightStyleSchema,
+    task_id: z.string().min(1).optional(),
+  }),
+  z.object({
+    scope: z.literal("task"),
+    task_id: z.string().min(1),
+    highlight: ReviewHighlightStyleSchema.nullable(),
+  }),
+]);
+export type ReviewHighlightSettingsUpdateParams = z.infer<typeof ReviewHighlightSettingsUpdateParamsSchema>;
 
 export function normalizeSearchText(value: string): string {
   const normalized = value.replace(/^ +| +$/g, "").normalize("NFC");

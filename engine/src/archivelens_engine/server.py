@@ -24,6 +24,14 @@ from .build_info import load_build_info
 from .config import DEFAULT_CONFIG, EngineConfig
 from .db.store import LEGACY_TASK_REQUIRES_REVIEW, TaskStore, new_id, now_iso
 from .diagnostics import detect_all
+from .documents import DocumentBackendError, RasterImageBackend
+from .documents.formats import (
+    FORMAT_COUNT_KEYS,
+    RASTER_SOURCE_SUFFIXES,
+    SUPPORTED_SOURCE_LABEL,
+    SUPPORTED_SOURCE_SUFFIXES,
+    count_key,
+)
 from .ocr_core import build_bbox_hash
 from .protocol import (
     ErrorCode,
@@ -41,7 +49,7 @@ from .search_terms import EXACT_LITERAL_SEARCH_MODE, normalize_search_text, unic
 Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
 SLOWFAKE_SOURCE_ID = "source-main"
 MAX_SOURCE_FILES = 200
-SUPPORTED_SOURCE_SUFFIXES = {".pdf", ".djvu", ".djv"}
+RASTER_IMAGE_BACKEND = RasterImageBackend()
 
 
 def _write_protocol_line(line: str) -> None:
@@ -689,7 +697,7 @@ def _validate_file_sources(params: dict[str, Any]) -> tuple[list[dict[str, str]]
             invalid_files.append({"path": raw, "reason": "路径无效"})
             continue
         if resolved.suffix.lower() not in SUPPORTED_SOURCE_SUFFIXES:
-            invalid_files.append({"path": raw, "reason": "仅支持 PDF、DJVU 或 DJV 文件"})
+            invalid_files.append({"path": raw, "reason": f"仅支持 {SUPPORTED_SOURCE_LABEL} 文件"})
             continue
         try:
             with resolved.open("rb") as handle:
@@ -697,6 +705,12 @@ def _validate_file_sources(params: dict[str, Any]) -> tuple[list[dict[str, str]]
         except (OSError, ValueError):
             invalid_files.append({"path": raw, "reason": "文件不可读取"})
             continue
+        if resolved.suffix.lower() in RASTER_SOURCE_SUFFIXES:
+            try:
+                RASTER_IMAGE_BACKEND.validate(resolved)
+            except DocumentBackendError as exc:
+                invalid_files.append({"path": raw, "reason": exc.message})
+                continue
         normalized.append(resolved)
     if invalid_files:
         preview = "；".join(
@@ -766,17 +780,32 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
     except OSError as exc:
         raise ProtocolError(ErrorCode.PERMISSION_DENIED, f"输出目录不可写：{output_dir}", {"error": str(exc)})
 
-    counts = {"pdf": 0, "djvu": 0, "djv": 0}
+    counts = {key: 0 for key in FORMAT_COUNT_KEYS}
     if source_files is None:
+        invalid_files: list[dict[str, str]] = []
         for p in src.rglob("*"):
             if not p.is_file():
                 continue
-            suffix = p.suffix.lower().lstrip(".")
-            if suffix in counts:
-                counts[suffix] += 1
+            if p.suffix.lower() not in SUPPORTED_SOURCE_SUFFIXES:
+                continue
+            if p.suffix.lower() in RASTER_SOURCE_SUFFIXES:
+                try:
+                    RASTER_IMAGE_BACKEND.validate(p)
+                except DocumentBackendError as exc:
+                    invalid_files.append({"path": str(p), "reason": exc.message})
+                    continue
+            counts[count_key(p)] += 1
+        if invalid_files:
+            preview = "；".join(f"{Path(item['path']).name}：{item['reason']}" for item in invalid_files[:5])
+            suffix = "；其余文件请查看错误详情" if len(invalid_files) > 5 else ""
+            raise ProtocolError(
+                ErrorCode.VALIDATION_ERROR,
+                f"文件夹包含无效图片，未创建任务：{preview}{suffix}",
+                {"invalid_files": invalid_files},
+            )
     else:
         for source in source_files:
-            counts[Path(source["file_path"]).suffix.lower().lstrip(".")] += 1
+            counts[count_key(Path(source["file_path"]))] += 1
     file_count = sum(counts.values())
 
     payload = {

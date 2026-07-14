@@ -13,6 +13,9 @@ import {
   TaskDeleteResultSchema,
   TaskSummarySchema,
   TasksListResultSchema,
+  SUPPORTED_SOURCE_EXTENSIONS,
+  ReviewHighlightStyleSchema,
+  ReviewHighlightSettingsUpdateParamsSchema,
   normalizeSearchText,
 } from "@shared/index";
 
@@ -90,12 +93,24 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(TaskCreateParamsSchema.safeParse({ source_dir: "E:\\OCR", search_text: "档案" }).success).toBe(true);
     expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: ["E:\\OCR\\a.pdf"], search_text: "档案" }).success).toBe(true);
     expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: ["E:\\a.pdf", "F:\\b.djvu"], search_text: "档案" }).success).toBe(true);
+    expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: ["E:\\a.tiff", "F:\\b.jpg", "F:\\c.png"], search_text: "档案" }).success).toBe(true);
+    expect(SUPPORTED_SOURCE_EXTENSIONS).toEqual(["pdf", "djvu", "djv", "tif", "tiff", "jpg", "jpeg", "png"]);
     expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: [], search_text: "档案" }).success).toBe(false);
     expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: Array.from({ length: 201 }, (_, index) => `E:\\${index}.pdf`), search_text: "档案" }).success).toBe(false);
   });
 
   it("review-update 合法 decision 通过", () => {
     expect(RequestSchema.safeParse(load("review-update.json")).success).toBe(true);
+  });
+
+  it("校对高亮设置校验颜色、透明度与配置范围", () => {
+    expect(ReviewHighlightStyleSchema.parse({ color: "#abcdef", opacity: 0.25 })).toEqual({ color: "#ABCDEF", opacity: 0.25 });
+    expect(ReviewHighlightStyleSchema.safeParse({ color: "red", opacity: 0.25 }).success).toBe(false);
+    expect(ReviewHighlightStyleSchema.safeParse({ color: "#ABCDEF", opacity: 0.09 }).success).toBe(false);
+    expect(ReviewHighlightStyleSchema.safeParse({ color: "#ABCDEF", opacity: 0.61 }).success).toBe(false);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", highlight: { color: "#C44516", opacity: 0.18 } }).success).toBe(true);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", task_id: "task-1", highlight: null }).success).toBe(true);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", highlight: null }).success).toBe(false);
   });
 
   it("response-success 通过 ResponseSchema", () => {

@@ -12,6 +12,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from PIL import Image
+
 from archivelens_engine.protocol import ErrorCode, ProtocolError
 from archivelens_engine.server import Server
 
@@ -91,11 +93,17 @@ class HandlersTests(unittest.TestCase):
         src.mkdir()
         (src / "a.pdf").write_bytes(b"%PDF-1.4")
         (src / "b.djvu").write_bytes(b"AT&T")
+        Image.new("RGB", (8, 8), color="white").save(src / "c.tiff")
+        Image.new("RGB", (8, 8), color="white").save(src / "d.jpg")
+        Image.new("RGB", (8, 8), color="white").save(src / "e.png")
         (src / "ignore.txt").write_text("x")
         result = self.server.handlers["tasks.create"](
             self.server, {"source_dir": str(src), "search_text": "  档案  "}
         )
-        self.assertEqual(result["file_count"], 2)
+        self.assertEqual(result["file_count"], 5)
+        self.assertEqual(result["counts"]["tiff"], 1)
+        self.assertEqual(result["counts"]["jpeg"], 1)
+        self.assertEqual(result["counts"]["png"], 1)
         self.assertEqual(result["status"], "draft")
         self.assertEqual(result["search_text"], "档案")
 
@@ -158,6 +166,28 @@ class HandlersTests(unittest.TestCase):
                 {"source_type": "files", "source_files": [str(unsupported)], "search_text": "档案"},
             )
         self.assertEqual(cm.exception.code, ErrorCode.VALIDATION_ERROR)
+
+    def test_tasks_create_accepts_valid_images_and_rejects_corrupt_or_spoofed_images(self) -> None:
+        valid = Path(self.tmp) / "valid.png"
+        Image.new("RGB", (8, 8), color="white").save(valid)
+        result = self.server.handlers["tasks.create"](
+            self.server,
+            {"source_type": "files", "source_files": [str(valid)], "search_text": "档案"},
+        )
+        self.assertEqual(result["file_count"], 1)
+        self.assertEqual(result["counts"]["png"], 1)
+
+        corrupt = Path(self.tmp) / "corrupt.tiff"
+        corrupt.write_bytes(b"not-a-tiff")
+        spoofed = Path(self.tmp) / "spoofed.png"
+        Image.new("RGB", (8, 8), color="white").save(spoofed, format="JPEG")
+        for invalid in (corrupt, spoofed):
+            with self.assertRaises(ProtocolError) as cm:
+                self.server.handlers["tasks.create"](
+                    self.server,
+                    {"source_type": "files", "source_files": [str(invalid)], "search_text": "档案"},
+                )
+            self.assertEqual(cm.exception.code, ErrorCode.VALIDATION_ERROR)
         many_dir = Path(self.tmp) / "many"
         many_dir.mkdir()
         files = []

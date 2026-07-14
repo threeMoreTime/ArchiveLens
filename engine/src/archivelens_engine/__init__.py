@@ -1,6 +1,6 @@
 """ArchiveLens OCR engine.
 
-本地 PDF/DJVU 档案中检索简体“约”与繁体“約”的 OCR 引擎。
+本地 PDF、DJVU、TIFF、JPEG、PNG 档案 OCR 检索引擎。
 该包同时提供：
 
 * 传统 CLI 入口（兼容旧脚本与批处理）；

@@ -61,6 +61,10 @@ const api: ArchiveLensApi = {
     openFolder: (path) => ipcRenderer.invoke("files.openFolder", { path }),
     openOriginal: (path) => ipcRenderer.invoke("files.openOriginal", { path }),
   },
+  settings: {
+    get: (task_id) => ipcRenderer.invoke("settings.get", task_id ? { task_id } : {}),
+    update: (p) => ipcRenderer.invoke("settings.update", p),
+  },
 };
 
 if (process.env["ARCHIVELENS_E2E"] === "1") {

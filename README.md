@@ -1,6 +1,6 @@
 # ArchiveLens
 
-> 本地档案 OCR 检索与校对桌面工具 —— 在 PDF / DJVU / DJV 中定位用户指定的文字或词语。
+> 本地档案 OCR 检索与校对桌面工具 —— 在 PDF / DJVU / DJV / TIFF / JPEG / PNG 中定位用户指定的文字或词语。
 
 **文档内容默认在本机处理，不上传网络。**
 
@@ -25,6 +25,7 @@
 | 任务中心与任务上下文 | ✅ | 服务端搜索/分页 + URL/本地持久化上下文 |
 | 失败恢复与诊断 | ✅ | 结构化失败明细 + 影响/建议 + 日志入口 |
 | 校对与导出保护 | ✅ | 备注自动保存 + 系统/人工状态分离 + 应用内阶段性导出确认 |
+| 图片档案扫描 | ✅ | TIFF（含多页）/ JPEG / PNG，支持混合任务与创建期安全校验 |
 
 详见 [docs/architecture.md](docs/architecture.md) 与最终阶段报告。
 
@@ -93,6 +94,7 @@ pnpm --filter @archivelens/desktop dist
 
 MIT（见 [LICENSE](LICENSE)）。第三方组件清单见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 生产包不包含 PyMuPDF/fitz；PDF 渲染使用 pypdfium2/PDFium。DjVuLibre、Tesseract 与 tessdata 保持宿主安装策略，详见 [docs/native-dependencies.md](docs/native-dependencies.md)。
+TIFF、JPEG、PNG 使用随 Engine 安装的 Pillow 解码；多页 TIFF 的每个 Frame 作为一个页面处理，原始图片不会被修改。
 
 ## Alpha 限制（必读）
 

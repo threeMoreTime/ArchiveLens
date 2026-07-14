@@ -1,8 +1,10 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import { execFile } from "node:child_process";
 import { access, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 
 const APP_DIR = path.resolve(__dirname, "..");
@@ -10,6 +12,7 @@ const ROOT_DIR = path.resolve(APP_DIR, "..", "..");
 const ENGINE_SRC = path.join(ROOT_DIR, "engine", "src");
 const FIXTURE = path.join(ROOT_DIR, "tests", "fixtures", "ocr", "custom-double.pdf");
 const RUN_ID = (process.env["ARCHIVELENS_TEST_RUN_ID"] ?? "a11-local").replace(/[^A-Za-z0-9._-]/g, "-");
+const execFileAsync = promisify(execFile);
 
 
 async function resolvePythonExecutable(): Promise<string> {
@@ -299,6 +302,59 @@ test("multiple file selection creates one cross-directory task", async () => {
     await expect.poll(async () => page.evaluate(async (id) => {
       return (await (window as any).archiveLens.tasks.get(id)).status;
     }, taskId)).toBe("completed");
+  } finally {
+    if (app) await app.close().catch(() => undefined);
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});
+
+test("mixed PNG and multi-page TIFF sources complete as one raster task", async () => {
+  const runRoot = await mkdtemp(path.join(os.tmpdir(), `archivelens-ocr-temp-${RUN_ID}-raster-ui-`));
+  const userDataDir = path.join(runRoot, "user-data");
+  const sourceDir = path.join(runRoot, "source");
+  const pngFile = path.join(sourceDir, "single.png");
+  const tiffFile = path.join(sourceDir, "multi.tiff");
+  await mkdir(sourceDir, { recursive: true });
+
+  let app: ElectronApplication | null = null;
+  try {
+    const python = await resolvePythonExecutable();
+    await execFileAsync(python, [
+      "-c",
+      "from PIL import Image; import sys; Image.new('RGB',(120,80),'white').save(sys.argv[1]); a=Image.new('L',(100,70),255); a.save(sys.argv[2],save_all=True,append_images=[Image.new('L',(90,60),255)])",
+      pngFile,
+      tiffFile,
+    ]);
+    app = await electron.launch({
+      args: [APP_DIR],
+      cwd: APP_DIR,
+      env: {
+        ...process.env,
+        ARCHIVELENS_E2E: "1",
+        ARCHIVELENS_E2E_SELECT_FILES: JSON.stringify([pngFile, tiffFile]),
+        ARCHIVELENS_USER_DATA_DIR: userDataDir,
+        AL_DEBUG: "1",
+        AL_ENGINE_DEV: python,
+        AL_ENGINE_SRC: ENGINE_SRC,
+      },
+    });
+    const page = await app.firstWindow();
+    await page.waitForLoadState("domcontentloaded");
+    await waitForSidecar(page);
+    await page.getByRole("link", { name: "新建扫描" }).click();
+    await page.getByRole("radio", { name: /多个文件/ }).click();
+    await page.getByRole("button", { name: "添加文件" }).click();
+    await expect(page.getByLabel("已选文件清单")).toContainText("single.png");
+    await expect(page.getByLabel("已选文件清单")).toContainText("multi.tiff");
+    await page.getByRole("textbox", { name: "检索文字或词语" }).fill("档案");
+    await page.getByRole("button", { name: "开始扫描" }).click();
+    await expect(page).toHaveURL(/#\/tasks\/task_/);
+    const taskId = page.url().split("/tasks/")[1]!;
+
+    await expect.poll(async () => page.evaluate(async (id) => {
+      const task = await (window as any).archiveLens.tasks.get(id);
+      return { status: task.status, file_count: task.file_count, total_pages: task.total_pages };
+    }, taskId), { timeout: 60_000 }).toEqual({ status: "completed", file_count: 2, total_pages: 3 });
   } finally {
     if (app) await app.close().catch(() => undefined);
     await rm(runRoot, { recursive: true, force: true });
