@@ -321,21 +321,19 @@ class ReportPipelineLiteralMatchTests(unittest.TestCase):
             self.assertEqual(occurrences[0]["source_x1"], 80.0)
             self.assertIsNone(occurrences[0]["matched_character"])
 
-    def test_maximum_review_quality_rerenders_pdf_at_300_dpi(self) -> None:
+    def test_review_page_image_is_lossless_png_without_quality_rerender(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "root"
             root.mkdir()
             ocr_render = Path(tmp) / "ocr.png"
-            review_render = Path(tmp) / "review.png"
             Image.new("RGB", (100, 100), color="white").save(ocr_render)
-            Image.new("RGB", (400, 500), color="white").save(review_render)
             pipeline = ReportPipeline(
                 root_dir=root,
                 output_html=root / "out.html",
                 workspace_dir=Path(tmp) / "work",
                 review_image_quality="maximum",
             )
-            pipeline.backend_registry.render_page = mock.Mock(return_value=review_render)  # type: ignore[method-assign]
+            pipeline.backend_registry.render_page = mock.Mock()  # type: ignore[method-assign]
             document = DocumentRecord(
                 document_id="doc-quality",
                 file_path=root / "sample.pdf",
@@ -349,8 +347,9 @@ class ReportPipelineLiteralMatchTests(unittest.TestCase):
             try:
                 output, width, height = pipeline._create_review_page_image(document, 0, ocr_render, "page-quality")
                 self.assertTrue(output.exists())
-                self.assertEqual((width, height), (400, 500))
-                pipeline.backend_registry.render_page.assert_called_once_with(document.file_path, 0, 300)
+                self.assertEqual(output.suffix, ".png")
+                self.assertEqual((width, height), (100, 100))
+                pipeline.backend_registry.render_page.assert_not_called()
             finally:
                 pipeline.close()
 

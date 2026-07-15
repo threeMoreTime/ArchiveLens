@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from archivelens_engine.documents import backends
-from archivelens_engine.documents.backends import DocumentBackendError, RasterImageBackend
+from archivelens_engine.documents.backends import DjvuLibreBackend, DocumentBackendError, RasterImageBackend
 from archivelens_engine.report_pipeline import ReportPipeline
 
 
@@ -33,6 +33,27 @@ def test_raster_backend_counts_and_renders_all_tiff_frames(tmp_path: Path) -> No
             assert image.mode == "RGB"
     finally:
         rendered.unlink(missing_ok=True)
+
+
+def test_djvu_backend_closes_rendered_temp_file_handle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tools = tmp_path / "djvu"
+    tools.mkdir()
+    (tools / "ddjvu.exe").write_bytes(b"test")
+    (tools / "djvused.exe").write_bytes(b"test")
+    source = tmp_path / "archive.djvu"
+    source.write_bytes(b"synthetic")
+
+    def fake_run(command: list[str], **_kwargs: object) -> object:
+        Image.new("RGB", (8, 6), "white").save(Path(command[-1]), "PPM")
+        return object()
+
+    monkeypatch.setattr(backends.subprocess, "run", fake_run)
+    rendered = DjvuLibreBackend(tools).render_page(source, 0, 144)
+
+    with Image.open(rendered) as image:
+        assert image.size == (8, 6)
+    rendered.unlink()
+    assert not rendered.exists()
 
 
 def test_raster_backend_applies_exif_orientation(tmp_path: Path) -> None:

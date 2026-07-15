@@ -34,8 +34,17 @@ export class SettingsStore {
   update(params: ReviewHighlightSettingsUpdateParams): Promise<ReviewHighlightSettingsResult> {
     const parsed = ReviewHighlightSettingsUpdateParamsSchema.parse(params);
     return this.enqueue(async () => {
-      const settings = await this.load();
-      if ("highlight" in parsed) {
+      const settings = AppSettingsFileSchema.parse(await this.load());
+      if (parsed.scope === "document") {
+        const override = settings.task_overrides[parsed.task_id];
+        settings.task_overrides[parsed.task_id] = {
+          ...override,
+          page_orientations: {
+            ...override?.page_orientations,
+            [parsed.document_id]: parsed.orientation,
+          },
+        };
+      } else if ("highlight" in parsed) {
         if (parsed.scope === "global") {
           settings.appearance.review_highlight = parsed.highlight;
         } else if (parsed.highlight === null) {
@@ -111,13 +120,17 @@ export class SettingsStore {
       effective_preferences: taskPreferencesOverride
         ?? settings.appearance.review_preferences
         ?? DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      page_orientations: override?.page_orientations ?? {},
       scope: taskOverride || taskPreferencesOverride ? "task" : "global",
     });
   }
 
   private removeEmptyOverride(settings: AppSettingsFile, taskId: string): void {
     const override = settings.task_overrides[taskId];
-    if (override && !override.review_highlight && !override.review_preferences) {
+    if (override
+      && !override.review_highlight
+      && !override.review_preferences
+      && !Object.keys(override.page_orientations ?? {}).length) {
       delete settings.task_overrides[taskId];
     }
   }

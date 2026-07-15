@@ -48,6 +48,7 @@ const api: ArchiveLensApi = {
     getDetail: (p) => ipcRenderer.invoke("results.getDetail", p),
   },
   review: {
+    preparePageImage: (p) => ipcRenderer.invoke("review.preparePageImage", p),
     updateDecision: (p) => ipcRenderer.invoke("review.updateDecision", p),
     updateNote: (p) => ipcRenderer.invoke("review.updateNote", p),
   },

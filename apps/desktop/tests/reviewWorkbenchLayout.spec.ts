@@ -33,7 +33,13 @@ describe("校对工作台固定视口与舒适操作契约", () => {
 
   it("固定画布提供明确缩放工具，判断、导航和备注分组排列", () => {
     expect(reviewPage).toContain("ResizeObserver");
-    expect(reviewPage).toContain("fitScale");
+    expect(reviewPage).toContain("review.preparePageImage");
+    expect(reviewPage).toContain("}, 150)");
+    expect(reviewPage).toContain("Math.min(4");
+    expect(reviewPage).toContain("正在加载原始清晰度");
+    expect(reviewPage).toContain("pageImage.overscale_warning");
+    expect(reviewPage).not.toContain("scale(${zoom})");
+    expect(styles).not.toContain("will-change:transform");
     expect(reviewPage).toContain('aria-label="缩小页面"');
     expect(reviewPage).toContain('aria-label="放大页面"');
     expect(reviewPage).toContain('>适应窗口</Button>');
@@ -42,5 +48,35 @@ describe("校对工作台固定视口与舒适操作契约", () => {
     expect(reviewPage).toContain("al-decision-actions");
     expect(reviewPage).toContain("al-navigation-actions");
     expect(reviewPage).toContain("al-review-note-panel");
+  });
+
+  it("每次切换命中默认以 100% 居中显示，适应窗口保持为手动操作", () => {
+    expect(reviewPage).toContain("const fitWhenReadyRef = useRef(false)");
+    expect(reviewPage).toMatch(/useEffect\(\(\) => \{[\s\S]*?setZoom\(1\);[\s\S]*?setOffset\(\{ x: 0, y: 0 \}\);[\s\S]*?\}, \[selected\?\.occurrence_id\]\);/);
+    expect(reviewPage).toMatch(/setZoom\(Math\.min\(\s*1,/);
+    expect(reviewPage).toContain("fitWhenReadyRef.current = true");
+    expect(reviewPage).toContain('>100%</Button>');
+  });
+
+  it("四向展示共享同一旋转内容层并按源文件保存方向", () => {
+    expect(reviewPage).toContain("up: 0");
+    expect(reviewPage).toContain("right: 90");
+    expect(reviewPage).toContain("down: 180");
+    expect(reviewPage).toContain("left: 270");
+    expect(reviewPage).toContain('aria-label="页面展示方向"');
+    expect(reviewPage).toContain("aria-pressed={pageOrientation === option.value}");
+    expect(reviewPage).toContain('scope: "document"');
+    expect(reviewPage).toContain("document_id: documentId");
+    expect(reviewPage).toContain("setPageOrientations(previousOrientations)");
+    expect(reviewPage).toContain("已恢复上次保存的方向");
+    expect(reviewPage).toContain("orientationSwapsAxes ? result.height_100_css : result.width_100_css");
+    expect(reviewPage).toContain("orientationSwapsAxes ? pageImage.height_100_css : pageImage.width_100_css");
+    expect(reviewPage).toContain('className="al-page-positioner"');
+    expect(reviewPage).toContain('className="al-page-canvas"');
+    expect(reviewPage).toContain("rotate(${PAGE_ORIENTATION_DEGREES[pageOrientation]}deg)");
+    expect(styles).toContain(".al-page-positioner { position:absolute; left:50%; top:50%; }");
+    expect(styles).toContain(".al-page-canvas { position:absolute; left:50%; top:50%; transform-origin:center center; }");
+    expect(styles).toContain(".al-viewer-overlays { position:absolute;");
+    expect(styles).toContain("max-width:calc(100% - 20px)");
   });
 });

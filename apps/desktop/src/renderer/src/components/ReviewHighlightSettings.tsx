@@ -18,36 +18,12 @@ const HIGHLIGHT_PRESETS = [
   { label: "淡紫", color: "#8C62B8" },
 ] as const;
 
-const QUALITY_OPTIONS = [
-  { value: "standard", label: "标准", dpi: 144, detail: "磁盘占用较低" },
-  { value: "clear", label: "清晰", dpi: 200, detail: "适合日常校对" },
-  { value: "high", label: "高清", dpi: 240, detail: "适合小字号档案" },
-  { value: "maximum", label: "最清晰", dpi: 300, detail: "生成更慢且占用更多空间" },
-] as const;
-
 const DIRECTION_OPTIONS: Array<{ value: ContextReadingDirection; label: string; detail: string }> = [
   { value: "ltr", label: "从左到右", detail: "左侧 → 关键词 → 右侧" },
   { value: "rtl", label: "从右到左", detail: "右侧 → 关键词 → 左侧" },
   { value: "ttb", label: "从上到下", detail: "上方 → 关键词 → 下方；跨列时从右向左" },
   { value: "btt", label: "从下到上", detail: "下方 → 关键词 → 上方；跨列时从左向右" },
 ];
-
-function ArchiveQualitySample({ quality, highlight }: { quality: string; highlight: string }) {
-  return (
-    <div className={`al-archive-quality-sample quality-${quality}`} aria-hidden="true">
-      <div className="al-archive-sample-paper">
-        <span>本馆清册　第廿七号</span>
-        <span>民国十七年三月收存</span>
-        <span>所载<span className="al-archive-keyword" style={{ background: highlight }}>卷宗</span>核验归档</span>
-        <i>档</i>
-      </div>
-      <div className="al-quality-magnifier">
-        <small>局部 2×</small>
-        <span className="al-quality-magnifier-text" style={{ background: highlight }}>卷宗</span>
-      </div>
-    </div>
-  );
-}
 
 function ArchiveDirectionSample({ direction, highlight, contextRadius }: { direction: ContextReadingDirection; highlight: string; contextRadius: number }) {
   const horizontal = direction === "ltr" || direction === "rtl";
@@ -131,7 +107,6 @@ export function ReviewHighlightSettings({ tasks, initialTaskId }: ReviewHighligh
   const [taskPreferences, setTaskPreferences] = useState<ReviewDisplayPreferences>(DEFAULT_REVIEW_DISPLAY_PREFERENCES);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [error, setError] = useState("");
-  const [qualityExpanded, setQualityExpanded] = useState(true);
   const [directionExpanded, setDirectionExpanded] = useState(true);
 
   useEffect(() => {
@@ -340,49 +315,11 @@ export function ReviewHighlightSettings({ tasks, initialTaskId }: ReviewHighligh
 
           <div className="al-highlight-preview"><span style={{ background: previewBackground }}>命中关键字</span></div>
           <div className="al-review-preferences-heading">
-            <div><Text weight="semibold">出处页与上下文</Text><Text className="al-muted">创建扫描任务时固化；已完成任务需要使用原来源重新扫描后生效。</Text></div>
+            <div><Text weight="semibold">出处页与上下文</Text><Text className="al-muted">出处页始终按源文件无损显示；这里只配置 OCR 上下文的读取方式。</Text></div>
           </div>
 
           <fieldset className="al-review-preferences" disabled={!settings || saveState === "saving" || (scope === "task" && !selectedTaskId)}>
-            <legend>出处页与上下文配置</legend>
-            <section className="al-review-preference-group">
-              <button
-                type="button"
-                className="al-review-preference-toggle"
-                aria-expanded={qualityExpanded}
-                aria-controls="review-quality-options"
-                onClick={() => setQualityExpanded((expanded) => !expanded)}
-              >
-                <span><strong>命中页清晰度</strong><small>{QUALITY_OPTIONS.find((option) => option.value === activePreferences.page_quality)?.label ?? "未选择"}</small></span>
-                <b aria-hidden="true">{qualityExpanded ? "收起 −" : "展开 +"}</b>
-              </button>
-              {qualityExpanded && (
-                <div id="review-quality-options" className="al-review-preference-content">
-                  <Text className="al-review-simulation-note">以下为清晰度示意，实际效果取决于原始文件质量。</Text>
-                  <div className="al-review-option-grid" role="radiogroup" aria-label="命中页清晰度">
-                    {QUALITY_OPTIONS.map((option) => (
-                      <label
-                        key={option.value}
-                        className={activePreferences.page_quality === option.value ? "selected" : ""}
-                        aria-label={`${option.label}，${option.dpi} DPI，${option.detail}`}
-                      >
-                        <input
-                          type="radio"
-                          name={`review-quality-${scope}`}
-                          value={option.value}
-                          checked={activePreferences.page_quality === option.value}
-                          onChange={() => void persistPreferences({ ...activePreferences, page_quality: option.value })}
-                        />
-                        <div className="al-review-option-content">
-                          <div className="al-review-option-title"><strong>{option.label}</strong><span>{option.dpi} DPI · {option.detail}</span></div>
-                          <ArchiveQualitySample quality={option.value} highlight={previewBackground} />
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </section>
+            <legend>上下文配置</legend>
 
             <section className="al-review-preference-group">
               <button
@@ -444,7 +381,7 @@ export function ReviewHighlightSettings({ tasks, initialTaskId }: ReviewHighligh
             </label>
             <Text className="al-muted">汉字、字母、数字和标点均计数；空格、制表符和换行不计数。跨行或跨列时继续按所选阅读方向取字。</Text>
             <Button onClick={() => void restorePreferences()}>
-              {scope === "task" ? "出处页与上下文恢复跟随全局" : "出处页与上下文恢复产品默认"}
+              {scope === "task" ? "上下文恢复跟随全局" : "上下文恢复产品默认"}
             </Button>
           </fieldset>
           <div className="al-highlight-settings-footer">

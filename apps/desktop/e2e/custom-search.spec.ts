@@ -128,7 +128,7 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
       context_direction: "ltr",
       context_radius: 15,
     });
-    expect(scanEvidence.occurrence.page_image_width).toBeGreaterThan(scanEvidence.occurrence.source_page_width);
+    expect(scanEvidence.occurrence.page_image_width).toBe(scanEvidence.occurrence.source_page_width);
 
     await page.getByRole("button", { name: "进入校对工作台" }).click();
     await expect(page.getByText("档案", { exact: true }).first()).toBeVisible();
@@ -145,6 +145,35 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     await expect(page.locator(".al-highlight")).toHaveCSS("background-color", "rgba(196, 69, 22, 0.18)");
     const pageImage = page.locator('img[alt="出处页"]');
     const pageWrap = page.locator(".al-page-wrap");
+    const visualOutput = path.join(ROOT_DIR, "output", "playwright");
+    await mkdir(visualOutput, { recursive: true });
+    const hasEnoughPhysicalPixels = () => pageImage.evaluate((image) => {
+      const rect = image.getBoundingClientRect();
+      const orientation = image.closest(".al-page-canvas")?.getAttribute("data-orientation");
+      const swapsAxes = orientation === "right" || orientation === "left";
+      const requiredSourceWidth = (swapsAxes ? rect.height : rect.width) * window.devicePixelRatio;
+      const requiredSourceHeight = (swapsAxes ? rect.width : rect.height) * window.devicePixelRatio;
+      return image.naturalWidth + 1 >= Math.ceil(requiredSourceWidth)
+        && image.naturalHeight + 1 >= Math.ceil(requiredSourceHeight);
+    });
+    const waitForEvidenceSettled = async () => {
+      await expect(page.locator(".al-page-fidelity-status")).toHaveCount(0);
+      await page.evaluate(() => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }));
+    };
+    await expect(page.locator(".al-zoom-value")).toHaveText("100%");
+    await expect(page.getByRole("button", { name: "页面朝上（0°）" })).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(hasEnoughPhysicalPixels).toBe(true);
+    await waitForEvidenceSettled();
+    await page.screenshot({ path: path.join(visualOutput, "review-pdf-100-source-fidelity.png") });
+    await page.getByRole("button", { name: "适应窗口" }).click();
+    await expect.poll(async () => Number((await page.locator(".al-zoom-value").textContent())?.replace("%", ""))).toBeLessThan(100);
+    await expect.poll(hasEnoughPhysicalPixels).toBe(true);
+    await waitForEvidenceSettled();
+    await page.screenshot({ path: path.join(visualOutput, "review-pdf-fit-source-fidelity.png") });
+    await page.getByRole("button", { name: "100%" }).click();
+    await expect(page.locator(".al-zoom-value")).toHaveText("100%");
     const imageBeforeDrag = await pageImage.boundingBox();
     const highlightBeforeDrag = await page.locator(".al-highlight").boundingBox();
     const wrapBox = await pageWrap.boundingBox();
@@ -161,6 +190,43 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     expect(highlightAfterDrag).not.toBeNull();
     expect(Math.abs((highlightAfterDrag!.x - imageAfterDrag!.x) - (highlightBeforeDrag!.x - imageBeforeDrag!.x))).toBeLessThan(1);
     expect(Math.abs((highlightAfterDrag!.y - imageAfterDrag!.y) - (highlightBeforeDrag!.y - imageBeforeDrag!.y))).toBeLessThan(1);
+    await page.getByRole("button", { name: "放大页面" }).click();
+    await expect(page.locator(".al-zoom-value")).toHaveText("125%");
+    const imageBeforeRotation = await pageImage.boundingBox();
+    await page.getByRole("button", { name: "页面朝右（90°）" }).click();
+    await expect(page.getByRole("button", { name: "页面朝右（90°）" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".al-page-canvas")).toHaveAttribute("data-orientation", "right");
+    await expect(page.locator(".al-zoom-value")).toHaveText("125%");
+    await expect.poll(hasEnoughPhysicalPixels).toBe(true);
+    await waitForEvidenceSettled();
+    const imageAfterRotation = await pageImage.boundingBox();
+    const highlightAfterRotation = await page.locator(".al-highlight").boundingBox();
+    const positionerAfterRotation = await page.locator(".al-page-positioner").boundingBox();
+    expect(imageBeforeRotation).not.toBeNull();
+    expect(imageAfterRotation).not.toBeNull();
+    expect(highlightAfterRotation).not.toBeNull();
+    expect(positionerAfterRotation).not.toBeNull();
+    expect(Math.abs(imageAfterRotation!.width - imageBeforeRotation!.height)).toBeLessThan(2);
+    expect(Math.abs(imageAfterRotation!.height - imageBeforeRotation!.width)).toBeLessThan(2);
+    expect(Math.abs(positionerAfterRotation!.x + positionerAfterRotation!.width / 2 - (wrapBox!.x + wrapBox!.width / 2))).toBeLessThan(2);
+    expect(Math.abs(positionerAfterRotation!.y + positionerAfterRotation!.height / 2 - (wrapBox!.y + wrapBox!.height / 2))).toBeLessThan(2);
+    expect(highlightAfterRotation!.x).toBeGreaterThanOrEqual(imageAfterRotation!.x - 1);
+    expect(highlightAfterRotation!.y).toBeGreaterThanOrEqual(imageAfterRotation!.y - 1);
+    expect(highlightAfterRotation!.x + highlightAfterRotation!.width).toBeLessThanOrEqual(imageAfterRotation!.x + imageAfterRotation!.width + 1);
+    expect(highlightAfterRotation!.y + highlightAfterRotation!.height).toBeLessThanOrEqual(imageAfterRotation!.y + imageAfterRotation!.height + 1);
+    await expect(resultThumbnail.locator("img")).toHaveCSS("transform", "none");
+    await page.screenshot({ path: path.join(visualOutput, "review-pdf-right-source-fidelity.png") });
+    for (const orientation of [
+      { label: "页面朝下（180°）", value: "down" },
+      { label: "页面朝左（270°）", value: "left" },
+      { label: "页面朝上（0°）", value: "up" },
+      { label: "页面朝右（90°）", value: "right" },
+    ]) {
+      await page.getByRole("button", { name: orientation.label }).click();
+      await expect(page.getByRole("button", { name: orientation.label })).toHaveAttribute("aria-pressed", "true");
+      await expect(page.locator(".al-page-canvas")).toHaveAttribute("data-orientation", orientation.value);
+      await expect(page.locator(".al-zoom-value")).toHaveText("125%");
+    }
     const dimensions = await page.evaluate(() => ({
       viewportWidth: window.innerWidth,
       bodyWidth: document.documentElement.scrollWidth,
@@ -203,12 +269,38 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     await expect(page.getByRole("button", { name: "收起校对摘要" })).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("archivelens.reviewSummaryCollapsed"))).toBe("false");
 
-    const zoomBefore = await page.locator(".al-page-canvas").boundingBox();
-    await page.getByRole("button", { name: "放大页面" }).click();
-    const zoomAfter = await page.locator(".al-page-canvas").boundingBox();
-    expect(zoomBefore).not.toBeNull();
-    expect(zoomAfter).not.toBeNull();
-    expect(zoomAfter!.width).toBeGreaterThan(zoomBefore!.width);
+    await page.getByRole("button", { name: "100%" }).click();
+    for (let index = 0; index < 7; index += 1) {
+      await page.getByRole("button", { name: "放大页面" }).click();
+    }
+    await expect(page.locator(".al-zoom-value")).toHaveText("400%");
+    await expect.poll(hasEnoughPhysicalPixels, { timeout: 45_000 }).toBe(true);
+    await waitForEvidenceSettled();
+    const toolbarGeometry = await page.evaluate(() => {
+      const wrapElement = document.querySelector<HTMLElement>(".al-page-wrap");
+      const wrap = wrapElement?.getBoundingClientRect();
+      const toolbarElement = document.querySelector<HTMLElement>(".al-viewer-toolbar");
+      const toolbar = toolbarElement?.getBoundingClientRect();
+      const orientationToolbar = document.querySelector<HTMLElement>(".al-page-orientation-toolbar")?.getBoundingClientRect();
+      return wrap && wrapElement && toolbar && orientationToolbar ? {
+        wrapLeft: wrap.left,
+        wrapRight: wrap.right,
+        toolbarLeft: toolbar.left,
+        toolbarRight: toolbar.right,
+        orientationToolbarLeft: orientationToolbar.left,
+        orientationToolbarRight: orientationToolbar.right,
+        scrollLeft: wrapElement.scrollLeft,
+        scrollTop: wrapElement.scrollTop,
+      } : null;
+    });
+    expect(toolbarGeometry).not.toBeNull();
+    expect(toolbarGeometry!.scrollLeft).toBe(0);
+    expect(toolbarGeometry!.scrollTop).toBe(0);
+    expect(toolbarGeometry!.toolbarLeft).toBeGreaterThanOrEqual(toolbarGeometry!.wrapLeft);
+    expect(toolbarGeometry!.toolbarRight).toBeLessThanOrEqual(toolbarGeometry!.wrapRight);
+    expect(toolbarGeometry!.orientationToolbarLeft).toBeGreaterThanOrEqual(toolbarGeometry!.wrapLeft);
+    expect(toolbarGeometry!.orientationToolbarRight).toBeLessThanOrEqual(toolbarGeometry!.wrapRight);
+    await page.screenshot({ path: path.join(visualOutput, "review-pdf-400-source-fidelity.png") });
     const zoomedViewport = await page.evaluate(() => ({ height: window.innerHeight, documentHeight: document.documentElement.scrollHeight }));
     expect(zoomedViewport.documentHeight).toBeLessThanOrEqual(zoomedViewport.height + 1);
     await page.getByRole("button", { name: "适应窗口" }).click();
@@ -265,6 +357,8 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
         .flatMap((element) => [element.getAttribute("src"), element.getAttribute("href")])
         .filter((value): value is string => Boolean(value && /^https?:/i.test(value))),
       imagesLoaded: [...document.images].every((image) => image.complete && image.naturalWidth > 0),
+      imagesUnrotated: [...document.querySelectorAll<HTMLImageElement>(".image-stage img")]
+        .every((image) => getComputedStyle(image).transform === "none"),
       pageCards: document.querySelectorAll(".page-card").length,
       overlays: document.querySelectorAll(".hit-overlay-svg rect").length,
       controls: ["file-filter", "status-filter", "report-search", "sort-order", "page-size", "print-report"]
@@ -276,6 +370,7 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     expect(offlineReport.eventHandlerCount).toBe(0);
     expect(offlineReport.externalReferences).toEqual([]);
     expect(offlineReport.imagesLoaded).toBe(true);
+    expect(offlineReport.imagesUnrotated).toBe(true);
     expect(offlineReport.pageCards).toBeGreaterThan(0);
     expect(offlineReport.overlays).toBeGreaterThan(0);
     expect(offlineReport.controls).toBe(true);
@@ -385,9 +480,10 @@ test("mixed PNG and multi-page TIFF sources complete as one raster task", async 
     const python = await resolvePythonExecutable();
     await execFileAsync(python, [
       "-c",
-      "from PIL import Image; import sys; Image.new('RGB',(120,80),'white').save(sys.argv[1]); a=Image.new('L',(100,70),255); a.save(sys.argv[2],save_all=True,append_images=[Image.new('L',(90,60),255)])",
+      "from PIL import Image; import pypdfium2 as pdfium; import sys; d=pdfium.PdfDocument(sys.argv[3]); d[0].render(scale=2).to_pil().save(sys.argv[1]); d.close(); a=Image.new('L',(100,70),255); a.save(sys.argv[2],save_all=True,append_images=[Image.new('L',(90,60),255)])",
       pngFile,
       tiffFile,
+      FIXTURE,
     ]);
     app = await electron.launch({
       args: [APP_DIR],
@@ -417,8 +513,15 @@ test("mixed PNG and multi-page TIFF sources complete as one raster task", async 
 
     await expect.poll(async () => page.evaluate(async (id) => {
       const task = await (window as any).archiveLens.tasks.get(id);
-      return { status: task.status, file_count: task.file_count, total_pages: task.total_pages };
-    }, taskId), { timeout: 60_000 }).toEqual({ status: "completed", file_count: 2, total_pages: 3 });
+      return { status: task.status, file_count: task.file_count, total_pages: task.total_pages, occurrence_count: task.occurrence_count };
+    }, taskId), { timeout: 60_000 }).toMatchObject({ status: "completed", file_count: 2, total_pages: 3 });
+    const rasterTask = await page.evaluate(async (id) => (window as any).archiveLens.tasks.get(id), taskId);
+    expect(rasterTask.occurrence_count).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "进入校对工作台" }).click();
+    await expect(page.locator('img[alt="出处页"]')).toBeVisible();
+    await page.getByRole("button", { name: "100%" }).click();
+    await page.getByRole("button", { name: "放大页面" }).click();
+    await expect(page.getByText("仅放大观察，不会增加源文件细节", { exact: true })).toBeVisible();
   } finally {
     if (app) await app.close().catch(() => undefined);
     await rm(runRoot, { recursive: true, force: true });

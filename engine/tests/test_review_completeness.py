@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 from archivelens_engine.protocol import ErrorCode, ProtocolError
 from archivelens_engine.server import Server
 
@@ -181,6 +183,15 @@ class ReviewCompletenessTests(unittest.TestCase):
 
     def test_completed_fully_reviewed_export_is_marked_fully_verified_in_json_and_html(self) -> None:
         task_id = self._seed_task(1)
+        workspace = Path(self.tmp) / "review-completeness-assets"
+        (workspace / "pages").mkdir(parents=True)
+        Image.new("RGB", (80, 60), "white").save(workspace / "pages" / "page.png")
+        self.server.store.update_task(task_id, workspace_dir=str(workspace), is_demo=1)
+        self.server.store.conn.execute(
+            "UPDATE occurrences SET page_image_relpath=?, page_image_width=?, page_image_height=? WHERE task_id=?",
+            ("pages/page.png", 80, 60, task_id),
+        )
+        self.server.store.conn.commit()
         item = self.server.store.query_occurrences(task_id=task_id, limit=1, offset=0)[1][0]
         self.server.store.upsert_review(
             task_id=task_id, occurrence_id=item["occurrence_id"], decision="confirmed", note="已核验"

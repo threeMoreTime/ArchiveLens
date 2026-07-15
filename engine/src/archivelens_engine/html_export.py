@@ -51,8 +51,10 @@ def _safe_asset_path(workspace_dir: Path | None, relpath: Any) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def _encode_page_image(path: Path | None) -> tuple[str, str]:
+def _encode_page_image(path: Path | None, *, required: bool = False) -> tuple[str, str]:
     if path is None:
+        if required:
+            raise FileNotFoundError("verified page evidence is missing")
         return "", "页面图片未生成或当前不可用"
     try:
         with Image.open(path) as opened:
@@ -67,7 +69,9 @@ def _encode_page_image(path: Path | None) -> tuple[str, str]:
         if not mime_type:
             raise ValueError(f"unsupported report image format: {image_format}")
         return f"data:{mime_type};base64," + base64.b64encode(path.read_bytes()).decode("ascii"), ""
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if required:
+            raise ValueError(f"verified page evidence is unreadable: {path}") from exc
         return "", "页面图片无法读取，文字识别与校对记录仍可查看"
 
 
@@ -188,12 +192,13 @@ def _stream_page_data(
     workspace_dir: Path | None,
     expected_page_count: int | None,
     progress: Callable[[str, int, int], None] | None,
+    page_image_resolver: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
     files_by_identity: dict[str, dict[str, Any]] = {}
     used_paths: set[str] = set()
     page_count = 0
     hit_count = 0
-    current_key: tuple[str, int, str] | None = None
+    current_key: tuple[str, int, str] | tuple[str, int] | None = None
     current_page: dict[str, Any] | None = None
     first_page = True
 
@@ -215,11 +220,19 @@ def _stream_page_data(
             source = _register_source(item, files_by_identity, used_paths)
             page_number = max(1, int(_number(item.get("page_number"), 1)))
             image_relpath = str(item.get("page_image_relpath") or "")
-            key = (_source_identity(item), page_number, image_relpath)
+            key = (
+                (_source_identity(item), page_number)
+                if page_image_resolver is not None
+                else (_source_identity(item), page_number, image_relpath)
+            )
             if key != current_key:
                 flush_page()
+                page_asset = page_image_resolver(item) if page_image_resolver is not None else None
+                if page_asset is not None:
+                    image_relpath = str(page_asset.get("asset_relpath") or "")
                 image_data, image_error = _encode_page_image(
-                    _safe_asset_path(workspace_dir, image_relpath)
+                    _safe_asset_path(workspace_dir, image_relpath),
+                    required=page_image_resolver is not None,
                 )
                 current_key = key
                 current_page = {
@@ -231,6 +244,8 @@ def _stream_page_data(
                     "sourceOrder": source["sourceOrder"],
                     "image": image_data,
                     "imageError": image_error,
+                    "pixelWidth": int((page_asset or {}).get("pixel_width") or item.get("page_image_width") or 0),
+                    "pixelHeight": int((page_asset or {}).get("pixel_height") or item.get("page_image_height") or 0),
                     "hits": [],
                 }
             hit_count += 1
@@ -386,6 +401,7 @@ def write_offline_review_report(
     exported_at: str,
     expected_page_count: int | None = None,
     progress: Callable[[str, int, int], None] | None = None,
+    page_image_resolver: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, int]:
     """分批读取记录、逐页嵌入原图并原子写入单文件离线报告。"""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -400,6 +416,7 @@ def write_offline_review_report(
             workspace_dir=workspace_dir,
             expected_page_count=expected_page_count,
             progress=progress,
+            page_image_resolver=page_image_resolver,
         )
         data = _report_metadata(
             task=task,

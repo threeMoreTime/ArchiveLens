@@ -55,7 +55,7 @@ describe("桌面端产品化 UI contract", () => {
     expect(newScan).toContain("SUPPORTED_SOURCE_FORMAT_LABEL");
     expect(newScan).toContain("effective_preferences");
     expect(newScan).toContain("review_preferences: reviewPreferences");
-    expect(newScan).toContain("命中页清晰度");
+    expect(newScan).toContain("出处页显示<strong>源文件无损</strong>");
     expect(newScan).toContain("每侧 {reviewPreferences.context_radius} 字");
     expect(newScan).toContain("图片会校验真实格式、尺寸和页数");
     expect(newScan).toContain('aria-label="检索文字或词语"');
@@ -93,27 +93,28 @@ describe("桌面端产品化 UI contract", () => {
     expect(reviewHighlightSettings).toContain("仅影响校对工作台显示");
     expect(reviewHighlightSettings).toContain('type="color"');
     expect(reviewHighlightSettings).toContain('type="range"');
-    expect(reviewHighlightSettings).toContain("QUALITY_OPTIONS");
+    expect(reviewHighlightSettings).not.toContain("QUALITY_OPTIONS");
     expect(reviewHighlightSettings).toContain("DIRECTION_OPTIONS");
-    expect(reviewHighlightSettings).toContain("ArchiveQualitySample");
+    expect(reviewHighlightSettings).not.toContain("ArchiveQualitySample");
     expect(reviewHighlightSettings).toContain("ArchiveDirectionSample");
-    expect(reviewHighlightSettings).toContain("本馆清册　第廿七号");
     expect(reviewHighlightSettings).toContain("<span>本馆清册</span>");
     expect(reviewHighlightSettings).toContain("<span>依次编号</span>");
     expect(reviewHighlightSettings).toContain("al-horizontal-segment");
     expect(styles).not.toContain(".direction-rtl .al-horizontal-archive-line { direction:rtl; }");
     expect(reviewHighlightSettings).toContain("关键词前后每侧字数");
     expect(reviewHighlightSettings).toContain("context_radius");
-    expect(reviewHighlightSettings).toContain("已完成任务需要使用原来源重新扫描后生效");
+    expect(reviewHighlightSettings).toContain("出处页始终按源文件无损显示");
   });
 
-  it("清晰度与阅读方向使用可折叠、可联动的档案样例", () => {
-    expect(reviewHighlightSettings).toContain("qualityExpanded");
+  it("移除清晰度档位并保留可折叠、可联动的阅读方向档案样例", () => {
+    expect(reviewHighlightSettings).not.toContain("qualityExpanded");
     expect(reviewHighlightSettings).toContain("directionExpanded");
-    expect(reviewHighlightSettings).toContain("aria-expanded={qualityExpanded}");
+    expect(reviewHighlightSettings).not.toContain("aria-expanded={qualityExpanded}");
     expect(reviewHighlightSettings).toContain("aria-expanded={directionExpanded}");
-    expect(reviewHighlightSettings).toContain("以下为清晰度示意，实际效果取决于原始文件质量");
-    expect(reviewHighlightSettings).toContain("al-quality-magnifier");
+    expect(reviewHighlightSettings).not.toContain("以下为清晰度示意");
+    expect(reviewHighlightSettings).not.toContain("al-quality-magnifier");
+    expect(styles).not.toContain("al-archive-quality-sample");
+    expect(styles).not.toContain(".quality-standard");
     expect(reviewHighlightSettings).toContain("contextRadius={activePreferences.context_radius}");
     expect(reviewHighlightSettings).toContain("al-context-range-caption");
     expect(reviewHighlightSettings).toContain("al-vertical-column-connector");

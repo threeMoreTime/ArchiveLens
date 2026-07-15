@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 import subprocess
 import sys
 import textwrap
@@ -46,18 +47,16 @@ STATUS_LABELS = {
     "needs_review": "待判断",
     "rejected": "排除",
 }
-# 原生工具路径与默认参数的单一真相源位于 .config.EngineConfig。
-# 下列别名仅为兼容本模块内部既有引用而保留；新代码请直接使用 EngineConfig 实例。
-TESSERACT_CMD = str(DEFAULT_CONFIG.tesseract_cmd)
-DJVU_BIN_DIR = DEFAULT_CONFIG.djvu_bin_dir
 REVIEW_IMAGE_QUALITY_SETTINGS = {
-    "standard": {"dpi": 144, "webp_quality": 80},
-    "clear": {"dpi": 200, "webp_quality": 88},
-    "high": {"dpi": 240, "webp_quality": 92},
-    "maximum": {"dpi": 300, "webp_quality": 95},
+    # Deprecated protocol/config values.  All values now map to the same
+    # lossless source-derived page evidence behavior.
+    "standard": {},
+    "clear": {},
+    "high": {},
+    "maximum": {},
 }
 SCRIPT_DIR = Path(__file__).resolve().parent
-TESSDATA_DIR = DEFAULT_CONFIG.tessdata_dir or (SCRIPT_DIR / "tessdata")
+_TESSERACT_LOCK = threading.Lock()
 
 
 def _emit_line(message: str, *, stream: Any = None) -> None:
@@ -137,8 +136,6 @@ class ReportPipeline:
         self.source_files = [dict(source) for source in source_files] if source_files else []
         self.start_page_index = start_page_index
         self.end_page_index_exclusive = end_page_index_exclusive
-        if TESSDATA_DIR.exists():
-            os.environ["TESSDATA_PREFIX"] = str(TESSDATA_DIR)
         self.run_dir = workspace_dir / "run"
         self.pages_dir = self.run_dir / "pages"
         self.crops_dir = self.run_dir / "crops"
@@ -146,7 +143,6 @@ class ReportPipeline:
         self.json_path = self.run_dir / "report.json"
         self.started_at = datetime.now()
         self.ocr_engine = ocr_engine or RapidOCR()
-        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
         self._ensure_dirs()
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
@@ -660,15 +656,30 @@ class ReportPipeline:
             languages.append("eng")
         language = "+".join(languages)
         psm = 10 if len(matched_text) == 1 else 7
-        try:
-            data = pytesseract.image_to_data(
-                crop_image,
-                lang=language,
-                config=f"--psm {psm}",
-                output_type=pytesseract.Output.DICT,
-            )
-        except Exception:
-            return "", 0.0
+        tessdata_dir = self.config.tessdata_dir or (SCRIPT_DIR / "tessdata")
+        with _TESSERACT_LOCK:
+            previous_cmd = pytesseract.pytesseract.tesseract_cmd
+            previous_tessdata = os.environ.get("TESSDATA_PREFIX")
+            try:
+                pytesseract.pytesseract.tesseract_cmd = str(self.config.tesseract_cmd)
+                if tessdata_dir.exists():
+                    os.environ["TESSDATA_PREFIX"] = str(tessdata_dir)
+                else:
+                    os.environ.pop("TESSDATA_PREFIX", None)
+                data = pytesseract.image_to_data(
+                    crop_image,
+                    lang=language,
+                    config=f"--psm {psm}",
+                    output_type=pytesseract.Output.DICT,
+                )
+            except Exception:
+                return "", 0.0
+            finally:
+                pytesseract.pytesseract.tesseract_cmd = previous_cmd
+                if previous_tessdata is None:
+                    os.environ.pop("TESSDATA_PREFIX", None)
+                else:
+                    os.environ["TESSDATA_PREFIX"] = previous_tessdata
         best_text = ""
         best_conf = 0.0
         for text, conf in zip(data["text"], data["conf"], strict=False):
@@ -691,31 +702,16 @@ class ReportPipeline:
         ocr_render_path: Path,
         page_image_id: str,
     ) -> tuple[Path, int, int]:
-        settings = REVIEW_IMAGE_QUALITY_SETTINGS[self.review_image_quality]
-        source_path = ocr_render_path
-        remove_source = False
-        # PDF 可以按目标 DPI 重新渲染获得真实细节；DjVu 与位图来源保留原始像素，
-        # 避免通过插值放大制造“看似清晰”的伪细节。
-        if document.file_type == "PDF" and int(settings["dpi"]) != int(self.config.render_dpi):
-            source_path = self.backend_registry.render_page(document.file_path, page_index, int(settings["dpi"]))
-            remove_source = True
-        try:
-            out_path = self._convert_page_to_webp(
-                source_path,
-                page_image_id,
-                quality=int(settings["webp_quality"]),
-            )
-            with Image.open(out_path) as review_image:
-                width, height = review_image.size
-            return out_path, width, height
-        finally:
-            if remove_source:
-                source_path.unlink(missing_ok=True)
+        del document, page_index
+        out_path = self._convert_page_to_png(ocr_render_path, page_image_id)
+        with Image.open(out_path) as review_image:
+            width, height = review_image.size
+        return out_path, width, height
 
-    def _convert_page_to_webp(self, render_path: Path, page_image_id: str, *, quality: int = 80) -> Path:
-        out_path = self.pages_dir / f"{page_image_id}.webp"
+    def _convert_page_to_png(self, render_path: Path, page_image_id: str) -> Path:
+        out_path = self.pages_dir / f"{page_image_id}.png"
         with Image.open(render_path) as image:
-            image.save(out_path, format="WEBP", quality=quality, method=6)
+            image.save(out_path, format="PNG")
         return out_path
 
     def _make_failure(

@@ -5,6 +5,8 @@ import type {
   ReviewDisplayPreferences,
   ReviewHighlightSettingsResult,
   ReviewHighlightSettingsUpdateParams,
+  ReviewPageImageResult,
+  ReviewPreparePageImageParams,
 } from "@shared/index";
 
 export interface EnvironmentInfo {
@@ -78,6 +80,8 @@ export interface ExportRecord {
 export interface OccurrenceItem {
   occurrence_id: string;
   task_id: string;
+  document_id: string;
+  file_path: string;
   file_name: string;
   relative_path: string;
   page_number: number;
@@ -99,6 +103,8 @@ export interface OccurrenceItem {
   crop_image_relpath: string | null;
   page_image_width: number | null;
   page_image_height: number | null;
+  source_page_width: number | null;
+  source_page_height: number | null;
   normalized_x0: number;
   normalized_y0: number;
   normalized_x1: number;
@@ -203,6 +209,7 @@ export interface ArchiveLensApi {
     getDetail(p: { task_id: string; occurrence_id: string }): Promise<OccurrenceItem>;
   };
   review: {
+    preparePageImage(p: ReviewPreparePageImageParams): Promise<ReviewPageImageResult>;
     updateDecision(p: {
       task_id: string;
       occurrence_id: string;

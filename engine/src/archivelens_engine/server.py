@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import sys
@@ -33,6 +34,7 @@ from .documents.formats import (
 )
 from .html_export import write_offline_review_report
 from .ocr_core import build_bbox_hash
+from .page_evidence import PageEvidenceError, PageEvidenceService
 from .protocol import (
     ErrorCode,
     ProtocolError,
@@ -121,6 +123,7 @@ class Server:
         self.store = TaskStore(db_path or (self.workspace_root / "archivelens.db"))
         self.store.reconcile_incomplete_tasks(reason="ENGINE_PROCESS_EXITED")
         self.build_info = load_build_info()
+        self.page_evidence = PageEvidenceService(self.config)
 
         self.handlers: dict[str, Handler] = {}
         self._stdout_lock = threading.Lock()
@@ -243,6 +246,7 @@ class Server:
                 "demo.create": _h_demo_create,
                 "results.query": _h_results_query,
                 "results.getDetail": _h_results_detail,
+                "review.preparePageImage": _h_review_prepare_page_image,
                 "review.updateDecision": _h_review_decision,
                 "review.updateNote": _h_review_note,
                 "export.json": _h_export_json,
@@ -466,6 +470,11 @@ class Server:
         source_id = str(getattr(document, "source_id", "") or getattr(document, "relative_path", "") or getattr(document, "document_id", "") or "")
         if not source_id:
             raise ValueError("real scan page completion requires a stable source_id")
+        self.page_evidence.record_scan_page(
+            scan_workspace=scan_workspace,
+            document=document,
+            page_payload=page_payload,
+        )
         outcome = self.store.record_page_completion(
             task_id=task_id,
             source_id=source_id,
@@ -776,6 +785,7 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
     }
     if review_preferences["page_quality"] not in REVIEW_IMAGE_QUALITIES:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "page_quality 仅支持 standard、clear、high 或 maximum")
+    review_preferences["page_quality"] = "maximum"
     if review_preferences["context_direction"] not in CONTEXT_READING_DIRECTIONS:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "context_direction 仅支持 ltr、rtl、ttb 或 btt")
     if type(review_preferences["context_radius"]) is not int or not 1 <= review_preferences["context_radius"] <= 50:
@@ -1148,6 +1158,41 @@ def _h_results_detail(server: Server, params: dict) -> dict:
     return detail
 
 
+def _require_finite_number(params: dict, key: str) -> float:
+    value = params.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, f"{key} 必须是有限数字")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, f"{key} 必须是有限数字")
+    return number
+
+
+def _h_review_prepare_page_image(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    occurrence_id = _require(params, "occurrence_id", str)
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    occurrence = server.store.get_occurrence_detail(task_id, occurrence_id)
+    if occurrence is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"结果不存在: {occurrence_id}")
+    workspace_value = task.get("workspace_dir")
+    if not workspace_value:
+        raise ProtocolError(ErrorCode.SOURCE_EVIDENCE_UNAVAILABLE, "任务缺少扫描工作目录，请重新扫描")
+    try:
+        return server.page_evidence.prepare(
+            scan_workspace=Path(str(workspace_value)),
+            occurrence=occurrence,
+            target_css_width=_require_finite_number(params, "target_css_width"),
+            target_css_height=_require_finite_number(params, "target_css_height"),
+            device_pixel_ratio=_require_finite_number(params, "device_pixel_ratio"),
+            is_demo=bool(task.get("is_demo")),
+        )
+    except PageEvidenceError as exc:
+        raise ProtocolError(exc.code, exc.message, exc.details) from exc
+
+
 def _validate_decision(decision: str) -> str:
     if decision not in {"confirmed", "needs_review", "rejected"}:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, f"非法 decision：{decision}")
@@ -1256,6 +1301,21 @@ def _h_export_html(server: Server, params: dict) -> dict:
                     {"stage": stage, "completed": completed, "total": progress_total},
                 )
 
+            def resolve_page_image(item: dict[str, Any]) -> dict[str, Any]:
+                if not workspace_value:
+                    raise ProtocolError(
+                        ErrorCode.SOURCE_EVIDENCE_UNAVAILABLE,
+                        "任务缺少扫描工作目录，请重新扫描",
+                    )
+                try:
+                    return server.page_evidence.prepare_for_export(
+                        scan_workspace=Path(str(workspace_value)),
+                        occurrence=item,
+                        is_demo=bool(task.get("is_demo")),
+                    )
+                except PageEvidenceError as exc:
+                    raise ProtocolError(exc.code, exc.message, exc.details) from exc
+
             result = write_offline_review_report(
                 output_path=out,
                 task=task,
@@ -1265,6 +1325,7 @@ def _h_export_html(server: Server, params: dict) -> dict:
                 exported_at=exported_at,
                 expected_page_count=page_count,
                 progress=report_progress,
+                page_image_resolver=resolve_page_image,
             )
     except Exception:
         server.emit_event("export.progress", task_id, {"stage": "failed", "completed": 0, "total": 0})

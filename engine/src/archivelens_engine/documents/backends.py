@@ -4,7 +4,7 @@
 :class:`DocumentBackend`。当前实现：
 
 * :class:`PdfiumBackend` —— 基于 pypdfium2（BSD-3），替代 PyMuPDF（AGPL）；
-* :class:`DjvuLibreBackend` —— DjVuLibre 外部组件（GPL，可选，不随包）。
+* :class:`DjvuLibreBackend` —— DjVuLibre 独立命令行组件（GPL，桌面完整包内置）。
 * :class:`RasterImageBackend` —— Pillow TIFF/JPEG/PNG 后端。
 
 统一错误码：
@@ -60,6 +60,26 @@ class PdfiumBackend:
         except Exception as exc:  # noqa: BLE001
             raise DocumentBackendError("DOCUMENT_OPEN_FAILED", f"PDF 打开失败：{exc}", {"path": str(path)}) from exc
 
+    def page_size_points(self, path: Path, page_index: int) -> tuple[float, float]:
+        """Return the PDF page size in 1/72-inch points without rasterizing it."""
+
+        import pypdfium2 as pdfium
+
+        try:
+            pdf = pdfium.PdfDocument(str(path))
+            try:
+                page = pdf[page_index]
+                width, height = page.get_size()
+                return float(width), float(height)
+            finally:
+                pdf.close()
+        except Exception as exc:  # noqa: BLE001
+            raise DocumentBackendError(
+                "PAGE_RENDER_FAILED",
+                f"PDF 页面尺寸读取失败：{exc}",
+                {"page": page_index},
+            ) from exc
+
     def render_page(self, path: Path, page_index: int, dpi: int) -> Path:
         import pypdfium2 as pdfium
 
@@ -82,7 +102,7 @@ class PdfiumBackend:
 
 
 class DjvuLibreBackend:
-    """DjVuLibre 外部组件后端（可选，不随默认安装包分发）。"""
+    """DjVuLibre 独立命令行组件后端；生产路径由 Electron 注入。"""
 
     def __init__(self, djvu_bin_dir: Path) -> None:
         self.djvused = djvu_bin_dir / "djvused.exe"
@@ -122,7 +142,9 @@ class DjvuLibreBackend:
 
         os.close(ppm_fd)
         ppm_path = Path(ppm_name)
-        png_path = Path(tempfile.mkstemp(suffix=".png", prefix="al-djvu-png-")[1])
+        png_fd, png_name = tempfile.mkstemp(suffix=".png", prefix="al-djvu-png-")
+        os.close(png_fd)
+        png_path = Path(png_name)
         try:
             subprocess.run(
                 [
@@ -137,7 +159,8 @@ class DjvuLibreBackend:
                 check=True,
                 shell=False,
             )
-            Image.open(ppm_path).save(png_path, "PNG")
+            with Image.open(ppm_path) as rendered:
+                rendered.save(png_path, "PNG")
             return png_path
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             raise DocumentBackendError("PAGE_RENDER_FAILED", f"DjVu 渲染失败：{exc}") from exc

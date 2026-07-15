@@ -248,6 +248,51 @@ class HtmlExportTests(unittest.TestCase):
         self.assertTrue(output.read_text(encoding="utf-8").startswith("<!doctype html>"))
         self.assertEqual(list(output.parent.glob(".archivelens-export-*")), [])
 
+    def test_verified_page_resolver_runs_once_per_page_and_records_pixel_size(self) -> None:
+        evidence = self.root / "pages" / "verified-page.png"
+        Image.new("RGBA", (4096, 2048), (255, 255, 255, 0)).save(evidence, "PNG")
+        output = self.root / "verified-report.html"
+        resolver = mock.Mock(return_value={
+            "asset_relpath": "pages/verified-page.png",
+            "pixel_width": 4096,
+            "pixel_height": 2048,
+        })
+
+        write_offline_review_report(
+            output_path=output,
+            task=self.task,
+            items=iter(self.items),
+            integrity=integrity(),
+            workspace_dir=self.root,
+            exported_at="2026-07-14T12:00:00+00:00",
+            expected_page_count=1,
+            page_image_resolver=resolver,
+        )
+
+        resolver.assert_called_once_with(self.items[0])
+        report = output.read_text(encoding="utf-8")
+        self.assertIn('"pixelWidth":4096', report)
+        self.assertIn('"pixelHeight":2048', report)
+        self.assertEqual(report.count("data:image/png;base64,"), 1)
+
+    def test_verified_page_failure_does_not_overwrite_existing_report(self) -> None:
+        output = self.root / "existing-report.html"
+        output.write_text("previous verified report", encoding="utf-8")
+
+        with self.assertRaises(RuntimeError):
+            write_offline_review_report(
+                output_path=output,
+                task=self.task,
+                items=iter(self.items),
+                integrity=integrity(),
+                workspace_dir=self.root,
+                exported_at="2026-07-14T12:00:00+00:00",
+                expected_page_count=1,
+                page_image_resolver=mock.Mock(side_effect=RuntimeError("source changed")),
+            )
+
+        self.assertEqual(output.read_text(encoding="utf-8"), "previous verified report")
+
 
 if __name__ == "__main__":
     unittest.main()

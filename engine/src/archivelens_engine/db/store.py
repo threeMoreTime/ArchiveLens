@@ -682,7 +682,9 @@ class TaskStore:
         task["source_kind"] = task.get("source_kind") or "folder"
         task["source_label"] = task.get("source_label") or task.get("source_dir") or ""
         task["review_preferences"] = {
-            "page_quality": task.get("review_image_quality") or "standard",
+            # Legacy database column remains readable for rollback, but page
+            # image rendering no longer has selectable quality tiers.
+            "page_quality": "maximum",
             "context_direction": task.get("context_direction") or DEFAULT_CONTEXT_DIRECTION,
             "context_radius": int(task.get("context_radius") or DEFAULT_CONTEXT_RADIUS),
         }

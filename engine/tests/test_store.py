@@ -47,7 +47,7 @@ class TaskStoreTests(unittest.TestCase):
         assert task is not None
         self.assertEqual(
             task["review_preferences"],
-            {"page_quality": "high", "context_direction": "ttb", "context_radius": 32},
+            {"page_quality": "maximum", "context_direction": "ttb", "context_radius": 32},
         )
 
     def test_task_list_supports_search_status_and_total_count(self) -> None:

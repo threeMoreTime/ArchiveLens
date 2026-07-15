@@ -47,6 +47,9 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
   ipcMain.handle("results.query", async (_e, params) => sidecar.call("results.query", params));
   ipcMain.handle("results.getDetail", async (_e, params) => sidecar.call("results.getDetail", params));
 
+  ipcMain.handle("review.preparePageImage", async (_e, params) =>
+    sidecar.call("review.preparePageImage", params),
+  );
   ipcMain.handle("review.updateDecision", async (_e, params) =>
     sidecar.call("review.updateDecision", params),
   );

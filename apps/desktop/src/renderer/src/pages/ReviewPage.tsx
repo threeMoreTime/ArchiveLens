@@ -2,14 +2,26 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { useNavigate, useParams } from "react-router-dom";
 import { Button, Input, Text, Textarea } from "@fluentui/react-components";
 import {
+  ArrowDownRegular,
+  ArrowLeftRegular,
   ArrowResetRegular,
+  ArrowRightRegular,
+  ArrowUpRegular,
   FullScreenMaximizeRegular,
   PanelRightContractRegular,
   PanelRightExpandRegular,
   ZoomInRegular,
   ZoomOutRegular,
 } from "@fluentui/react-icons";
-import { DEFAULT_REVIEW_HIGHLIGHT_STYLE, type ReviewHighlightStyle } from "@shared/index";
+import {
+  DEFAULT_REVIEW_HIGHLIGHT_STYLE,
+  DEFAULT_REVIEW_PAGE_ORIENTATION,
+  type ReviewHighlightSettingsResult,
+  type ReviewHighlightStyle,
+  type ReviewPageImageResult,
+  type ReviewPageOrientation,
+  type ReviewPageOrientations,
+} from "@shared/index";
 import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
 import { highlightBackground } from "../components/ReviewHighlightSettings";
 
@@ -17,9 +29,27 @@ const DEFAULT_PAGE_SIZE = 100;
 const PAGE_SIZES = [50, 100, 200] as const;
 const NOTE_DRAFT_PREFIX = "archivelens.reviewDraft.";
 const REVIEW_SUMMARY_COLLAPSED_KEY = "archivelens.reviewSummaryCollapsed";
+const PAGE_ORIENTATION_DEGREES: Record<ReviewPageOrientation, number> = {
+  up: 0,
+  right: 90,
+  down: 180,
+  left: 270,
+};
+const PAGE_ORIENTATION_OPTIONS: Array<{
+  value: ReviewPageOrientation;
+  label: string;
+  icon: JSX.Element;
+}> = [
+  { value: "up", label: "页面朝上（0°）", icon: <ArrowUpRegular /> },
+  { value: "right", label: "页面朝右（90°）", icon: <ArrowRightRegular /> },
+  { value: "down", label: "页面朝下（180°）", icon: <ArrowDownRegular /> },
+  { value: "left", label: "页面朝左（270°）", icon: <ArrowLeftRegular /> },
+];
 
 interface Occurrence {
   occurrence_id: string;
+  document_id: string;
+  file_path: string;
   file_name: string;
   page_number: number;
   matched_text: string;
@@ -31,6 +61,10 @@ interface Occurrence {
   review_note: string | null;
   page_image_relpath: string | null;
   crop_image_relpath: string | null;
+  page_image_width: number | null;
+  page_image_height: number | null;
+  source_page_width: number | null;
+  source_page_height: number | null;
   normalized_x0: number;
   normalized_y0: number;
   normalized_x1: number;
@@ -53,8 +87,10 @@ const EMPTY_SUMMARY: ReviewSummary = {
   rejected_count: 0,
 };
 
-function assetUrl(taskId: string, rel: string | null) {
-  return rel ? `al-resource://${taskId}/${rel.replace(/^\/+/, "")}` : "";
+function assetUrl(taskId: string, rel: string | null, version?: string) {
+  if (!rel) return "";
+  const query = version ? `?v=${encodeURIComponent(version)}` : "";
+  return `al-resource://${taskId}/${rel.replace(/^\/+/, "")}${query}`;
 }
 
 function errorMessage(error: unknown) {
@@ -123,8 +159,12 @@ export default function ReviewPage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const [pageImage, setPageImage] = useState<ReviewPageImageResult | null>(null);
+  const [pageImageLoading, setPageImageLoading] = useState(false);
+  const [pageImageError, setPageImageError] = useState("");
+  const [pageOrientations, setPageOrientations] = useState<ReviewPageOrientations>({});
+  const [orientationSaving, setOrientationSaving] = useState(false);
   const [summaryCollapsed, setSummaryCollapsed] = useState(() => {
     try { return localStorage.getItem(REVIEW_SUMMARY_COLLAPSED_KEY) === "true"; } catch { return false; }
   });
@@ -133,6 +173,9 @@ export default function ReviewPage() {
   const pageWrapRef = useRef<HTMLDivElement | null>(null);
   const noteRef = useRef<HTMLTextAreaElement | null>(null);
   const requestSequenceRef = useRef(0);
+  const pageImageRequestRef = useRef(0);
+  const fitWhenReadyRef = useRef(false);
+  const persistedPageOrientationsRef = useRef<ReviewPageOrientations>({});
   const selectLastAfterPageChange = useRef(false);
   const selectFirstAfterFilterChange = useRef(false);
   const requestedSelectedId = useRef<string | null>(null);
@@ -147,15 +190,33 @@ export default function ReviewPage() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const pageStart = total === 0 ? 0 : loadedPageIndex * pageSize + 1;
   const pageEnd = Math.min(total, (loadedPageIndex + 1) * pageSize);
-  const fitScale = useMemo(() => {
-    if (!imageSize.width || !imageSize.height || !viewportSize.width || !viewportSize.height) return 1;
-    return Math.min(viewportSize.width / imageSize.width, viewportSize.height / imageSize.height);
-  }, [imageSize, viewportSize]);
-  const fittedSize = useMemo(() => ({
-    width: imageSize.width * fitScale,
-    height: imageSize.height * fitScale,
-  }), [fitScale, imageSize]);
-  const zoomPercent = Math.round(fitScale * zoom * 100);
+  const selected = useMemo(
+    () => items.find((item) => item.occurrence_id === selectedId) ?? null,
+    [items, selectedId],
+  );
+  const pageOrientation = selected
+    ? pageOrientations[selected.document_id] ?? DEFAULT_REVIEW_PAGE_ORIENTATION
+    : DEFAULT_REVIEW_PAGE_ORIENTATION;
+  const orientationSwapsAxes = pageOrientation === "right" || pageOrientation === "left";
+  const displayedSize = useMemo(() => ({
+    width: (pageImage?.width_100_css ?? 0) * zoom,
+    height: (pageImage?.height_100_css ?? 0) * zoom,
+  }), [pageImage?.height_100_css, pageImage?.width_100_css, zoom]);
+  const visualSize = useMemo(() => orientationSwapsAxes ? ({
+    width: displayedSize.height,
+    height: displayedSize.width,
+  }) : displayedSize, [displayedSize, orientationSwapsAxes]);
+  const zoomPercent = Math.round(zoom * 100);
+  const resetPageViewportScroll = useCallback(() => {
+    const viewport = pageWrapRef.current;
+    if (!viewport || (viewport.scrollLeft === 0 && viewport.scrollTop === 0)) return;
+    viewport.scrollLeft = 0;
+    viewport.scrollTop = 0;
+  }, []);
+
+  useEffect(() => {
+    resetPageViewportScroll();
+  }, [resetPageViewportScroll, visualSize.height, visualSize.width]);
 
   useEffect(() => {
     try { localStorage.setItem(REVIEW_SUMMARY_COLLAPSED_KEY, String(summaryCollapsed)); } catch { /* Preference remains active for this session. */ }
@@ -233,16 +294,24 @@ export default function ReviewPage() {
     setReviewComplete(false);
     setQueryError("");
     setActionError("");
+    setPageOrientations({});
+    persistedPageOrientationsRef.current = {};
+    setOrientationSaving(false);
   }, [taskId]);
 
   useEffect(() => {
     let active = true;
-    window.archiveLens.settings.get(taskId).then((result: { effective: ReviewHighlightStyle }) => {
-      if (active) setHighlightStyle(result.effective);
+    window.archiveLens.settings.get(taskId).then((result: ReviewHighlightSettingsResult) => {
+      if (!active) return;
+      setHighlightStyle(result.effective);
+      setPageOrientations(result.page_orientations);
+      persistedPageOrientationsRef.current = result.page_orientations;
     }).catch((error: unknown) => {
       if (!active) return;
       setHighlightStyle(DEFAULT_REVIEW_HIGHLIGHT_STYLE);
-      setActionError(`读取高亮设置失败：${errorMessage(error)}。当前使用默认颜色。`);
+      setPageOrientations({});
+      persistedPageOrientationsRef.current = {};
+      setActionError(`读取校对显示设置失败：${errorMessage(error)}。当前使用默认高亮且页面朝上。`);
     });
     return () => { active = false; };
   }, [taskId]);
@@ -257,10 +326,60 @@ export default function ReviewPage() {
     }).catch((error: unknown) => setQueryError(errorMessage(error)));
   }, [taskId]);
 
-  const selected = useMemo(
-    () => items.find((item) => item.occurrence_id === selectedId) ?? null,
-    [items, selectedId],
-  );
+  useEffect(() => {
+    if (!selected || viewportSize.width <= 0 || viewportSize.height <= 0) return;
+    const requestId = ++pageImageRequestRef.current;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setPageImageLoading(true);
+      setPageImageError("");
+      const targetWidth = pageImage?.width_100_css
+        ? pageImage.width_100_css * zoom
+        : viewportSize.width;
+      const targetHeight = pageImage?.height_100_css
+        ? pageImage.height_100_css * zoom
+        : viewportSize.height;
+      void window.archiveLens.review.preparePageImage({
+        task_id: taskId,
+        occurrence_id: selected.occurrence_id,
+        target_css_width: Math.max(1, targetWidth),
+        target_css_height: Math.max(1, targetHeight),
+        device_pixel_ratio: Math.min(4, Math.max(0.5, window.devicePixelRatio || 1)),
+      }).then((result: ReviewPageImageResult) => {
+        if (!active || requestId !== pageImageRequestRef.current) return;
+        setPageImage(result);
+        if (fitWhenReadyRef.current) {
+          fitWhenReadyRef.current = false;
+          const baseWidth = orientationSwapsAxes ? result.height_100_css : result.width_100_css;
+          const baseHeight = orientationSwapsAxes ? result.width_100_css : result.height_100_css;
+          setZoom(Math.min(
+            1,
+            viewportSize.width / baseWidth,
+            viewportSize.height / baseHeight,
+          ));
+          setOffset({ x: 0, y: 0 });
+        }
+      }).catch((error: unknown) => {
+        if (!active || requestId !== pageImageRequestRef.current) return;
+        setPageImageError(errorMessage(error));
+      }).finally(() => {
+        if (active && requestId === pageImageRequestRef.current) setPageImageLoading(false);
+      });
+    }, 150);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [
+    pageImage?.height_100_css,
+    pageImage?.width_100_css,
+    selected,
+    taskId,
+    orientationSwapsAxes,
+    viewportSize.height,
+    viewportSize.width,
+    zoom,
+  ]);
 
   const persistNote = useCallback((targetTaskId: string, occurrenceId: string, value: string): Promise<boolean> => {
     const draftKey = noteDraftKey(targetTaskId, occurrenceId);
@@ -330,13 +449,14 @@ export default function ReviewPage() {
   }, [persistNote, selected?.occurrence_id, selected?.review_note, taskId]);
 
   useEffect(() => {
+    pageImageRequestRef.current += 1;
+    fitWhenReadyRef.current = false;
+    setPageImage(null);
+    setPageImageLoading(false);
+    setPageImageError("");
     setZoom(1);
     setOffset({ x: 0, y: 0 });
   }, [selected?.occurrence_id]);
-
-  useEffect(() => {
-    setImageSize({ width: 0, height: 0 });
-  }, [selected?.page_image_relpath]);
 
   useEffect(() => {
     if (!selectedId || savedNotesRef.current.get(noteDraftKey(taskId, selectedId)) === note) return;
@@ -444,10 +564,28 @@ export default function ReviewPage() {
 
   const onPageWheel = (event: React.WheelEvent) => {
     event.preventDefault();
-    setZoom((value) => Math.min(5, Math.max(0.2, value * (event.deltaY < 0 ? 1.12 : 0.88))));
+    fitWhenReadyRef.current = false;
+    setZoom((value) => Math.min(4, Math.max(0.02, value * (event.deltaY < 0 ? 1.12 : 0.88))));
   };
-  const zoomBy = (factor: number) => setZoom((value) => Math.min(5, Math.max(0.2, value * factor)));
-  const fitPage = () => { setZoom(1); setOffset({ x: 0, y: 0 }); };
+  const zoomBy = (factor: number) => {
+    fitWhenReadyRef.current = false;
+    setZoom((value) => Math.min(4, Math.max(0.02, value * factor)));
+  };
+  const fitPage = () => {
+    if (!pageImage) {
+      fitWhenReadyRef.current = true;
+      return;
+    }
+    fitWhenReadyRef.current = false;
+    const baseWidth = orientationSwapsAxes ? pageImage.height_100_css : pageImage.width_100_css;
+    const baseHeight = orientationSwapsAxes ? pageImage.width_100_css : pageImage.height_100_css;
+    setZoom(Math.min(
+      1,
+      viewportSize.width / baseWidth,
+      viewportSize.height / baseHeight,
+    ));
+    setOffset({ x: 0, y: 0 });
+  };
   const recenterPage = () => setOffset({ x: 0, y: 0 });
   const onPageDown = (event: React.MouseEvent) => {
     dragRef.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y };
@@ -460,6 +598,34 @@ export default function ReviewPage() {
     });
   };
   const onPageUp = () => { dragRef.current = null; };
+
+  const changePageOrientation = async (nextOrientation: ReviewPageOrientation) => {
+    if (!selected || orientationSaving || nextOrientation === pageOrientation) return;
+    const targetTaskId = taskId;
+    const documentId = selected.document_id;
+    const previousOrientations = persistedPageOrientationsRef.current;
+    setPageOrientations((current) => ({ ...current, [documentId]: nextOrientation }));
+    setOffset({ x: 0, y: 0 });
+    setActionError("");
+    setOrientationSaving(true);
+    try {
+      const result = await window.archiveLens.settings.update({
+        scope: "document",
+        task_id: targetTaskId,
+        document_id: documentId,
+        orientation: nextOrientation,
+      });
+      if (currentTaskIdRef.current !== targetTaskId) return;
+      persistedPageOrientationsRef.current = result.page_orientations;
+      setPageOrientations(result.page_orientations);
+    } catch (error) {
+      if (currentTaskIdRef.current !== targetTaskId) return;
+      setPageOrientations(previousOrientations);
+      setActionError(`保存页面展示方向失败：${errorMessage(error)}。已恢复上次保存的方向。`);
+    } finally {
+      if (currentTaskIdRef.current === targetTaskId) setOrientationSaving(false);
+    }
+  };
 
   const selectOccurrence = async (occurrenceId: string) => {
     if (occurrenceId === selectedId) return;
@@ -576,33 +742,65 @@ export default function ReviewPage() {
           {!selected ? <div className="al-muted">选择左侧结果查看证据</div> : (
             <>
               <div className="al-viewer">
-                {assetUrl(taskId, selected.page_image_relpath) && (
-                  <div ref={pageWrapRef} className="al-page-wrap" onWheel={onPageWheel} onMouseDown={onPageDown} onMouseMove={onPageMove} onMouseUp={onPageUp} onMouseLeave={onPageUp}>
-                    <div className="al-viewer-toolbar" aria-label="页面缩放工具" onMouseDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>
+                <div ref={pageWrapRef} className="al-page-wrap" onScroll={resetPageViewportScroll} onWheel={onPageWheel} onMouseDown={onPageDown} onMouseMove={onPageMove} onMouseUp={onPageUp} onMouseLeave={onPageUp}>
+                  <div className="al-viewer-overlays" onMouseDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>
+                    <div className="al-viewer-toolbar" aria-label="页面缩放工具">
                       <Button appearance="subtle" size="small" icon={<ZoomOutRegular />} aria-label="缩小页面" title="缩小页面" onClick={() => zoomBy(0.8)} />
                       <span className="al-zoom-value" aria-live="polite">{zoomPercent}%</span>
                       <Button appearance="subtle" size="small" icon={<ZoomInRegular />} aria-label="放大页面" title="放大页面" onClick={() => zoomBy(1.25)} />
+                      <Button appearance="subtle" size="small" onClick={() => { fitWhenReadyRef.current = false; setZoom(1); setOffset({ x: 0, y: 0 }); }}>100%</Button>
                       <Button appearance="subtle" size="small" icon={<FullScreenMaximizeRegular />} onClick={fitPage}>适应窗口</Button>
                       <Button appearance="subtle" size="small" icon={<ArrowResetRegular />} onClick={recenterPage}>重新居中</Button>
                     </div>
+                    <div className="al-page-orientation-toolbar" role="group" aria-label="页面展示方向">
+                      {PAGE_ORIENTATION_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          appearance={pageOrientation === option.value ? "primary" : "subtle"}
+                          size="small"
+                          icon={option.icon}
+                          aria-label={option.label}
+                          title={option.label}
+                          aria-pressed={pageOrientation === option.value}
+                          disabled={orientationSaving}
+                          onClick={() => void changePageOrientation(option.value)}
+                        />
+                      ))}
+                    </div>
+                    {pageImageLoading && <div className="al-page-fidelity-status" role="status">正在加载原始清晰度…</div>}
+                    {pageImage?.overscale_warning && (pageImage.source_kind === "demo" || zoom > 1) && (
+                      <div className="al-page-fidelity-warning" role="status">{pageImage.overscale_warning}</div>
+                    )}
+                  </div>
+                  {pageImageError && <div className="al-page-fidelity-error" role="alert">{pageImageError}</div>}
+                  {pageImage && (
                     <div
-                      className="al-page-canvas"
+                      className="al-page-positioner"
                       style={{
-                        width: `${fittedSize.width}px`,
-                        height: `${fittedSize.height}px`,
-                        transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px)) scale(${zoom})`,
+                        width: `${visualSize.width}px`,
+                        height: `${visualSize.height}px`,
+                        transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px))`,
                       }}
                     >
-                      <img
-                        src={assetUrl(taskId, selected.page_image_relpath)}
-                        alt="出处页"
-                        draggable={false}
-                        onLoad={(event) => setImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
-                      />
-                      <div className="al-highlight" style={{ left: `${selected.normalized_x0 * 100}%`, top: `${selected.normalized_y0 * 100}%`, width: `${(selected.normalized_x1 - selected.normalized_x0) * 100}%`, height: `${(selected.normalized_y1 - selected.normalized_y0) * 100}%` }} />
+                      <div
+                        className="al-page-canvas"
+                        data-orientation={pageOrientation}
+                        style={{
+                          width: `${displayedSize.width}px`,
+                          height: `${displayedSize.height}px`,
+                          transform: `translate(-50%, -50%) rotate(${PAGE_ORIENTATION_DEGREES[pageOrientation]}deg)`,
+                        }}
+                      >
+                        <img
+                          src={assetUrl(taskId, pageImage.asset_relpath, pageImage.asset_version)}
+                          alt="出处页"
+                          draggable={false}
+                        />
+                        <div className="al-highlight" style={{ left: `${selected.normalized_x0 * 100}%`, top: `${selected.normalized_y0 * 100}%`, width: `${(selected.normalized_x1 - selected.normalized_x0) * 100}%`, height: `${(selected.normalized_y1 - selected.normalized_y0) * 100}%` }} />
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
               <div className="al-detail-meta"><div>上下文：{selected.context_full}</div><div className="al-muted">OCR 置信度：{confidenceLabel(selected.ocr_confidence)}</div><div>系统判断：<strong>{verificationLabel(selected.verification_status)}</strong></div><div>人工结论：<strong>{decisionLabel(selected.review_decision)}</strong></div></div>
               <div className="al-review-command-bar">

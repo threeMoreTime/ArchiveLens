@@ -52,6 +52,40 @@ class HandlersTests(unittest.TestCase):
         )
         self.assertEqual(detail["review_decision"], "rejected")
 
+    def test_review_prepare_page_image_returns_versioned_demo_asset(self) -> None:
+        demo = self.server.handlers["demo.create"](self.server, {})
+        query = self.server.handlers["results.query"](self.server, {"task_id": demo["task_id"]})
+        result = self.server.handlers["review.preparePageImage"](
+            self.server,
+            {
+                "task_id": demo["task_id"],
+                "occurrence_id": query["items"][0]["occurrence_id"],
+                "target_css_width": 800,
+                "target_css_height": 600,
+                "device_pixel_ratio": 2,
+            },
+        )
+        self.assertEqual(result["source_kind"], "demo")
+        self.assertEqual(result["fidelity"], "generated_demo")
+        self.assertTrue(result["asset_version"])
+        self.assertGreater(result["pixel_width"], 0)
+
+    def test_review_prepare_page_image_rejects_non_finite_dimensions(self) -> None:
+        demo = self.server.handlers["demo.create"](self.server, {})
+        query = self.server.handlers["results.query"](self.server, {"task_id": demo["task_id"]})
+        with self.assertRaises(ProtocolError) as raised:
+            self.server.handlers["review.preparePageImage"](
+                self.server,
+                {
+                    "task_id": demo["task_id"],
+                    "occurrence_id": query["items"][0]["occurrence_id"],
+                    "target_css_width": float("nan"),
+                    "target_css_height": 600,
+                    "device_pixel_ratio": 1,
+                },
+            )
+        self.assertEqual(raised.exception.code, ErrorCode.VALIDATION_ERROR)
+
     def test_completed_task_with_failures_is_reported_as_incomplete_snapshot(self) -> None:
         demo = self.server.handlers["demo.create"](self.server, {})
         task_id = demo["task_id"]
@@ -120,10 +154,10 @@ class HandlersTests(unittest.TestCase):
             self.server,
             {"source_dir": str(src), "search_text": "档案", "review_preferences": preferences},
         )
-        self.assertEqual(result["review_preferences"], preferences)
+        self.assertEqual(result["review_preferences"], {**preferences, "page_quality": "maximum"})
         task = self.server.store.get_task(result["task_id"])
         assert task is not None
-        self.assertEqual(task["review_preferences"], preferences)
+        self.assertEqual(task["review_preferences"], {**preferences, "page_quality": "maximum"})
 
     def test_tasks_create_rejects_invalid_review_preferences(self) -> None:
         src = Path(self.tmp) / "invalid-preferences"
@@ -348,10 +382,15 @@ class HandlersTests(unittest.TestCase):
         self.assertEqual([item["kind"] for item in history["items"]], ["html", "json"])
 
     def test_html_export_escapes_user_search_text_and_review_content(self) -> None:
+        workspace = Path(self.tmp) / "escape-assets"
+        (workspace / "pages").mkdir(parents=True)
+        Image.new("RGB", (80, 60), "white").save(workspace / "pages" / "page.png")
         tid = self.server.store.create_task(
             name="<script>alert(1)</script> \"quoted\" 'single'",
             search_terms=["A&B < > \" '"],
             search_mode="exact_literal",
+            workspace_dir=str(workspace),
+            is_demo=True,
         )
         self.server.store.add_occurrences(
             tid,
@@ -362,6 +401,9 @@ class HandlersTests(unittest.TestCase):
                 "context_full": "<img src=x onerror=alert(1)> & \" '",
                 "file_name": "<unsafe>.pdf",
                 "page_number": 1,
+                "page_image_relpath": "pages/page.png",
+                "page_image_width": 80,
+                "page_image_height": 60,
             }],
         )
         self.server.store.upsert_review(task_id=tid, occurrence_id="occ-escape", note="<b>note</b>")

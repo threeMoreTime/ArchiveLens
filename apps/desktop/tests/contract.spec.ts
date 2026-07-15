@@ -17,6 +17,9 @@ import {
   ReviewHighlightStyleSchema,
   ReviewDisplayPreferencesSchema,
   ReviewHighlightSettingsUpdateParamsSchema,
+  ReviewPageImageResultSchema,
+  ReviewPreparePageImageParamsSchema,
+  MethodNameSchema,
   normalizeSearchText,
 } from "@shared/index";
 
@@ -112,6 +115,32 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, context_direction: "diagonal" }).success).toBe(false);
     expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, context_radius: 0 }).success).toBe(false);
     expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, context_radius: 51 }).success).toBe(false);
+    expect(ReviewDisplayPreferencesSchema.parse({ ...preferences, page_quality: "standard" }).page_quality).toBe("maximum");
+  });
+
+  it("原文件页面证据方法保持协议 v2 的增量兼容", () => {
+    expect(MethodNameSchema.safeParse("review.preparePageImage").success).toBe(true);
+    expect(ReviewPreparePageImageParamsSchema.safeParse({
+      task_id: "task-1",
+      occurrence_id: "occ-1",
+      target_css_width: 960,
+      target_css_height: 1280,
+      device_pixel_ratio: 2,
+    }).success).toBe(true);
+    expect(ReviewPageImageResultSchema.safeParse({
+      asset_relpath: "evidence/pages/page.png",
+      asset_version: "abc123",
+      pixel_width: 1920,
+      pixel_height: 2560,
+      width_100_css: 960,
+      height_100_css: 1280,
+      source_kind: "pdf",
+      fidelity: "verified_source",
+      overscale_warning: null,
+    }).success).toBe(true);
+    for (const code of ["SOURCE_EVIDENCE_UNAVAILABLE", "SOURCE_FILE_CHANGED", "PAGE_RENDER_LIMIT_EXCEEDED"]) {
+      expect(ErrorCodeSchema.safeParse(code).success).toBe(true);
+    }
   });
 
   it("校对高亮设置校验颜色、透明度与配置范围", () => {
@@ -123,6 +152,8 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", task_id: "task-1", highlight: null }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", preferences: { page_quality: "maximum", context_direction: "ltr", context_radius: 15 } }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", task_id: "task-1", preferences: null }).success).toBe(true);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "document", task_id: "task-1", document_id: "doc-1", orientation: "right" }).success).toBe(true);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "document", task_id: "task-1", document_id: "doc-1", orientation: "diagonal" }).success).toBe(false);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", highlight: null }).success).toBe(false);
   });
 

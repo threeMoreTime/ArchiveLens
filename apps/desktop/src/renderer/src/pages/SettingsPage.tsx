@@ -56,7 +56,7 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
         <main className="al-settings-main">
           <Card className="al-card al-settings-section">
             <div className="al-settings-section-heading">
-              <div><Text weight="semibold" size={500}>校对显示与扫描上下文</Text><Text className="al-muted">设置命中高亮、整页清晰度以及横排或竖排档案的上下文阅读顺序。</Text></div>
+              <div><Text weight="semibold" size={500}>校对显示与扫描上下文</Text><Text className="al-muted">出处页按源文件无损显示；可设置命中高亮及横排或竖排档案的上下文阅读顺序。</Text></div>
             </div>
             {taskError && <InlineFeedback tone="warning">{taskError}。全局设置仍可正常修改。</InlineFeedback>}
             {loadingTasks ? <LoadingState label="正在加载任务配置范围…" /> : <ReviewHighlightSettings tasks={tasks} initialTaskId={currentTaskId} />}
@@ -71,7 +71,7 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
           </Card>
           <Card className="al-card al-settings-section al-settings-local-note">
             <Text weight="semibold">本地设置</Text>
-            <Text className="al-muted">设置仅保存在本机，不会修改原始文件。清晰度和上下文配置会在创建扫描任务时写入新任务；旧任务需要重新扫描。</Text>
+            <Text className="al-muted">设置仅保存在本机，不会修改原始文件。出处页始终按源文件无损显示；上下文配置会在创建扫描任务时写入新任务。</Text>
           </Card>
         </aside>
       </div>

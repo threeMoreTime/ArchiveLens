@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,6 +28,7 @@ describe("SettingsStore", () => {
       global_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
       task_preferences_override: null,
       effective_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      page_orientations: {},
       scope: "global",
     });
   });
@@ -67,9 +68,10 @@ describe("SettingsStore", () => {
 
   it("保存全局与任务级出处页及上下文设置", async () => {
     const { store } = await createStore();
-    const global = { page_quality: "high" as const, context_direction: "ltr" as const, context_radius: 20 };
+    const globalInput = { page_quality: "high" as const, context_direction: "ltr" as const, context_radius: 20 };
+    const global = { ...globalInput, page_quality: "maximum" as const };
     const task = { page_quality: "maximum" as const, context_direction: "ttb" as const, context_radius: 35 };
-    await store.update({ scope: "global", preferences: global });
+    await store.update({ scope: "global", preferences: globalInput });
     await expect(store.update({ scope: "task", task_id: "task-1", preferences: task })).resolves.toMatchObject({
       global_preferences: global,
       task_preferences_override: task,
@@ -94,6 +96,24 @@ describe("SettingsStore", () => {
       global: { color: "#278BC7", opacity: 0.32 },
       global_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
       effective_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      page_orientations: {},
+    });
+  });
+
+  it("按任务和源文件保存展示方向并跨实例恢复", async () => {
+    const { filePath, store } = await createStore();
+    await store.update({ scope: "document", task_id: "task-1", document_id: "doc-a", orientation: "right" });
+    await store.update({ scope: "document", task_id: "task-1", document_id: "doc-b", orientation: "down" });
+    await store.update({ scope: "document", task_id: "task-2", document_id: "doc-a", orientation: "left" });
+
+    const restored = new SettingsStore(filePath);
+    await expect(restored.get("task-1")).resolves.toMatchObject({
+      page_orientations: { "doc-a": "right", "doc-b": "down" },
+      scope: "global",
+    });
+    await expect(restored.get("task-2")).resolves.toMatchObject({
+      page_orientations: { "doc-a": "left" },
+      scope: "global",
     });
   });
 
@@ -103,9 +123,20 @@ describe("SettingsStore", () => {
     const second = { color: "#E87924", opacity: 0.3 };
     await store.update({ scope: "task", task_id: "task-1", highlight: first });
     await store.update({ scope: "task", task_id: "task-2", highlight: second });
+    await store.update({ scope: "document", task_id: "task-1", document_id: "doc-a", orientation: "right" });
     await store.removeTaskOverride("task-1");
-    await expect(store.get("task-1")).resolves.toMatchObject({ task_override: null, scope: "global" });
+    await expect(store.get("task-1")).resolves.toMatchObject({ task_override: null, page_orientations: {}, scope: "global" });
     await expect(store.get("task-2")).resolves.toMatchObject({ task_override: second, effective: second, scope: "task" });
+  });
+
+  it("原子保存失败时不会污染内存中的展示方向", async () => {
+    const warnings: string[] = [];
+    const { filePath, store } = await createStore((message) => warnings.push(message));
+    await mkdir(filePath);
+    await expect(store.get("task-1")).resolves.toMatchObject({ page_orientations: {} });
+    await expect(store.update({ scope: "document", task_id: "task-1", document_id: "doc-a", orientation: "right" })).rejects.toBeTruthy();
+    await expect(store.get("task-1")).resolves.toMatchObject({ page_orientations: {} });
+    expect(warnings).toHaveLength(1);
   });
 
   it("损坏的设置文件降级为默认值且不会阻断校对页", async () => {

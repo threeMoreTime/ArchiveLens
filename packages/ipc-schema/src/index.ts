@@ -39,7 +39,7 @@ export const ReviewDisplayPreferencesSchema = z.object({
   page_quality: ReviewImageQualitySchema,
   context_direction: ContextReadingDirectionSchema,
   context_radius: z.number().int().min(1).max(50),
-});
+}).transform((preferences) => ({ ...preferences, page_quality: "maximum" as const }));
 export type ReviewDisplayPreferences = z.infer<typeof ReviewDisplayPreferencesSchema>;
 
 export const DEFAULT_REVIEW_DISPLAY_PREFERENCES: ReviewDisplayPreferences = {
@@ -47,6 +47,12 @@ export const DEFAULT_REVIEW_DISPLAY_PREFERENCES: ReviewDisplayPreferences = {
   context_direction: "ltr",
   context_radius: 15,
 };
+
+export const ReviewPageOrientationSchema = z.enum(["up", "right", "down", "left"]);
+export type ReviewPageOrientation = z.infer<typeof ReviewPageOrientationSchema>;
+export const DEFAULT_REVIEW_PAGE_ORIENTATION: ReviewPageOrientation = "up";
+export const ReviewPageOrientationsSchema = z.record(z.string().min(1), ReviewPageOrientationSchema);
+export type ReviewPageOrientations = z.infer<typeof ReviewPageOrientationsSchema>;
 
 export const AppSettingsFileSchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]).default(2),
@@ -60,6 +66,7 @@ export const AppSettingsFileSchema = z.object({
   task_overrides: z.record(z.string().min(1), z.object({
     review_highlight: ReviewHighlightStyleSchema.optional(),
     review_preferences: ReviewDisplayPreferencesSchema.optional(),
+    page_orientations: ReviewPageOrientationsSchema.optional(),
   })).default({}),
 }).transform((settings) => ({ ...settings, version: 2 as const }));
 export type AppSettingsFile = z.infer<typeof AppSettingsFileSchema>;
@@ -71,6 +78,7 @@ export const ReviewHighlightSettingsResultSchema = z.object({
   global_preferences: ReviewDisplayPreferencesSchema,
   task_preferences_override: ReviewDisplayPreferencesSchema.nullable(),
   effective_preferences: ReviewDisplayPreferencesSchema,
+  page_orientations: ReviewPageOrientationsSchema,
   scope: z.enum(["global", "task"]),
 });
 export type ReviewHighlightSettingsResult = z.infer<typeof ReviewHighlightSettingsResultSchema>;
@@ -99,6 +107,12 @@ export const ReviewHighlightSettingsUpdateParamsSchema = z.union([
     scope: z.literal("task"),
     task_id: z.string().min(1),
     preferences: ReviewDisplayPreferencesSchema.nullable(),
+  }),
+  z.object({
+    scope: z.literal("document"),
+    task_id: z.string().min(1),
+    document_id: z.string().min(1),
+    orientation: ReviewPageOrientationSchema,
   }),
 ]);
 export type ReviewHighlightSettingsUpdateParams = z.infer<typeof ReviewHighlightSettingsUpdateParamsSchema>;
@@ -170,6 +184,9 @@ export const ErrorCodeSchema = z.enum([
   "UNKNOWN_ERROR",
   "ENGINE_SHUTTING_DOWN",
   "ENGINE_STOPPED",
+  "SOURCE_EVIDENCE_UNAVAILABLE",
+  "SOURCE_FILE_CHANGED",
+  "PAGE_RENDER_LIMIT_EXCEEDED",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -253,6 +270,7 @@ export const MethodNameSchema = z.enum([
   "tasks.get",
   "results.query",
   "results.getDetail",
+  "review.preparePageImage",
   "review.updateDecision",
   "review.updateNote",
   "export.html",
@@ -417,6 +435,28 @@ export const ResultsQueryResultSchema = z.object({
   items: z.array(z.record(z.string(), z.unknown())),
 });
 
+export const ReviewPreparePageImageParamsSchema = z.object({
+  task_id: z.string().min(1),
+  occurrence_id: z.string().min(1),
+  target_css_width: z.number().finite().positive(),
+  target_css_height: z.number().finite().positive(),
+  device_pixel_ratio: z.number().finite().min(0.5).max(4),
+});
+export type ReviewPreparePageImageParams = z.infer<typeof ReviewPreparePageImageParamsSchema>;
+
+export const ReviewPageImageResultSchema = z.object({
+  asset_relpath: z.string().min(1),
+  asset_version: z.string().min(1),
+  pixel_width: z.number().int().positive(),
+  pixel_height: z.number().int().positive(),
+  width_100_css: z.number().finite().positive(),
+  height_100_css: z.number().finite().positive(),
+  source_kind: z.enum(["pdf", "raster", "djvu", "demo"]),
+  fidelity: z.enum(["verified_source", "generated_demo"]),
+  overscale_warning: z.string().nullable(),
+});
+export type ReviewPageImageResult = z.infer<typeof ReviewPageImageResultSchema>;
+
 export const TaskSearchEventPayloadSchema = z.object({
   search_text: z.string().min(1),
   search_terms: z.array(z.string().min(1)).min(1),
@@ -430,6 +470,7 @@ export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "tasks.list") return TasksListResultSchema.parse(value);
   if (method === "exports.list") return ExportsListResultSchema.parse(value);
   if (method === "results.query") return ResultsQueryResultSchema.parse(value);
+  if (method === "review.preparePageImage") return ReviewPageImageResultSchema.parse(value);
   return value;
 }
 
