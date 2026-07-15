@@ -1,6 +1,6 @@
 # ArchiveLens Engine
 
-本地 OCR 引擎：在 PDF / DJVU / DJV 档案中检索用户指定的文字或词语，产出可校对的离线报告。
+本地 OCR 引擎：在 PDF、DJVU/DJV、TIFF、JPEG、PNG 档案中检索用户指定的文字或词语，产出可校对的离线报告。
 
 该包同时提供两种入口：
 
@@ -37,8 +37,8 @@ PYTHONPATH="engine/src;engine" python -m unittest discover -s engine/tests -t en
 
 ## 原生依赖
 
-* Tesseract OCR（可选的二次识别；单字符与词语均可用）
-* DjVuLibre 的 `ddjvu` / `djvused`（DJVU/DJV 解析）
-* 简繁体中文 traineddata
+* Tesseract OCR 5.5.0（可选的二次识别；单字符与词语均可用）
+* DjVuLibre 3.5.29 的 `ddjvu` / `djvused`（DJVU/DJV 解析）
+* `chi_sim`、`chi_tra`、`chi_sim_vert`、`chi_tra_vert` 中文模型
 
-路径均通过 `EngineConfig` 解析，可被 `AL_TESSERACT_CMD` / `AL_DJVU_BIN_DIR` / `AL_TESSDATA_DIR` 环境变量覆盖，打包后由 Electron Main 注入安装包内路径。
+路径均通过 `EngineConfig` 解析，可被 `AL_TESSERACT_CMD` / `AL_DJVU_BIN_DIR` / `AL_TESSDATA_DIR` 环境变量覆盖。完整 Setup 与 Portable 均内置这些组件，生产模式由 Electron Main 强制注入包内路径；开发模式仍允许显式覆盖。

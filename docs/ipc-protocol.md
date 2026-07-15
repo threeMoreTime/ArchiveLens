@@ -48,7 +48,7 @@ Main 只有在外层和 payload 的 `protocol_version` 都严格为整数 `2`，
 
 ## 错误码
 
-`VALIDATION_ERROR` · `PATH_NOT_FOUND` · `PERMISSION_DENIED` · `DEPENDENCY_MISSING` · `ENGINE_START_FAILED` · `ENGINE_CRASHED` · `IPC_TIMEOUT` · `TASK_NOT_FOUND` · `TASK_STATE_CONFLICT` · `DATABASE_ERROR` · `EXPORT_FAILED` · `DISK_SPACE_LOW` · `UNSUPPORTED_FILE` · `PROTOCOL_MISMATCH` · `UNKNOWN_METHOD` · `UNKNOWN_ERROR`
+`VALIDATION_ERROR` · `PATH_NOT_FOUND` · `PERMISSION_DENIED` · `DEPENDENCY_MISSING` · `ENGINE_START_FAILED` · `ENGINE_CRASHED` · `IPC_TIMEOUT` · `TASK_NOT_FOUND` · `TASK_STATE_CONFLICT` · `DATABASE_ERROR` · `EXPORT_FAILED` · `DISK_SPACE_LOW` · `UNSUPPORTED_FILE` · `PROTOCOL_MISMATCH` · `UNKNOWN_METHOD` · `UNKNOWN_ERROR` · `SOURCE_EVIDENCE_UNAVAILABLE` · `SOURCE_FILE_CHANGED` · `PAGE_RENDER_LIMIT_EXCEEDED`
 
 ## 已实现方法
 
@@ -84,6 +84,22 @@ U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内
 | `diagnostics.run` | 环境自检（Tesseract / DjVu / 语言包 / RapidOCR / onnx） | ✅ |
 | `tasks.*` / `results.*` / `review.*` / `export.*` / `exports.list` / `files.*` / `settings.*` | 见 `MethodNameSchema` | ✅ |
 
+### `review.preparePageImage`
+
+该方法是协议 v2 的增量扩展，用于按工作台实际显示尺寸准备经源文件指纹验证的无损页面证据：
+
+```json
+{
+  "task_id": "task_...",
+  "occurrence_id": "occ_...",
+  "target_css_width": 960,
+  "target_css_height": 1280,
+  "device_pixel_ratio": 2
+}
+```
+
+响应包含 `asset_relpath`、`asset_version`、实际 `pixel_width` / `pixel_height`、`width_100_css` / `height_100_css`、`source_kind`、`fidelity` 和可选 `overscale_warning`。PDF 按目标尺寸动态渲染；位图和 DjVu 返回原生解码像素。任务级缓存位于扫描目录的 `evidence/` 下，不修改主任务数据库 schema。旧任务只有在 `run/report.db` 中存在扫描时 SHA-256 且当前源文件校验一致时才会生成新证据；已经生成并绑定扫描时指纹的页面在源文件随后移动或变化后仍可读取。
+
 ### 任务与导出列表扩展
 
 - `tasks.list` 接受 `limit`（1～100）、`offset`、可选 `status` 和可选 `query`；响应包含 `items`、`limit`、`offset` 与符合筛选条件的 `total`。`query` 在任务名称、来源目录、来源标签、文件清单展示名与检索词中做本地包含匹配。
@@ -95,8 +111,10 @@ U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内
 
 - `settings.get` 与 `settings.update` 是 Renderer 到 Electron Main 的本地 IPC，不经过 Python Sidecar。
 - 校对高亮样式由 6 位十六进制 `color` 和 `0.1`～`0.6` 的 `opacity` 组成，保存在 `userData/settings.json`。
+- 旧 `page_quality` 字段继续兼容解析，但读取和保存时统一归一为 `maximum`，不再影响页面渲染。
 - `settings.update` 支持修改 `global` 全局默认，或按 `task_id` 保存/清除 `task` 覆盖；读取时返回全局值、任务覆盖和最终生效值。
-- 删除任务时会清理对应的任务高亮覆盖，但不会影响全局设置或其他任务。
+- `settings.update` 还支持 `{ scope: "document", task_id, document_id, orientation }`，其中 `orientation` 为 `up | right | down | left`。方向保存在任务覆盖项的 `page_orientations` 映射中，由同一 `document_id` 的全部命中共用；旧设置缺失该映射时按空映射读取，文件版本继续为 2。
+- 删除任务时会清理对应的任务高亮、扫描上下文和页面方向覆盖，但不会影响全局设置或其他任务。页面方向只影响校对工作台中央出处页，不进入 Python IPC、OCR 坐标或离线导出。
 
 ## 健壮性保证
 

@@ -22,11 +22,13 @@ echo '{"protocol_version":2,"request_id":"r1","method":"app.info","params":{}}' 
 # → engine.ready 事件 + app.info success（python_executable 指向 exe 自身）
 ```
 
-### 待纳入
+### 完整离线原生组件
 
-- [ ] tessdata（简繁体语言包）随 extraResources 分发或应用内安装（当前 exe 未绑定，`diagnostics.run` 显示语言包 FAIL/WARN）；
-- [ ] Tesseract / DjVuLibre 随包分发或应用内安装（任务 §二十六）；
-- [ ] `THIRD_PARTY_NOTICES.md` 许可证清单。
+```powershell
+pnpm prepare:native
+```
+
+该步骤按 `scripts/native-dependencies.lock.json` 下载并校验 Tesseract、四个简繁中文 `tessdata_fast` 模型和 DjVuLibre，将结果写入 `dist/native/win-x64`。使用 `-Offline` 时只接受已校验缓存；最终用户运行时不存在下载逻辑。
 
 ## Electron 打包
 
@@ -39,7 +41,7 @@ pnpm --filter @archivelens/desktop dist
 - `appId: io.archivelens.desktop`；
 - NSIS 安装器（per-user、可卸载、默认保留用户数据）；
 - portable；
-- `extraResources`：`dist/engine/win-x64` → `engine/win-x64`（Engine 随包分发）。
+- `extraResources`：Engine、Tesseract、tessdata、DjVuLibre、许可证与 DjVu 对应源码均随包分发。
 
 ### 发布闭环要求
 
@@ -66,3 +68,5 @@ SHA256SUMS.txt
 - [ ] 许可证 / 校验和（SHA-256）
 
 真实 OCR fixture 使用 Windows 系统 SimHei 5.05 生成图片 PDF；字体文件不进入仓库或发布包。生成脚本固定页面参数与 PDF metadata，`expected.json` 记录字体及每个 fixture 的 SHA-256。
+
+完整离线格式 fixture 的生成依赖固定在 `scripts/requirements-fixtures.txt`；这些工具只用于生成测试数据，不进入生产运行时。
