@@ -10,6 +10,8 @@ import {
   OcrSearchSessionsParamsSchema,
 } from "@shared/index";
 
+export const HTML_EXPORT_TIMEOUT_MS = 30 * 60_000;
+
 /**
  * 转发类 IPC：把 Renderer 请求经 Sidecar 投递到 Python Engine。
  *
@@ -79,7 +81,9 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
 
   ipcMain.handle("export.json", async (_e, params) => sidecar.call("export.json", params));
   ipcMain.handle("export.review", async (_e, params) => sidecar.call("export.review", params));
-  ipcMain.handle("export.html", async (_e, params) => sidecar.call("export.html", params));
+  ipcMain.handle("export.html", async (_e, params) =>
+    sidecar.call("export.html", params, HTML_EXPORT_TIMEOUT_MS),
+  );
   ipcMain.handle("exports.list", async (_e, params) => sidecar.call("exports.list", params));
 
   ipcMain.handle("files.openFolder", async (_e, params: { path: string }) => {

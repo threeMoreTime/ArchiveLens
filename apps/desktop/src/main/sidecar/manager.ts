@@ -13,7 +13,7 @@ import {
 } from "@shared/index";
 import { logger } from "../logging/logger";
 
-const READY_TIMEOUT_MS = 15_000;
+export const SIDECAR_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_REQ_TIMEOUT_MS = 30_000;
 const STDERR_TAIL_LINES = 200;
 
@@ -108,6 +108,12 @@ export class SidecarManager extends EventEmitter {
 
   async start(): Promise<void> {
     if (this.starting) return this.starting;
+    if (this.proc && !this.ready) {
+      return Promise.reject(
+        this.lastStartupError
+        ?? new EngineError("ENGINE_START_FAILED", "Sidecar 上一次启动尚未完成清理，请稍后重试"),
+      );
+    }
     this.lastStartupError = null;
     this.starting = this._start().catch((error) => {
       this.starting = null;
@@ -124,16 +130,27 @@ export class SidecarManager extends EventEmitter {
     this._spawn(cmd);
 
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(
-          new EngineError(
-            "ENGINE_START_FAILED",
-            `Sidecar 在 ${READY_TIMEOUT_MS}ms 内未发出 engine.ready（stderr 见 engine.log）`,
-          ),
-        );
-      }, READY_TIMEOUT_MS);
-      this.readyWaiters.push({ resolve, reject, timer });
+      const waiter: ReadyWaiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => this.handleReadyTimeout(waiter), SIDECAR_READY_TIMEOUT_MS),
+      };
+      this.readyWaiters.push(waiter);
     });
+  }
+
+  private handleReadyTimeout(waiter: ReadyWaiter): void {
+    const index = this.readyWaiters.indexOf(waiter);
+    if (index < 0) return;
+    this.readyWaiters.splice(index, 1);
+    const error = new EngineError(
+      "ENGINE_START_FAILED",
+      `Sidecar 在 ${SIDECAR_READY_TIMEOUT_MS}ms 内未发出 engine.ready（stderr 见 engine.log）`,
+    );
+    this.lastStartupError = error;
+    logger.error(error.message);
+    waiter.reject(error);
+    this.terminateProtocolFault();
   }
 
   private _spawn(cmd: EngineCommand): void {
