@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "platform": "win-x64",
+  "components": {
+    "tesseract": {
+      "version": "5.5.0.20241111",
+      "license": "Apache-2.0",
+      "installer": {
+        "file_name": "tesseract-ocr-w64-setup-5.5.0.20241111.exe",
+        "url": "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe",
+        "sha256": "f3fc4236425b690c8be756f35793f77394ee004be0a6460a440c754d892f68bc"
+      },
+      "license_file": {
+        "file_name": "tesseract-5.5.0-LICENSE",
+        "url": "https://raw.githubusercontent.com/tesseract-ocr/tesseract/5.5.0/LICENSE",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      "build_info_files": [
+        {
+          "source_path": "doc/AUTHORS",
+          "file_name": "AUTHORS.txt",
+          "sha256": "720862b7253993b348fe15f37ed6e0d4feb0fc8df8324284d75975d54dd29923"
+        },
+        {
+          "source_path": "doc/README.md",
+          "file_name": "BUILD-README.md",
+          "sha256": "8970df9cdfe0e497930f7da0a1ba4f46a8dc6e9dc69869294ce82374a940a21f"
+        }
+      ],
+      "runtime_tree_sha256": "85c65bc4667cb676b4e0463ee537e2dd987f86bc89dbcb5a1c63da6fd745b62f"
+    },
+    "tessdata_fast": {
+      "version": "87416418657359cb625c412a48b6e1d6d41c29bd",
+      "license": "Apache-2.0",
+      "base_url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd",
+      "files": [
+        {
+          "file_name": "chi_sim.traineddata",
+          "sha256": "a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730"
+        },
+        {
+          "file_name": "chi_tra.traineddata",
+          "sha256": "529c5b5797d64b126065cd55f2bb4c7fd7b15790798091b1ff259941a829330b"
+        },
+        {
+          "file_name": "chi_sim_vert.traineddata",
+          "sha256": "20590de84725bab69cde93bd6e8ed360a13cc5421a7e7364ddeb93e9af53d6da"
+        },
+        {
+          "file_name": "chi_tra_vert.traineddata",
+          "sha256": "1df02a4b210e5c217b783819538b63e9dfe6904e2b5e53b62664f1b9f7a989d0"
+        }
+      ],
+      "license_file": {
+        "file_name": "tessdata-fast-LICENSE",
+        "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/LICENSE",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      }
+    },
+    "djvulibre": {
+      "version": "3.5.29+4.12",
+      "license": "GPL-2.0-only",
+      "installer": {
+        "file_name": "DjVuLibre-3.5.29_DjView-4.12_Setup.exe",
+        "url": "https://downloads.sourceforge.net/project/djvu/DjVuLibre_Windows/3.5.29%2B4.12/DjVuLibre-3.5.29_DjView-4.12_Setup.exe",
+        "sha256": "92233fbf891c63f3fb7a0b5e1ce108baa4c29a40c89a442d1313f883aae84670"
+      },
+      "source": {
+        "file_name": "djvulibre-3.5.29.tar.gz",
+        "url": "https://downloads.sourceforge.net/project/djvu/DjVuLibre/3.5.29/djvulibre-3.5.29.tar.gz",
+        "sha256": "d3b4b03ae2bdca8516a36ef6eb27b777f0528c9eda26745d9962824a3fdfeccf"
+      },
+      "runtime_files": [
+        "ddjvu.exe",
+        "djvused.exe",
+        "libdjvulibre.dll",
+        "libjpeg.dll",
+        "libtiff.dll",
+        "libz.dll",
+        "COPYING.txt"
+      ],
+      "runtime_tree_sha256": "455f6177ac4e57998a41c6a05ca5f1dbd9b7a8fd52c3eddc4b8bd93d33dc1215"
+    }
+  }
+}

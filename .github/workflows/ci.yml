@@ -216,6 +216,7 @@ jobs:
         run: |
           $scripts = @(
             'scripts/build-engine.ps1',
+            'scripts/prepare-native-runtime.ps1',
             'scripts/verify-release-chain.ps1',
             'scripts/smoke-installer.ps1',
             'scripts/smoke-portable.ps1',
@@ -246,6 +247,7 @@ jobs:
         run: |
           $scripts = @(
             'scripts/build-engine.ps1',
+            'scripts/prepare-native-runtime.ps1',
             'scripts/verify-release-chain.ps1',
             'scripts/smoke-installer.ps1',
             'scripts/smoke-portable.ps1',
@@ -271,6 +273,9 @@ jobs:
             Write-Host "[PASS] PowerShell 7 syntax: $script"
           }
 
+      - name: Prepare locked native runtime
+        run: powershell -ExecutionPolicy Bypass -File scripts/prepare-native-runtime.ps1
+
       - name: Build packaged engine
         run: powershell -ExecutionPolicy Bypass -File scripts/build-engine.ps1
 
@@ -279,6 +284,12 @@ jobs:
 
       - name: Build win-unpacked
         run: pnpm --filter @archivelens/desktop exec electron-builder --dir
+
+      - name: Run bundled native offline smoke
+        run: |
+          python scripts/offline-native-smoke.py `
+            --resources-root apps/desktop/release/win-unpacked/resources `
+          | Tee-Object -FilePath apps/desktop/release/offline-native-smoke.json
 
       - name: Run packaged OCR smoke matrix
         run: |
@@ -333,10 +344,13 @@ jobs:
           name: packaged-smoke-artifacts
           path: |
             dist/engine/win-x64/app.info.json
+            dist/native/win-x64/native-runtime.json
+            dist/native/win-x64/native-dependencies.lock.json
             apps/desktop/release/release-manifest.json
             apps/desktop/release/SHA256SUMS.txt
             apps/desktop/release/verify-release-chain.json
             apps/desktop/release/packaged-ocr.log
+            apps/desktop/release/offline-native-smoke.json
             apps/desktop/release/win-unpacked/resources/app.info.json
           if-no-files-found: ignore
           retention-days: 14

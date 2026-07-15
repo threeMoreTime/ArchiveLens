@@ -24,6 +24,22 @@ extraResources:
   - from: ../../dist/engine/win-x64
     to: engine/win-x64
     filter: ["**/*"]
+  - from: ../../dist/native/win-x64/tesseract
+    to: native/tesseract
+    filter: ["**/*"]
+  - from: ../../dist/native/win-x64/djvulibre
+    to: native/djvulibre
+    filter: ["**/*"]
+  - from: ../../dist/native/win-x64/licenses
+    to: licenses
+    filter: ["**/*"]
+  - from: ../../dist/native/win-x64/sources
+    to: sources
+    filter: ["**/*"]
+  - from: ../../dist/native/win-x64/native-dependencies.lock.json
+    to: native-dependencies.lock.json
+  - from: ../../dist/native/win-x64/native-runtime.json
+    to: native-runtime.json
 
 asar: true
 

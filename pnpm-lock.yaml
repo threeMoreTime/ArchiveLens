@@ -44,6 +44,9 @@ importers:
         specifier: ^4.5.4
         version: 4.5.4(@types/react@18.3.31)(react@18.3.1)
     devDependencies:
+      7zip-bin-full:
+        specifier: 26.2.1
+        version: 26.2.1
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.61.1
@@ -89,6 +92,9 @@ importers:
         version: 5.5.4
 
 packages:
+
+  7zip-bin-full@26.2.1:
+    resolution: {integrity: sha512-h1DE4G8WEJ3/LI4HTcuOpouP7cy9JGqYfZm5fzLhdzw8jI3wFyA9RFu5MP+ICzelKEYmWweRWApEvVWKmJIdVQ==}
 
   7zip-bin@5.2.0:
     resolution: {integrity: sha512-ukTPVhqG4jNzMro2qA9HSCSSVJN3aN7tlb+hfqYCt3ER0yWroeA2VR38MNrOHLQ/cVj+DaIMad0kFCtWWowh/A==}
@@ -2712,6 +2718,8 @@ packages:
         optional: true
 
 snapshots:
+
+  7zip-bin-full@26.2.1: {}
 
   7zip-bin@5.2.0: {}
 

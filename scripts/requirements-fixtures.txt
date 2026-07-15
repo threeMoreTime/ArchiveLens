@@ -1,0 +1,3 @@
+# Build-only dependencies for deterministic OCR/PDF/DJVU fixture generation.
+# These packages are not added to the ArchiveLens production runtime.
+Pillow==12.1.1

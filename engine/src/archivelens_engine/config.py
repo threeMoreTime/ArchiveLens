@@ -61,6 +61,9 @@ class EngineConfig:
     tessdata_dir: Path | None = field(
         default_factory=lambda: _env_path("AL_TESSDATA_DIR", None)
     )
+    native_source: str = field(
+        default_factory=lambda: os.environ.get("AL_NATIVE_SOURCE", "configured")
+    )
     render_dpi: int = 144
     target_chars: dict[str, tuple[str, str]] = field(
         default_factory=lambda: dict(TARGET_CHARS)

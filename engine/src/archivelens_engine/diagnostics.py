@@ -73,6 +73,12 @@ def _format_bytes(num: int | None) -> str:
     return f"{num:.1f} PB"
 
 
+def _native_remedy(config: EngineConfig, development_remedy: str) -> str:
+    if config.native_source == "bundled":
+        return "包内组件缺失或损坏，请重新安装 ArchiveLens；若问题仍存在，请保留诊断信息并联系维护人员。"
+    return development_remedy
+
+
 def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = None) -> dict:
     """执行完整环境自检，返回面向 UI 的诊断结构。"""
     cfg = config or DEFAULT_CONFIG
@@ -90,12 +96,16 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
             status=CHECK_PASS if cfg.has_tesseract else CHECK_WARN,
             detail=tesseract_ver or "未找到 tesseract.exe",
             impact="单字符二次识别将不可用，confirmed 判定降级为 needs_review。" if not cfg.has_tesseract else "",
-            remedy="安装 Tesseract OCR，并确保 tesseract.exe 可从系统 PATH 或应用支持的组件目录访问。" if not cfg.has_tesseract else "",
-            extra={"path": str(cfg.tesseract_cmd)},
+            remedy=_native_remedy(
+                cfg,
+                "安装 Tesseract OCR，并确保 tesseract.exe 可从系统 PATH 或应用支持的组件目录访问。",
+            ) if not cfg.has_tesseract else "",
+            extra={"path": str(cfg.tesseract_cmd), "source": cfg.native_source},
         )
     )
 
     # ---- DjVuLibre ----
+    djvu_ver = _run_version([str(cfg.djvused_exe), "-v"]) if cfg.has_djvu else None
     checks.append(
         Check(
             key="djvulibre",
@@ -103,10 +113,10 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
             # Missing DjVu tools limit supported input formats but do not block
             # PDF scanning.
             status=CHECK_PASS if cfg.has_djvu else CHECK_WARN,
-            detail="ddjvu / djvused 就绪" if cfg.has_djvu else "未找到 ddjvu.exe / djvused.exe",
+            detail=djvu_ver or ("ddjvu / djvused 就绪" if cfg.has_djvu else "未找到 ddjvu.exe / djvused.exe"),
             impact="无法扫描 DJVU / DJV 文件（PDF 和图片格式不受影响）。" if not cfg.has_djvu else "",
-            remedy="安装 DjVuLibre，或仅扫描 PDF、TIFF、JPEG、PNG 文件。" if not cfg.has_djvu else "",
-            extra={"path": str(cfg.djvu_bin_dir)},
+            remedy=_native_remedy(cfg, "安装 DjVuLibre，或仅扫描 PDF、TIFF、JPEG、PNG 文件。") if not cfg.has_djvu else "",
+            extra={"path": str(cfg.djvu_bin_dir), "source": cfg.native_source},
         )
     )
 
@@ -142,7 +152,8 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
             status=CHECK_PASS if cfg.has_simplified_lang else CHECK_WARN,
             detail=", ".join(_lang_present(cfg, simplified=True)) or "缺少 chi_sim.traineddata",
             impact="简体“约”的二次识别不可用。" if not cfg.has_simplified_lang else "",
-            remedy="在 tessdata 目录放入 chi_sim.traineddata。" if not cfg.has_simplified_lang else "",
+            remedy=_native_remedy(cfg, "在 tessdata 目录放入 chi_sim.traineddata。") if not cfg.has_simplified_lang else "",
+            extra={"path": str(cfg.tessdata_dir or ""), "source": cfg.native_source},
         )
     )
     checks.append(
@@ -152,7 +163,8 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
             status=CHECK_PASS if cfg.has_traditional_lang else CHECK_WARN,
             detail=", ".join(_lang_present(cfg, simplified=False)) or "缺少 chi_tra.traineddata",
             impact="繁体“約”的二次识别结果可能不可用。" if not cfg.has_traditional_lang else "",
-            remedy="在 tessdata 目录放入 chi_tra.traineddata。" if not cfg.has_traditional_lang else "",
+            remedy=_native_remedy(cfg, "在 tessdata 目录放入 chi_tra.traineddata。") if not cfg.has_traditional_lang else "",
+            extra={"path": str(cfg.tessdata_dir or ""), "source": cfg.native_source},
         )
     )
 

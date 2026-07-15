@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "generator": {
+    "script": "scripts/generate-offline-format-fixtures.py",
+    "python_version": "3.11.9",
+    "pillow_version": "12.1.1",
+    "font_file": "simhei.ttf",
+    "font_sha256": "9b1959db3b3abeb7efdaec26edf7dfe871a6039de8d614af7248575207be629e",
+    "font_redistributed": false,
+    "content_classification": "synthetic"
+  },
+  "search_terms": [
+    "编号",
+    "編號"
+  ],
+  "files": [
+    {
+      "file": "simplified-horizontal.png",
+      "pages": 1,
+      "bytes": 67430,
+      "sha256": "1381855922ea0f6742089cdd228912c784058374d2d59aa5873f451cf5c07d3b"
+    },
+    {
+      "file": "traditional-horizontal.jpg",
+      "pages": 1,
+      "bytes": 161074,
+      "sha256": "894f46bf6c6c289f3c8d2d5078c0a52bf136861bb0f60be7042425f2ca88942c"
+    },
+    {
+      "file": "multipage.tiff",
+      "pages": 2,
+      "bytes": 272032,
+      "sha256": "b20c84c009dd82d7873c1fbce2730c9382da5f75a39a592037b6c0461d4b8f84"
+    },
+    {
+      "file": "synthetic-archive.pdf",
+      "pages": 2,
+      "bytes": 321774,
+      "sha256": "61267a376a470bad886bbec47adf5ca5d8cd33021f692fa0ff25e0efd40ffc1f"
+    },
+    {
+      "file": "synthetic-three-page.djvu",
+      "pages": 3,
+      "bytes": 162615,
+      "sha256": "2a9b49b3707c3537d472faa44bf9a358529a9e539ac7f53fbb6a58162877afb4"
+    }
+  ]
+}

@@ -15,7 +15,8 @@
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
     "typecheck": "pnpm run /typecheck:/",
-    "dist": "pnpm run build && electron-builder"
+    "dist": "powershell -ExecutionPolicy Bypass -File ../../scripts/prepare-native-runtime.ps1 && pnpm run build && electron-builder",
+    "dist:prepared": "pnpm run build && electron-builder"
   },
   "dependencies": {
     "@archivelens/ipc-schema": "workspace:*",
@@ -31,6 +32,7 @@
     "zustand": "^4.5.4"
   },
   "devDependencies": {
+    "7zip-bin-full": "26.2.1",
     "@playwright/test": "^1.61.1",
     "@types/node": "^20.14.15",
     "@types/react": "^18.3.3",

@@ -71,6 +71,8 @@ export default function DiagnosticsPage() {
               <Card className="al-card al-diagnostic-check" key={check.key}>
                 <div className="al-diagnostic-check-heading"><Text weight="semibold">{check.label}</Text><span className={`al-badge al-badge-${check.status}`}>{diagnosticStatusLabel(check.status)}</span></div>
                 <Text className="al-muted">{check.detail || "未返回详细信息"}</Text>
+                {check.extra.source && <Text className="al-muted">组件来源：{check.extra.source === "bundled" ? "ArchiveLens 安装包内置" : "开发环境或外部配置"}</Text>}
+                {check.extra.path && <Text className="al-muted">实际路径：{check.extra.path}</Text>}
                 {check.impact ? <div><strong>对你的影响</strong><Text>{check.impact}</Text></div> : <div><strong>对你的影响</strong><Text>当前检查未发现会阻碍使用的问题。</Text></div>}
                 {check.remedy && <div><strong>建议处理</strong><Text>{check.remedy}</Text></div>}
               </Card>
