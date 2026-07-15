@@ -33,6 +33,7 @@ apps/desktop/app.info.json
 playwright-report/
 test-results/
 coverage/
+/output/
 
 # 编辑器 / 系统
 .vscode/
