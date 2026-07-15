@@ -36,6 +36,10 @@ describe("完整离线安装包", () => {
     expect(lock.components.tessdata_fast.files).toHaveLength(4);
     expect(prepare).toContain("7zip-bin-full");
     expect(prepare).toContain("Expand-NsisArchive");
+    expect(prepare).toContain("Resolve-CurlExecutable");
+    expect(prepare).toContain('"--proto-redir", "=https"');
+    expect(prepare).toContain('Move-Item -LiteralPath $partial -Destination $target -Force');
+    expect(prepare).not.toContain("Invoke-WebRequest");
     expect(prepare).not.toContain("Start-Process");
   });
 

@@ -33,6 +33,15 @@ function Get-TreeSha256([string]$PathValue) {
   }
 }
 
+function Resolve-CurlExecutable {
+  $systemRoot = [Environment]::GetEnvironmentVariable("SystemRoot")
+  $candidate = if ($systemRoot) { Join-Path $systemRoot "System32/curl.exe" } else { $null }
+  if (-not $candidate -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+    throw "Missing curl.exe. Windows 10/11 build environments must provide the system curl client."
+  }
+  return $candidate
+}
+
 function Get-LockedAsset([object]$Asset) {
   $target = Join-Path $script:ResolvedCacheDir $Asset.file_name
   if (Test-Path -LiteralPath $target) {
@@ -42,14 +51,41 @@ function Get-LockedAsset([object]$Asset) {
   if ($Offline) {
     throw "Offline mode is missing a verified cache asset: $($Asset.file_name)"
   }
-  Write-Host "==> Download $($Asset.file_name)" -ForegroundColor Cyan
-  Invoke-WebRequest -Uri $Asset.url -OutFile $target -UseBasicParsing
-  $actual = Get-Sha256 $target
-  if ($actual -ne $Asset.sha256) {
-    Remove-Item -LiteralPath $target -Force
-    throw "SHA-256 mismatch for $($Asset.file_name): actual=$actual expected=$($Asset.sha256)"
+  $partial = "$target.download"
+  $lastFailure = "download did not start"
+  for ($attempt = 1; $attempt -le 3; $attempt += 1) {
+    if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
+    Write-Host "==> Download $($Asset.file_name) (attempt $attempt/3)" -ForegroundColor Cyan
+    & $script:CurlExecutable @(
+      "--fail",
+      "--location",
+      "--silent",
+      "--show-error",
+      "--proto", "=https",
+      "--proto-redir", "=https",
+      "--connect-timeout", "30",
+      "--max-redirs", "10",
+      "--retry", "2",
+      "--retry-delay", "2",
+      "--output", $partial,
+      $Asset.url
+    )
+    $curlExit = $LASTEXITCODE
+    if ($curlExit -ne 0 -or -not (Test-Path -LiteralPath $partial)) {
+      $lastFailure = "curl exit=$curlExit"
+      continue
+    }
+    $actual = Get-Sha256 $partial
+    if ($actual -eq $Asset.sha256) {
+      Move-Item -LiteralPath $partial -Destination $target -Force
+      return $target
+    }
+    $length = (Get-Item -LiteralPath $partial).Length
+    $lastFailure = "SHA-256 mismatch: actual=$actual expected=$($Asset.sha256) bytes=$length"
+    Write-Warning "$($Asset.file_name) attempt $attempt rejected: $lastFailure"
   }
-  return $target
+  if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
+  throw "Unable to download verified asset $($Asset.file_name) after 3 attempts: $lastFailure"
 }
 
 function Resolve-SevenZip {
@@ -80,6 +116,7 @@ try {
   $script:ResolvedCacheDir = Resolve-FromRoot $CacheDir
   $resolvedOutDir = Resolve-FromRoot $OutDir
   $stageRoot = Join-Path $Root ".tmp/native-stage-build"
+  $script:CurlExecutable = Resolve-CurlExecutable
   $sevenZip = Resolve-SevenZip
   New-Item -ItemType Directory -Force -Path $script:ResolvedCacheDir | Out-Null
   if (Test-Path -LiteralPath $stageRoot) { Remove-Item -LiteralPath $stageRoot -Recurse -Force }
