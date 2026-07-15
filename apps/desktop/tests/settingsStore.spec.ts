@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_REVIEW_HIGHLIGHT_STYLE } from "@shared/index";
+import { DEFAULT_REVIEW_DISPLAY_PREFERENCES, DEFAULT_REVIEW_HIGHLIGHT_STYLE } from "@shared/index";
 import { SettingsStore } from "../src/main/settings/store";
 
 const temporaryDirectories: string[] = [];
@@ -25,6 +25,9 @@ describe("SettingsStore", () => {
       global: DEFAULT_REVIEW_HIGHLIGHT_STYLE,
       task_override: null,
       effective: DEFAULT_REVIEW_HIGHLIGHT_STYLE,
+      global_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      task_preferences_override: null,
+      effective_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
       scope: "global",
     });
   });
@@ -59,6 +62,38 @@ describe("SettingsStore", () => {
       task_override: null,
       effective: global,
       scope: "global",
+    });
+  });
+
+  it("保存全局与任务级出处页及上下文设置", async () => {
+    const { store } = await createStore();
+    const global = { page_quality: "high" as const, context_direction: "ltr" as const, context_radius: 20 };
+    const task = { page_quality: "maximum" as const, context_direction: "ttb" as const, context_radius: 35 };
+    await store.update({ scope: "global", preferences: global });
+    await expect(store.update({ scope: "task", task_id: "task-1", preferences: task })).resolves.toMatchObject({
+      global_preferences: global,
+      task_preferences_override: task,
+      effective_preferences: task,
+      scope: "task",
+    });
+    await expect(store.update({ scope: "task", task_id: "task-1", preferences: null })).resolves.toMatchObject({
+      task_preferences_override: null,
+      effective_preferences: global,
+    });
+  });
+
+  it("版本 1 设置保留高亮并补齐新版默认项", async () => {
+    const { filePath } = await createStore();
+    await writeFile(filePath, JSON.stringify({
+      version: 1,
+      appearance: { review_highlight: { color: "#278BC7", opacity: 0.32 } },
+      task_overrides: {},
+    }), "utf-8");
+    const restored = new SettingsStore(filePath);
+    await expect(restored.get()).resolves.toMatchObject({
+      global: { color: "#278BC7", opacity: 0.32 },
+      global_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      effective_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
     });
   });
 

@@ -31,6 +31,7 @@ from .ocr_core import (
     assign_occurrence_indexes,
     build_bbox_hash,
     build_context_fields,
+    build_spatial_context_fields,
     classify_verification_status,
     dedupe_occurrences,
     normalize_bbox,
@@ -49,7 +50,12 @@ STATUS_LABELS = {
 # 下列别名仅为兼容本模块内部既有引用而保留；新代码请直接使用 EngineConfig 实例。
 TESSERACT_CMD = str(DEFAULT_CONFIG.tesseract_cmd)
 DJVU_BIN_DIR = DEFAULT_CONFIG.djvu_bin_dir
-DEFAULT_RENDER_DPI = DEFAULT_CONFIG.render_dpi
+REVIEW_IMAGE_QUALITY_SETTINGS = {
+    "standard": {"dpi": 144, "webp_quality": 80},
+    "clear": {"dpi": 200, "webp_quality": 88},
+    "high": {"dpi": 240, "webp_quality": 92},
+    "maximum": {"dpi": 300, "webp_quality": 95},
+}
 SCRIPT_DIR = Path(__file__).resolve().parent
 TESSDATA_DIR = DEFAULT_CONFIG.tessdata_dir or (SCRIPT_DIR / "tessdata")
 
@@ -100,6 +106,9 @@ class ReportPipeline:
         on_page_completed: Callable[..., None] | None = None,
         search_terms: tuple[str, ...] | list[str] | None = None,
         resume_state_by_source: dict[str, dict[str, Any]] | None = None,
+        review_image_quality: str = "standard",
+        context_direction: str = "ltr",
+        context_radius: int = 15,
     ) -> None:
         # Phase 1 预留实例配置入口；Phase 3 起 Sidecar 将按任务注入打包内路径。
         self.config = config or DEFAULT_CONFIG
@@ -109,6 +118,15 @@ class ReportPipeline:
         self.resume_state_by_source = resume_state_by_source
         if not self.search_terms or any(not isinstance(term, str) or not term for term in self.search_terms):
             raise ValueError("search_terms must contain at least one non-empty term")
+        if review_image_quality not in REVIEW_IMAGE_QUALITY_SETTINGS:
+            raise ValueError("invalid review image quality")
+        if context_direction not in {"ltr", "rtl", "ttb", "btt"}:
+            raise ValueError("invalid context reading direction")
+        if type(context_radius) is not int or not 1 <= context_radius <= 50:
+            raise ValueError("context radius must be between 1 and 50")
+        self.review_image_quality = review_image_quality
+        self.context_direction = context_direction
+        self.context_radius = context_radius
         self.backend_registry = DocumentBackendRegistry(self.config)
         self.root_dir = root_dir
         self.output_html = output_html
@@ -430,12 +448,29 @@ class ReportPipeline:
                 return None, []
             page_occurrences: list[dict[str, Any]] = []
             page_image_id = f"{document.document_id}-p{page_index+1}"
-            for line_index, line in enumerate(ocr_results):
-                polygon, text, confidence = line
-                line_box = self._line_rect(polygon)
+            page_lines = [
+                {
+                    "text": str(line[1]),
+                    "bbox": self._line_rect(line[0]),
+                    "confidence": float(line[2]),
+                }
+                for line in ocr_results
+            ]
+            for line_index, line in enumerate(page_lines):
+                text = line["text"]
+                confidence = line["confidence"]
+                line_box = line["bbox"]
                 char_boxes = split_line_bbox(text, line_box)
                 for search_text in self.search_terms:
                     for match_start, match_end in find_literal_matches(text, search_text):
+                        context_fields = build_spatial_context_fields(
+                            page_lines,
+                            line_index,
+                            match_start,
+                            match_end,
+                            direction=self.context_direction,
+                            radius=self.context_radius,
+                        )
                         occurrence = self._build_occurrence(
                             document=document,
                             page_index=page_index,
@@ -449,19 +484,26 @@ class ReportPipeline:
                             match_box=union_bboxes(char_boxes[match_start:match_end]),
                             page_width=width,
                             page_height=height,
+                            context_fields=context_fields,
                         )
                         page_occurrences.append(occurrence)
             if not page_occurrences:
                 render_path.unlink(missing_ok=True)
                 return None, []
+            review_image_path, review_width, review_height = self._create_review_page_image(
+                document,
+                page_index,
+                render_path,
+                page_image_id,
+            )
             page_meta = {
                 "page_image_id": page_image_id,
                 "document_id": document.document_id,
                 "page_number": page_index + 1,
                 "page_index": page_index,
-                "image_path": str(self._convert_page_to_webp(render_path, page_image_id)),
-                "page_width": width,
-                "page_height": height,
+                "image_path": str(review_image_path),
+                "page_width": review_width,
+                "page_height": review_height,
                 "occurrence_count": len(page_occurrences),
                 "relative_path": document.relative_path,
                 "file_name": document.file_path.name,
@@ -474,7 +516,7 @@ class ReportPipeline:
 
     def _render_page(self, document: DocumentRecord, page_index: int) -> Path:
         return self.backend_registry.render_page(
-            document.file_path, page_index, DEFAULT_RENDER_DPI
+            document.file_path, page_index, self.config.render_dpi
         )
 
     def _line_rect(self, polygon: list[list[float]]) -> tuple[float, float, float, float]:
@@ -496,12 +538,13 @@ class ReportPipeline:
         match_box: tuple[float, float, float, float],
         page_width: int,
         page_height: int,
+        context_fields: dict[str, str | int] | None = None,
     ) -> dict[str, Any]:
         matched_text = line_text[match_start:match_end]
         matched_character = matched_text if len(matched_text) == 1 else None
         character_variant = "simplified" if matched_character == "约" else "traditional" if matched_character == "約" else None
         unicode_codepoint = f"U+{ord(matched_character):04X}" if matched_character else None
-        context_fields = build_context_fields(line_text, match_start, match_end)
+        context_fields = context_fields or build_context_fields(line_text, match_start, match_end)
         box_fields = normalize_bbox(*match_box, page_width, page_height)
         crop_image, crop_bounds = self._crop_with_padding(image, match_box)
         secondary_result, secondary_confidence = self._secondary_verify(crop_image, matched_text)
@@ -580,7 +623,7 @@ class ReportPipeline:
             "normalized_x1": box_fields["normalized_x1"],
             "normalized_y1": box_fields["normalized_y1"],
             "page_rotation": page_rotation,
-            "render_dpi": DEFAULT_RENDER_DPI,
+            "render_dpi": self.config.render_dpi,
             "page_image_id": page_image_id,
             "crop_image_id": crop_image_id,
             "crop_image_path": str(crop_path),
@@ -641,10 +684,38 @@ class ReportPipeline:
                 best_text = stripped
         return best_text, round(best_conf, 6)
 
-    def _convert_page_to_webp(self, render_path: Path, page_image_id: str) -> Path:
+    def _create_review_page_image(
+        self,
+        document: DocumentRecord,
+        page_index: int,
+        ocr_render_path: Path,
+        page_image_id: str,
+    ) -> tuple[Path, int, int]:
+        settings = REVIEW_IMAGE_QUALITY_SETTINGS[self.review_image_quality]
+        source_path = ocr_render_path
+        remove_source = False
+        # PDF 可以按目标 DPI 重新渲染获得真实细节；DjVu 与位图来源保留原始像素，
+        # 避免通过插值放大制造“看似清晰”的伪细节。
+        if document.file_type == "PDF" and int(settings["dpi"]) != int(self.config.render_dpi):
+            source_path = self.backend_registry.render_page(document.file_path, page_index, int(settings["dpi"]))
+            remove_source = True
+        try:
+            out_path = self._convert_page_to_webp(
+                source_path,
+                page_image_id,
+                quality=int(settings["webp_quality"]),
+            )
+            with Image.open(out_path) as review_image:
+                width, height = review_image.size
+            return out_path, width, height
+        finally:
+            if remove_source:
+                source_path.unlink(missing_ok=True)
+
+    def _convert_page_to_webp(self, render_path: Path, page_image_id: str, *, quality: int = 80) -> Path:
         out_path = self.pages_dir / f"{page_image_id}.webp"
         with Image.open(render_path) as image:
-            image.save(out_path, format="WEBP", quality=70, method=6)
+            image.save(out_path, format="WEBP", quality=quality, method=6)
         return out_path
 
     def _make_failure(

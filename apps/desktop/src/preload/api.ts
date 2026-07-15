@@ -2,6 +2,7 @@ import type {
   AppInfoResult,
   DiagnosticsResult,
   Event,
+  ReviewDisplayPreferences,
   ReviewHighlightSettingsResult,
   ReviewHighlightSettingsUpdateParams,
 } from "@shared/index";
@@ -53,6 +54,7 @@ export interface TaskSummary {
   search_terms: string[];
   search_mode: "exact_literal" | "legacy_fixed_pair";
   failures?: TaskFailure[];
+  review_preferences?: ReviewDisplayPreferences;
 }
 
 export interface TaskFailure {
@@ -163,6 +165,7 @@ export interface ArchiveLensApi {
       output_dir?: string;
       name?: string;
       parallel_workers?: 1;
+      review_preferences?: ReviewDisplayPreferences;
     }): Promise<{
       task_id: string;
       status: string;
@@ -174,6 +177,7 @@ export interface ArchiveLensApi {
       search_text: string;
       search_terms: string[];
       search_mode: "exact_literal";
+      review_preferences?: ReviewDisplayPreferences;
     }>;
     start(task_id: string): Promise<{ task_id: string; status: string }>;
     get(task_id: string): Promise<TaskSummary>;
@@ -213,7 +217,7 @@ export interface ArchiveLensApi {
   export: {
     json(task_id: string): Promise<{ path: string; occurrence_count: number }>;
     review(task_id: string): Promise<{ path: string; record_count: number }>;
-    html(task_id: string): Promise<{ path: string; occurrence_count: number }>;
+    html(task_id: string): Promise<{ path: string; occurrence_count: number; file_size_bytes: number }>;
     list(task_id: string, p?: { limit?: number; offset?: number }): Promise<{ task_id: string; items: ExportRecord[]; limit: number; offset: number }>;
   };
   files: {

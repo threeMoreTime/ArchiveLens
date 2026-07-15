@@ -37,6 +37,19 @@ class TaskStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get_task(tid)["status"], "running")
         self.assertEqual(len(self.store.list_tasks()), 1)
 
+    def test_task_review_preferences_roundtrip(self) -> None:
+        task_id = self.store.create_task(
+            review_image_quality="high",
+            context_direction="ttb",
+            context_radius=32,
+        )
+        task = self.store.get_task(task_id)
+        assert task is not None
+        self.assertEqual(
+            task["review_preferences"],
+            {"page_quality": "high", "context_direction": "ttb", "context_radius": 32},
+        )
+
     def test_task_list_supports_search_status_and_total_count(self) -> None:
         first = self.store.create_task(source_dir=r"C:\档案\县志", name="县志检索", search_terms=["契约"], search_mode="exact_literal")
         second = self.store.create_task(source_dir=r"C:\档案\报纸", name="报纸检索", search_terms=["新闻"], search_mode="exact_literal")
@@ -66,6 +79,32 @@ class TaskStoreTests(unittest.TestCase):
         self.assertEqual(task["source_files"], [r"C:\甲\同名.pdf", r"D:\乙\同名.pdf"])
         self.assertEqual([row["source_id"] for row in self.store.list_task_sources(task_id)], ["source-a", "source-b"])
         self.assertEqual([row["task_id"] for row in self.store.list_tasks(query="乙/同名")], [task_id])
+
+    def test_export_snapshot_streams_in_persisted_source_order(self) -> None:
+        task_id = self.store.create_task(
+            source_kind="files",
+            source_files=[
+                {"source_id": "source-z", "file_path": r"C:\甲\z.pdf", "display_path": "z.pdf"},
+                {"source_id": "source-a", "file_path": r"D:\乙\a.pdf", "display_path": "a.pdf"},
+            ],
+            search_terms=["档案"],
+            search_mode="exact_literal",
+        )
+        self.store.add_occurrences(task_id, [
+            {"occurrence_id": "occ-a", "source_id": "source-a", "file_name": "a.pdf", "relative_path": "a.pdf", "page_number": 1, "page_occurrence_index": 1, "matched_text": "档案", "bbox_hash": "bbox-a"},
+            {"occurrence_id": "occ-z", "source_id": "source-z", "file_name": "z.pdf", "relative_path": "z.pdf", "page_number": 1, "page_occurrence_index": 1, "matched_text": "档案", "bbox_hash": "bbox-z"},
+        ])
+
+        with self.store.occurrence_export_snapshot(task_id, batch_size=1) as (total, page_count, rows):
+            self.store.add_occurrences(task_id, [
+                {"occurrence_id": "occ-late", "source_id": "source-z", "file_name": "z.pdf", "relative_path": "z.pdf", "page_number": 2, "page_occurrence_index": 1, "matched_text": "档案", "bbox_hash": "bbox-late"},
+            ])
+            snapshot_rows = list(rows)
+
+        self.assertEqual((total, page_count), (2, 2))
+        self.assertEqual([row["source_id"] for row in snapshot_rows], ["source-z", "source-a"])
+        self.assertEqual([row["source_ordinal"] for row in snapshot_rows], [0, 1])
+        self.assertEqual(self.store.query_occurrences(task_id=task_id)[0], 3)
 
     def test_task_failures_and_export_history_roundtrip(self) -> None:
         task_id = self.store.create_task()

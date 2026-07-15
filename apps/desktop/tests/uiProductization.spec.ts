@@ -16,6 +16,7 @@ const exportPage = source("pages/ExportPage.tsx");
 const taskCenter = source("pages/TaskCenter.tsx");
 const diagnosticsPage = source("pages/DiagnosticsPage.tsx");
 const settingsPage = source("pages/SettingsPage.tsx");
+const styles = source("styles.css");
 
 describe("桌面端产品化 UI contract", () => {
   it("首页使用真实任务与环境数据，而非硬编码任务列表", () => {
@@ -33,6 +34,15 @@ describe("桌面端产品化 UI contract", () => {
     expect(app).toContain("<NavLink to={exportPath}");
   });
 
+  it("切换页面时仅重置主内容区滚动位置", () => {
+    expect(app).toContain("useLayoutEffect");
+    expect(app).toContain("mainRef.current");
+    expect(app).toContain("main.scrollTop = 0");
+    expect(app).toContain("main.scrollLeft = 0");
+    expect(app).toContain("[location.pathname]");
+    expect(app).toContain("<main ref={mainRef}");
+  });
+
   it("新建扫描支持文件夹、单文件和多文件来源", () => {
     expect(newScan).toContain('id: "single"');
     expect(newScan).toContain('id: "multiple"');
@@ -43,6 +53,10 @@ describe("桌面端产品化 UI contract", () => {
     expect(newScan).toContain("自动移除");
     expect(newScan).toContain("支持跨目录和格式混合选择");
     expect(newScan).toContain("SUPPORTED_SOURCE_FORMAT_LABEL");
+    expect(newScan).toContain("effective_preferences");
+    expect(newScan).toContain("review_preferences: reviewPreferences");
+    expect(newScan).toContain("命中页清晰度");
+    expect(newScan).toContain("每侧 {reviewPreferences.context_radius} 字");
     expect(newScan).toContain("图片会校验真实格式、尺寸和页数");
     expect(newScan).toContain('aria-label="检索文字或词语"');
     expect(newScan).toContain("startError");
@@ -79,6 +93,36 @@ describe("桌面端产品化 UI contract", () => {
     expect(reviewHighlightSettings).toContain("仅影响校对工作台显示");
     expect(reviewHighlightSettings).toContain('type="color"');
     expect(reviewHighlightSettings).toContain('type="range"');
+    expect(reviewHighlightSettings).toContain("QUALITY_OPTIONS");
+    expect(reviewHighlightSettings).toContain("DIRECTION_OPTIONS");
+    expect(reviewHighlightSettings).toContain("ArchiveQualitySample");
+    expect(reviewHighlightSettings).toContain("ArchiveDirectionSample");
+    expect(reviewHighlightSettings).toContain("本馆清册　第廿七号");
+    expect(reviewHighlightSettings).toContain("<span>本馆清册</span>");
+    expect(reviewHighlightSettings).toContain("<span>依次编号</span>");
+    expect(reviewHighlightSettings).toContain("al-horizontal-segment");
+    expect(styles).not.toContain(".direction-rtl .al-horizontal-archive-line { direction:rtl; }");
+    expect(reviewHighlightSettings).toContain("关键词前后每侧字数");
+    expect(reviewHighlightSettings).toContain("context_radius");
+    expect(reviewHighlightSettings).toContain("已完成任务需要使用原来源重新扫描后生效");
+  });
+
+  it("清晰度与阅读方向使用可折叠、可联动的档案样例", () => {
+    expect(reviewHighlightSettings).toContain("qualityExpanded");
+    expect(reviewHighlightSettings).toContain("directionExpanded");
+    expect(reviewHighlightSettings).toContain("aria-expanded={qualityExpanded}");
+    expect(reviewHighlightSettings).toContain("aria-expanded={directionExpanded}");
+    expect(reviewHighlightSettings).toContain("以下为清晰度示意，实际效果取决于原始文件质量");
+    expect(reviewHighlightSettings).toContain("al-quality-magnifier");
+    expect(reviewHighlightSettings).toContain("contextRadius={activePreferences.context_radius}");
+    expect(reviewHighlightSettings).toContain("al-context-range-caption");
+    expect(reviewHighlightSettings).toContain("al-vertical-column-connector");
+    expect(reviewHighlightSettings).toContain("continuation");
+    expect(styles).toContain(".al-review-option-grid label:focus-within");
+    expect(styles).toContain(".al-review-preference-toggle:focus-visible");
+    expect(styles).toContain(".al-horizontal-archive-line { position:relative; z-index:1; display:flex; align-items:center; justify-content:center; gap:0;");
+    expect(styles).toContain(".direction-ttb .al-vertical-archive-column.continuation");
+    expect(styles).toContain(".direction-btt .al-vertical-archive-column.continuation");
   });
 
   it("设置页集中承载显示偏好，并从设置进入独立环境诊断页", () => {
@@ -104,6 +148,11 @@ describe("桌面端产品化 UI contract", () => {
     expect(exportPage).toContain("awaitingConfirmation");
     expect(exportPage).not.toContain("window.confirm");
     expect(exportPage).toContain("而非当前校对页或已加载的项目");
+    expect(exportPage).toContain('selectedFormat === "html" || !summary.scan_complete || !summary.review_complete');
+    expect(exportPage).toContain("报告包含大量页面图片，文件可能超过 300MB，打开、搜索和打印可能较慢");
+    expect(exportPage).toContain("仍然导出 HTML");
+    expect(exportPage).toContain('event.event !== "export.progress"');
+    expect(exportPage).toContain("正在处理页面图片");
   });
 
   it("切换导出任务时不会沿用上一任务的导出成功状态", () => {

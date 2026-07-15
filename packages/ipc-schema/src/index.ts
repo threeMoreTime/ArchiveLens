@@ -29,21 +29,48 @@ export const DEFAULT_REVIEW_HIGHLIGHT_STYLE: ReviewHighlightStyle = {
   opacity: 0.18,
 };
 
+export const ReviewImageQualitySchema = z.enum(["standard", "clear", "high", "maximum"]);
+export type ReviewImageQuality = z.infer<typeof ReviewImageQualitySchema>;
+
+export const ContextReadingDirectionSchema = z.enum(["ltr", "rtl", "ttb", "btt"]);
+export type ContextReadingDirection = z.infer<typeof ContextReadingDirectionSchema>;
+
+export const ReviewDisplayPreferencesSchema = z.object({
+  page_quality: ReviewImageQualitySchema,
+  context_direction: ContextReadingDirectionSchema,
+  context_radius: z.number().int().min(1).max(50),
+});
+export type ReviewDisplayPreferences = z.infer<typeof ReviewDisplayPreferencesSchema>;
+
+export const DEFAULT_REVIEW_DISPLAY_PREFERENCES: ReviewDisplayPreferences = {
+  page_quality: "maximum",
+  context_direction: "ltr",
+  context_radius: 15,
+};
+
 export const AppSettingsFileSchema = z.object({
-  version: z.literal(1).default(1),
+  version: z.union([z.literal(1), z.literal(2)]).default(2),
   appearance: z.object({
     review_highlight: ReviewHighlightStyleSchema.default(DEFAULT_REVIEW_HIGHLIGHT_STYLE),
-  }).default({ review_highlight: DEFAULT_REVIEW_HIGHLIGHT_STYLE }),
+    review_preferences: ReviewDisplayPreferencesSchema.default(DEFAULT_REVIEW_DISPLAY_PREFERENCES),
+  }).default({
+    review_highlight: DEFAULT_REVIEW_HIGHLIGHT_STYLE,
+    review_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+  }),
   task_overrides: z.record(z.string().min(1), z.object({
-    review_highlight: ReviewHighlightStyleSchema,
+    review_highlight: ReviewHighlightStyleSchema.optional(),
+    review_preferences: ReviewDisplayPreferencesSchema.optional(),
   })).default({}),
-});
+}).transform((settings) => ({ ...settings, version: 2 as const }));
 export type AppSettingsFile = z.infer<typeof AppSettingsFileSchema>;
 
 export const ReviewHighlightSettingsResultSchema = z.object({
   global: ReviewHighlightStyleSchema,
   task_override: ReviewHighlightStyleSchema.nullable(),
   effective: ReviewHighlightStyleSchema,
+  global_preferences: ReviewDisplayPreferencesSchema,
+  task_preferences_override: ReviewDisplayPreferencesSchema.nullable(),
+  effective_preferences: ReviewDisplayPreferencesSchema,
   scope: z.enum(["global", "task"]),
 });
 export type ReviewHighlightSettingsResult = z.infer<typeof ReviewHighlightSettingsResultSchema>;
@@ -62,6 +89,16 @@ export const ReviewHighlightSettingsUpdateParamsSchema = z.union([
     scope: z.literal("task"),
     task_id: z.string().min(1),
     highlight: ReviewHighlightStyleSchema.nullable(),
+  }),
+  z.object({
+    scope: z.literal("global"),
+    preferences: ReviewDisplayPreferencesSchema,
+    task_id: z.string().min(1).optional(),
+  }),
+  z.object({
+    scope: z.literal("task"),
+    task_id: z.string().min(1),
+    preferences: ReviewDisplayPreferencesSchema.nullable(),
   }),
 ]);
 export type ReviewHighlightSettingsUpdateParams = z.infer<typeof ReviewHighlightSettingsUpdateParamsSchema>;
@@ -91,6 +128,7 @@ const TaskCreateCommonSchema = {
   output_dir: z.string().optional(),
   name: z.string().optional(),
   parallel_workers: z.literal(1).optional(),
+  review_preferences: ReviewDisplayPreferencesSchema.optional(),
 };
 
 /**
@@ -303,6 +341,7 @@ export const TaskSummarySchema = z.object({
   source_kind: ScanSourceKindSchema.optional(),
   source_label: z.string().optional(),
   source_files: z.array(z.string()).optional(),
+  review_preferences: ReviewDisplayPreferencesSchema.optional(),
   failures: z.array(TaskFailureSchema).optional(),
 }).passthrough();
 
@@ -313,6 +352,7 @@ export const TaskCreateResultSchema = z.object({
   source_kind: ScanSourceKindSchema.optional(),
   source_label: z.string().optional(),
   source_files: z.array(z.string()).optional(),
+  review_preferences: ReviewDisplayPreferencesSchema.optional(),
   file_count: z.number().int().nonnegative(),
   search_text: z.string().min(1),
   search_terms: z.array(z.string().min(1)).min(1),

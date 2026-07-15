@@ -134,7 +134,26 @@ export default function TaskPage() {
           {task.failure_count > 0 && <Card className="al-card al-task-failures"><div className="al-card-heading-row"><Text weight="semibold">失败明细</Text><Button size="small" onClick={() => void openLogs()}>查看日志</Button></div>{failureDetails.length === 0 ? <InlineFeedback tone="warning">该任务来自旧版本，只记录了失败数量，未保存结构化明细。请查看日志定位原因。</InlineFeedback> : <><Text className="al-muted">以下项目可能造成漏检；修复环境或源文件后，建议使用原目录重新扫描。</Text><div className="al-failure-list">{failureDetails.map((failure, index) => <div key={failure.failure_id || `${failure.file_path}-${failure.page_number}-${index}`}><strong title={failure.file_path}>{failure.file_path || "任务级错误"}{failure.page_number ? ` · 第 ${failure.page_number} 页` : ""}</strong><span>{failure.error_type || failure.stage || "处理失败"}：{failure.error_message || "未提供错误详情"}</span><small>{failure.possible_missed_hits ? "可能存在漏检" : "未标记为漏检风险"}</small></div>)}</div>{task.failure_count > failureDetails.length && <Text className="al-muted">当前仅显示前 {failureDetails.length} 项；完整的 {task.failure_count} 项记录请在任务日志和报告中查看。</Text>}</>}</Card>}
         </section>
         <aside className="al-task-aside">
-          <Card className="al-card"><Text weight="semibold">下一步</Text><div className="al-task-actions">{task.status === "draft" ? <Button appearance="primary" disabled={Boolean(action)} onClick={() => void runAction("start")}>{action === "start" ? "正在启动…" : "启动任务"}</Button> : <Button appearance="primary" onClick={() => nav(`/review/${taskId}`)}>进入校对工作台</Button>}<Button onClick={() => nav(`/export/${taskId}`)}>导出结果</Button>{task.status === "running" && <Button disabled={Boolean(action)} onClick={() => void runAction("pause")}>{action === "pause" ? "正在请求暂停…" : "暂停任务"}</Button>}{!legacyRequiresReview && ["paused", "recoverable"].includes(task.status) && <Button disabled={Boolean(action)} onClick={() => void runAction("resume")}>{action === "resume" ? "正在恢复…" : "继续任务"}</Button>}{!legacyRequiresReview && !["cancelled", "completed", "failed"].includes(task.status) && <Button disabled={Boolean(action)} onClick={() => void runAction("cancel")}>{action === "cancel" ? "正在取消…" : "取消任务"}</Button>}{["failed", "cancelled"].includes(task.status) || legacyRequiresReview || task.failure_count > 0 ? <Button onClick={() => nav("/scan/new", { state: task.source_kind === "files" ? { sourceKind: "files", sourceFiles: task.source_files } : { sourceDir: task.source_dir } })}>{task.source_kind === "files" ? "使用原文件清单新建任务" : "使用原目录新建任务"}</Button> : null}<Button appearance="subtle" onClick={() => nav("/tasks")}>返回任务中心</Button></div></Card>
+          <Card className="al-card">
+            <Text weight="semibold">下一步</Text>
+            <div className="al-task-actions">
+              {task.status === "draft"
+                ? <Button appearance="primary" disabled={Boolean(action)} onClick={() => void runAction("start")}>{action === "start" ? "正在启动…" : "启动任务"}</Button>
+                : <Button appearance="primary" onClick={() => nav(`/review/${taskId}`)}>进入校对工作台</Button>}
+              <Button onClick={() => nav(`/export/${taskId}`)}>导出结果</Button>
+              {task.status === "running" && <Button disabled={Boolean(action)} onClick={() => void runAction("pause")}>{action === "pause" ? "正在请求暂停…" : "暂停任务"}</Button>}
+              {!legacyRequiresReview && ["paused", "recoverable"].includes(task.status) && <Button disabled={Boolean(action)} onClick={() => void runAction("resume")}>{action === "resume" ? "正在恢复…" : "继续任务"}</Button>}
+              {!legacyRequiresReview && !["cancelled", "completed", "failed"].includes(task.status) && <Button disabled={Boolean(action)} onClick={() => void runAction("cancel")}>{action === "cancel" ? "正在取消…" : "取消任务"}</Button>}
+              <Button onClick={() => nav("/scan/new", {
+                state: task.source_kind === "files"
+                  ? { sourceKind: "files", sourceFiles: task.source_files, sourceTaskId: task.task_id }
+                  : { sourceDir: task.source_dir, sourceTaskId: task.task_id },
+              })}>
+                {task.source_kind === "files" ? "使用原文件清单新建任务" : "使用原目录新建任务"}
+              </Button>
+              <Button appearance="subtle" onClick={() => nav("/tasks")}>返回任务中心</Button>
+            </div>
+          </Card>
           <Card className="al-card"><Text weight="semibold">数据与诊断</Text><div className="al-task-actions"><Button disabled={!task.workspace_dir || Boolean(action)} onClick={() => void openTaskFolder()}>{action === "open-folder" ? "正在打开…" : "打开任务目录"}</Button><Button disabled={Boolean(action)} onClick={() => void openLogs()}>{action === "open-logs" ? "正在打开…" : "打开应用日志"}</Button><Button onClick={() => nav("/diagnostics")}>环境诊断</Button></div></Card>
           <Card className="al-card"><Text weight="semibold">时间记录</Text><div className="al-task-time-list"><span>创建时间<strong>{formatDateTime(task.created_at)}</strong></span><span>开始时间<strong>{formatDateTime(task.started_at)}</strong></span><span>完成时间<strong>{formatDateTime(task.finished_at)}</strong></span></div></Card>
           <Card className="al-card al-local-card"><Text weight="semibold">本地数据</Text><Text className="al-muted">任务目录包含 OCR 页面证据、校对记录和导出文件。请在备份该目录后再进行手工清理。</Text></Card>

@@ -15,6 +15,7 @@ import {
   TasksListResultSchema,
   SUPPORTED_SOURCE_EXTENSIONS,
   ReviewHighlightStyleSchema,
+  ReviewDisplayPreferencesSchema,
   ReviewHighlightSettingsUpdateParamsSchema,
   normalizeSearchText,
 } from "@shared/index";
@@ -103,6 +104,16 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(RequestSchema.safeParse(load("review-update.json")).success).toBe(true);
   });
 
+  it("扫描任务校验命中页清晰度与上下文阅读设置", () => {
+    const preferences = { page_quality: "maximum", context_direction: "ttb", context_radius: 50 };
+    expect(ReviewDisplayPreferencesSchema.safeParse(preferences).success).toBe(true);
+    expect(TaskCreateParamsSchema.safeParse({ source_dir: "E:\\OCR", search_text: "档案", review_preferences: preferences }).success).toBe(true);
+    expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, page_quality: "lossless" }).success).toBe(false);
+    expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, context_direction: "diagonal" }).success).toBe(false);
+    expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, context_radius: 0 }).success).toBe(false);
+    expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, context_radius: 51 }).success).toBe(false);
+  });
+
   it("校对高亮设置校验颜色、透明度与配置范围", () => {
     expect(ReviewHighlightStyleSchema.parse({ color: "#abcdef", opacity: 0.25 })).toEqual({ color: "#ABCDEF", opacity: 0.25 });
     expect(ReviewHighlightStyleSchema.safeParse({ color: "red", opacity: 0.25 }).success).toBe(false);
@@ -110,6 +121,8 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(ReviewHighlightStyleSchema.safeParse({ color: "#ABCDEF", opacity: 0.61 }).success).toBe(false);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", highlight: { color: "#C44516", opacity: 0.18 } }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", task_id: "task-1", highlight: null }).success).toBe(true);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", preferences: { page_quality: "maximum", context_direction: "ltr", context_radius: 15 } }).success).toBe(true);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", task_id: "task-1", preferences: null }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", highlight: null }).success).toBe(false);
   });
 

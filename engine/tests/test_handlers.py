@@ -106,6 +106,42 @@ class HandlersTests(unittest.TestCase):
         self.assertEqual(result["counts"]["png"], 1)
         self.assertEqual(result["status"], "draft")
         self.assertEqual(result["search_text"], "档案")
+        self.assertEqual(
+            result["review_preferences"],
+            {"page_quality": "maximum", "context_direction": "ltr", "context_radius": 15},
+        )
+
+    def test_tasks_create_persists_review_preferences(self) -> None:
+        src = Path(self.tmp) / "preferences"
+        src.mkdir()
+        (src / "a.pdf").write_bytes(b"%PDF-1.4")
+        preferences = {"page_quality": "high", "context_direction": "ttb", "context_radius": 28}
+        result = self.server.handlers["tasks.create"](
+            self.server,
+            {"source_dir": str(src), "search_text": "档案", "review_preferences": preferences},
+        )
+        self.assertEqual(result["review_preferences"], preferences)
+        task = self.server.store.get_task(result["task_id"])
+        assert task is not None
+        self.assertEqual(task["review_preferences"], preferences)
+
+    def test_tasks_create_rejects_invalid_review_preferences(self) -> None:
+        src = Path(self.tmp) / "invalid-preferences"
+        src.mkdir()
+        (src / "a.pdf").write_bytes(b"%PDF-1.4")
+        invalid_values = [
+            {"page_quality": "lossless", "context_direction": "ltr", "context_radius": 15},
+            {"page_quality": "maximum", "context_direction": "diagonal", "context_radius": 15},
+            {"page_quality": "maximum", "context_direction": "ltr", "context_radius": 0},
+            {"page_quality": "maximum", "context_direction": "ltr", "context_radius": 51},
+        ]
+        for preferences in invalid_values:
+            with self.subTest(preferences=preferences), self.assertRaises(ProtocolError) as cm:
+                self.server.handlers["tasks.create"](
+                    self.server,
+                    {"source_dir": str(src), "search_text": "档案", "review_preferences": preferences},
+                )
+            self.assertEqual(cm.exception.code, ErrorCode.VALIDATION_ERROR)
 
     def test_tasks_create_accepts_single_and_cross_directory_file_list(self) -> None:
         first_dir = Path(self.tmp) / "first"
@@ -293,11 +329,21 @@ class HandlersTests(unittest.TestCase):
         self.assertEqual(json_payload["task"]["search_mode"], "legacy_fixed_pair")
         self.assertEqual(json_payload["task"]["search_terms"], ["约", "約"])
         self.assertIn("matched_text", json_payload["occurrences"][0])
-        h = self.server.handlers["export.html"](self.server, {"task_id": tid})
+        progress_output = io.StringIO()
+        with redirect_stdout(progress_output):
+            h = self.server.handlers["export.html"](self.server, {"task_id": tid})
         self.assertTrue(Path(h["path"]).exists())
         content = Path(h["path"]).read_text(encoding="utf-8")
         self.assertIn("ArchiveLens", content)
         self.assertIn("约", content)
+        progress_events = [json.loads(line) for line in progress_output.getvalue().splitlines()]
+        progress_stages = [event["payload"]["stage"] for event in progress_events]
+        self.assertEqual(progress_stages[0], "preparing")
+        self.assertEqual(progress_stages[-3:], ["building", "writing", "completed"])
+        self.assertEqual(
+            progress_stages.count("images"),
+            len({item["page_image_relpath"] for item in json_payload["occurrences"]}),
+        )
         history = self.server.handlers["exports.list"](self.server, {"task_id": tid})
         self.assertEqual([item["kind"] for item in history["items"]], ["html", "json"])
 
@@ -322,11 +368,11 @@ class HandlersTests(unittest.TestCase):
         result = self.server.handlers["export.html"](self.server, {"task_id": tid})
         content = Path(result["path"]).read_text(encoding="utf-8")
         self.assertIn("A&amp;B &lt; &gt; &quot; &#x27;", content)
-        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", content)
+        self.assertIn("\\u003cscript\\u003ealert(1)\\u003c/script\\u003e", content)
         self.assertNotIn("<img src=x onerror=alert(1)>", content)
-        self.assertIn("&lt;img src=x onerror=alert(1)&gt;", content)
+        self.assertIn("\\u003cimg src=x onerror=alert(1)\\u003e", content)
         self.assertIn("&quot;quoted&quot; &#x27;single&#x27;", content)
-        self.assertIn("&lt;b&gt;note&lt;/b&gt;", content)
+        self.assertIn("\\u003cb\\u003enote\\u003c/b\\u003e", content)
 
     def test_export_review_records(self) -> None:
         demo = self.server.handlers["demo.create"](self.server, {})

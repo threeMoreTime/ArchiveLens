@@ -22,9 +22,10 @@ import json
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from ..search_terms import (
     EXACT_LITERAL_SEARCH_MODE,
@@ -33,8 +34,11 @@ from ..search_terms import (
     unicode_sequence,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 LEGACY_TASK_REQUIRES_REVIEW = "LEGACY_TASK_REQUIRES_REVIEW"
+DEFAULT_REVIEW_IMAGE_QUALITY = "maximum"
+DEFAULT_CONTEXT_DIRECTION = "ltr"
+DEFAULT_CONTEXT_RADIUS = 15
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -61,7 +65,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     error_code TEXT,
     error_message TEXT,
     search_terms_json TEXT NOT NULL DEFAULT '["约","約"]',
-    search_mode TEXT NOT NULL DEFAULT 'legacy_fixed_pair'
+    search_mode TEXT NOT NULL DEFAULT 'legacy_fixed_pair',
+    review_image_quality TEXT NOT NULL DEFAULT 'maximum',
+    context_direction TEXT NOT NULL DEFAULT 'ltr',
+    context_radius INTEGER NOT NULL DEFAULT 15
 );
 CREATE TABLE IF NOT EXISTS occurrences (
     occurrence_id TEXT PRIMARY KEY,
@@ -257,6 +264,10 @@ class TaskStore:
         self._ensure_column("tasks", "worker_generation", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("tasks", "search_terms_json", "TEXT NOT NULL DEFAULT '[\"约\",\"約\"]'")
         self._ensure_column("tasks", "search_mode", "TEXT NOT NULL DEFAULT 'legacy_fixed_pair'")
+        # 旧任务的出处页由 144 DPI / WebP 70 生成，不能标记成新版本的“最清晰”。
+        self._ensure_column("tasks", "review_image_quality", "TEXT NOT NULL DEFAULT 'standard'")
+        self._ensure_column("tasks", "context_direction", "TEXT NOT NULL DEFAULT 'ltr'")
+        self._ensure_column("tasks", "context_radius", "INTEGER NOT NULL DEFAULT 15")
         self._ensure_column("occurrences", "source_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("occurrences", "bbox_hash", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("occurrences", "matched_text", "TEXT")
@@ -429,6 +440,9 @@ class TaskStore:
         status: str = "draft",
         search_terms: Iterable[str] | None = None,
         search_mode: str = LEGACY_SEARCH_MODE,
+        review_image_quality: str = DEFAULT_REVIEW_IMAGE_QUALITY,
+        context_direction: str = DEFAULT_CONTEXT_DIRECTION,
+        context_radius: int = DEFAULT_CONTEXT_RADIUS,
     ) -> str:
         task_id = new_id("task_")
         created = now_iso()
@@ -450,6 +464,9 @@ class TaskStore:
                     status=status,
                     search_terms=normalized_terms,
                     search_mode=search_mode,
+                    review_image_quality=review_image_quality,
+                    context_direction=context_direction,
+                    context_radius=context_radius,
                 )
                 self._insert_task_sources_locked(task_id, source_files, created)
         return task_id
@@ -472,6 +489,9 @@ class TaskStore:
         status: str = "draft",
         search_terms: Iterable[str] | None = None,
         search_mode: str = LEGACY_SEARCH_MODE,
+        review_image_quality: str = DEFAULT_REVIEW_IMAGE_QUALITY,
+        context_direction: str = DEFAULT_CONTEXT_DIRECTION,
+        context_radius: int = DEFAULT_CONTEXT_RADIUS,
     ) -> tuple[str, dict[str, Any]]:
         task_id = new_id("task_")
         created = now_iso()
@@ -494,6 +514,9 @@ class TaskStore:
                         status=status,
                         search_terms=normalized_terms,
                         search_mode=search_mode,
+                        review_image_quality=review_image_quality,
+                        context_direction=context_direction,
+                        context_radius=context_radius,
                     )
                     self._insert_task_sources_locked(task_id, source_files, created)
                     event = self._append_task_event_locked(
@@ -535,16 +558,21 @@ class TaskStore:
         status: str,
         search_terms: list[str],
         search_mode: str,
+        review_image_quality: str,
+        context_direction: str,
+        context_radius: int,
     ) -> None:
         self.conn.execute(
             """INSERT INTO tasks
                (task_id, name, source_dir, source_kind, source_label, output_dir, workspace_dir, status,
-                is_demo, file_count, total_pages, created_at, updated_at, search_terms_json, search_mode)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                is_demo, file_count, total_pages, created_at, updated_at, search_terms_json, search_mode,
+                review_image_quality, context_direction, context_radius)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 task_id, name, source_dir, source_kind, source_label or source_dir, output_dir, workspace_dir, status,
                 1 if is_demo else 0, file_count, total_pages, created_at, created_at,
                 json.dumps(search_terms, ensure_ascii=False, separators=(",", ":")), search_mode,
+                review_image_quality, context_direction, context_radius,
             ),
         )
 
@@ -653,6 +681,11 @@ class TaskStore:
         task["search_text"] = search_terms[0] if len(search_terms) == 1 else " / ".join(search_terms)
         task["source_kind"] = task.get("source_kind") or "folder"
         task["source_label"] = task.get("source_label") or task.get("source_dir") or ""
+        task["review_preferences"] = {
+            "page_quality": task.get("review_image_quality") or "standard",
+            "context_direction": task.get("context_direction") or DEFAULT_CONTEXT_DIRECTION,
+            "context_radius": int(task.get("context_radius") or DEFAULT_CONTEXT_RADIUS),
+        }
         if task["source_kind"] == "files":
             task["source_files"] = [str(source["file_path"]) for source in (sources or [])]
         return task
@@ -1184,6 +1217,78 @@ class TaskStore:
                 params + [limit, offset],
             ).fetchall()
         return int(total), [dict(r) for r in rows]
+
+    @contextmanager
+    def occurrence_export_snapshot(
+        self,
+        task_id: str,
+        *,
+        batch_size: int = 500,
+    ) -> Iterator[tuple[int, int, Iterator[dict[str, Any]]]]:
+        """以独立只读快照分批提供 HTML 导出记录。
+
+        独立连接在 WAL 模式下不会长时间占用 Engine 的共享连接锁；显式读事务
+        保证扫描或校对继续写入时，本次阶段性报告仍基于同一个时间点的数据。
+        """
+        if type(batch_size) is not int or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("PRAGMA query_only = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("BEGIN")
+            total = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM occurrences WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()[0]
+            )
+            page_count = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) FROM (
+                        SELECT 1
+                        FROM occurrences
+                        WHERE task_id=?
+                        GROUP BY COALESCE(document_id, source_id, relative_path, file_name, ''),
+                                 page_number, COALESCE(page_image_relpath, '')
+                    )
+                    """,
+                    (task_id,),
+                ).fetchone()[0]
+            )
+            cursor = connection.execute(
+                """
+                SELECT o.*, r.decision AS review_decision, r.note AS review_note,
+                       ts.ordinal AS source_ordinal,
+                       ts.display_path AS source_display_path
+                FROM occurrences o
+                LEFT JOIN review_records r
+                  ON r.task_id = o.task_id AND r.occurrence_id = o.occurrence_id
+                LEFT JOIN task_sources ts
+                  ON ts.task_id = o.task_id AND ts.source_id = o.source_id
+                WHERE o.task_id=?
+                ORDER BY CASE WHEN ts.ordinal IS NULL THEN 1 ELSE 0 END,
+                         ts.ordinal,
+                         COALESCE(o.relative_path, o.file_name, ''),
+                         o.page_number, o.page_occurrence_index, o.occurrence_id
+                """,
+                (task_id,),
+            )
+
+            def rows() -> Iterator[dict[str, Any]]:
+                while True:
+                    batch = cursor.fetchmany(batch_size)
+                    if not batch:
+                        return
+                    for row in batch:
+                        yield dict(row)
+
+            yield total, page_count, rows()
+        finally:
+            connection.rollback()
+            connection.close()
 
     @staticmethod
     def _occurrence_filter_clause(

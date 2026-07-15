@@ -13,6 +13,20 @@ interface ExportResult {
   occurrenceCount: number;
 }
 
+interface HtmlExportProgress {
+  stage: "preparing" | "images" | "building" | "writing" | "completed" | "failed";
+  completed: number;
+  total: number;
+}
+
+function progressLabel(progress: HtmlExportProgress | null): string {
+  if (!progress) return "正在导出 HTML…";
+  if (progress.stage === "images") return `正在处理页面图片 ${progress.completed}/${progress.total}…`;
+  if (progress.stage === "building") return "正在组装离线报告…";
+  if (progress.stage === "writing") return "正在写入 HTML 文件…";
+  return "正在准备 HTML 报告…";
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "导出失败，请重试";
 }
@@ -35,6 +49,7 @@ export default function ExportPage() {
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
   const [result, setResult] = useState<ExportResult | null>(null);
+  const [htmlProgress, setHtmlProgress] = useState<HtmlExportProgress | null>(null);
   const [error, setError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -45,6 +60,7 @@ export default function ExportPage() {
     setHistory([]);
     setResult(null);
     setAwaitingConfirmation(false);
+    setHtmlProgress(null);
     setSelectedFormat("html");
     if (!taskId) {
       setTask(null);
@@ -72,10 +88,25 @@ export default function ExportPage() {
     return () => { active = false; };
   }, [reloadToken, taskId]);
 
+  useEffect(() => window.archiveLens.subscribe.onEvent((event: {
+    task_id?: string | null;
+    event: string;
+    payload: Record<string, unknown>;
+  }) => {
+    if (!taskId || event.task_id !== taskId || event.event !== "export.progress") return;
+    const stage = event.payload.stage;
+    const completed = event.payload.completed;
+    const total = event.payload.total;
+    if (typeof stage !== "string" || typeof completed !== "number" || typeof total !== "number") return;
+    if (!["preparing", "images", "building", "writing", "completed", "failed"].includes(stage)) return;
+    setHtmlProgress({ stage: stage as HtmlExportProgress["stage"], completed, total });
+  }), [taskId]);
+
   const performExport = async (format: ExportFormat) => {
     if (!taskId || !summary || exporting) return;
     setAwaitingConfirmation(false);
     setExporting(format);
+    setHtmlProgress(format === "html" ? { stage: "preparing", completed: 0, total: 0 } : null);
     setError("");
     try {
       const exported = format === "json"
@@ -92,12 +123,13 @@ export default function ExportPage() {
       setError(errorMessage(nextError));
     } finally {
       setExporting(null);
+      setHtmlProgress(null);
     }
   };
 
   const requestExport = () => {
     if (!summary || exporting) return;
-    if (!summary.scan_complete || !summary.review_complete) {
+    if (selectedFormat === "html" || !summary.scan_complete || !summary.review_complete) {
       setAwaitingConfirmation(true);
       return;
     }
@@ -162,12 +194,16 @@ export default function ExportPage() {
               <Text weight="semibold">2. 选择格式</Text>
               <div className="al-export-format-grid" role="radiogroup" aria-label="导出格式">
                 <button className={`al-export-format ${selectedFormat === "json" ? "selected" : ""}`} type="button" role="radio" aria-checked={selectedFormat === "json"} onClick={() => { setSelectedFormat("json"); setAwaitingConfirmation(false); }} disabled={Boolean(exporting)}><strong>JSON 数据包</strong><span>适合归档、数据处理和系统对接。</span></button>
-                <button className={`al-export-format ${selectedFormat === "html" ? "selected" : ""}`} type="button" role="radio" aria-checked={selectedFormat === "html"} onClick={() => { setSelectedFormat("html"); setAwaitingConfirmation(false); }} disabled={Boolean(exporting)}><strong>HTML 审阅报告</strong><span>适合浏览、人工复核与本地分享。</span></button>
+                <button className={`al-export-format ${selectedFormat === "html" ? "selected" : ""}`} type="button" role="radio" aria-checked={selectedFormat === "html"} onClick={() => { setSelectedFormat("html"); setAwaitingConfirmation(false); }} disabled={Boolean(exporting)}><strong>HTML 审阅报告</strong><span>包含命中页整页图片，适合离线浏览、人工复核、分享与 A4 打印。</span></button>
               </div>
-              <div className="al-export-primary-action"><Button appearance="primary" size="large" disabled={Boolean(exporting)} onClick={requestExport}>{exporting ? <><Spinner size="tiny" /> 正在导出 {exporting.toUpperCase()}…</> : `导出 ${selectedFormat.toUpperCase()}`}</Button></div>
+              <div className="al-export-primary-action"><Button appearance="primary" size="large" disabled={Boolean(exporting)} onClick={requestExport}>{exporting ? <><Spinner size="tiny" /> {exporting === "html" ? progressLabel(htmlProgress) : "正在导出 JSON…"}</> : `导出 ${selectedFormat.toUpperCase()}`}</Button></div>
             </Card>
 
-            {awaitingConfirmation && <InlineFeedback tone="warning"><strong>当前导出不是最终完整结果。</strong> {incompleteReason} 导出文件会明确保留完整性状态。<div className="al-inline-actions"><Button appearance="primary" size="small" onClick={() => void performExport(selectedFormat)}>仍然导出阶段性结果</Button><Button size="small" onClick={() => setAwaitingConfirmation(false)}>返回检查</Button></div></InlineFeedback>}
+            {awaitingConfirmation && <InlineFeedback tone="warning">
+              {(!summary.scan_complete || !summary.review_complete) && <><strong>当前导出不是最终完整结果。</strong> {incompleteReason} 导出文件会明确保留完整性状态。 </>}
+              {selectedFormat === "html" && <><strong>HTML 报告将嵌入全部命中页面图片。</strong> 报告包含大量页面图片，文件可能超过 300MB，打开、搜索和打印可能较慢。</>}
+              <div className="al-inline-actions"><Button appearance="primary" size="small" onClick={() => void performExport(selectedFormat)}>{selectedFormat === "html" ? "仍然导出 HTML" : "仍然导出阶段性结果"}</Button><Button size="small" onClick={() => setAwaitingConfirmation(false)}>返回检查</Button></div>
+            </InlineFeedback>}
             {result && <InlineFeedback tone="info">已导出 {result.occurrenceCount} 条结果至 {result.path} <Button size="small" onClick={() => void openFolderFor(result.path)}>打开文件夹</Button></InlineFeedback>}
           </div>
 

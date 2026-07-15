@@ -201,7 +201,10 @@ def main() -> int:
             "no repo source path": str(ROOT) not in content and str(ROOT).replace("\\", "/") not in content,
             "no .tmp": ".tmp" not in content,
             "has 已确认或 confirmed": "已确认" in content or "confirmed" in content.lower(),
-            "review note escaped": "A&amp;B &lt;script&gt;alert(1)&lt;/script&gt;" in content,
+            "review note safely serialized": (
+                "A&amp;B &lt;script&gt;alert(1)&lt;/script&gt;" in content
+                or "A\\u0026B \\u003cscript\\u003ealert(1)\\u003c/script\\u003e" in content
+            ),
             "no executable script": "<script>alert(1)</script>" not in content,
             "no event handler injection": "<img src=x onerror=alert(1)>" not in content,
         }

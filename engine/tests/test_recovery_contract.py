@@ -455,14 +455,14 @@ class RecoveryMigrationTests(unittest.TestCase):
         conn.close()
         return db_path
 
-    def _assert_schema_v5(self, store: TaskStore) -> None:
+    def _assert_schema_v6(self, store: TaskStore) -> None:
         self.assertEqual(
             store.conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0],
-            "5",
+            "6",
         )
-        self.assertEqual(store.conn.execute("PRAGMA user_version").fetchone()[0], 5)
+        self.assertEqual(store.conn.execute("PRAGMA user_version").fetchone()[0], 6)
         self.assertTrue(
-            {"search_terms_json", "search_mode", "source_kind", "source_label"}.issubset(
+            {"search_terms_json", "search_mode", "source_kind", "source_label", "review_image_quality", "context_direction", "context_radius"}.issubset(
                 {row[1] for row in store.conn.execute("PRAGMA table_info(tasks)").fetchall()}
             )
         )
@@ -485,7 +485,7 @@ class RecoveryMigrationTests(unittest.TestCase):
         db_path = self._create_legacy_db("legacy-empty.db")
         store = TaskStore(db_path)
         try:
-            self._assert_schema_v5(store)
+            self._assert_schema_v6(store)
             task_id = store.create_task(source_dir="X", output_dir="Y", workspace_dir="Z", name="migrated-empty")
             store.append_task_event(
                 task_id=task_id,
@@ -560,7 +560,7 @@ class RecoveryMigrationTests(unittest.TestCase):
         for _ in range(2):
             store = TaskStore(db_path)
             try:
-                self._assert_schema_v5(store)
+                self._assert_schema_v6(store)
                 task = store.get_task("task_completed")
                 assert task is not None
                 self.assertEqual(task["status"], "completed")
@@ -610,7 +610,7 @@ class RecoveryMigrationTests(unittest.TestCase):
         )
         store = TaskStore(db_path)
         try:
-            self._assert_schema_v5(store)
+            self._assert_schema_v6(store)
             task = store.get_task("task_unfinished")
             assert task is not None
             self.assertEqual(task["status"], "recoverable")
@@ -657,15 +657,15 @@ class RecoveryMigrationTests(unittest.TestCase):
 
         store = TaskStore(db_path)
         try:
-            self._assert_schema_v5(store)
+            self._assert_schema_v6(store)
             task = store.get_task("task_rollback")
             assert task is not None
             self.assertEqual(task["name"], "rollback")
         finally:
             store.close()
 
-    def test_schema_v5_reopen_skips_migration_helpers(self) -> None:
-        path = Path(self.tmp) / "v5-noop.db"
+    def test_schema_v6_reopen_skips_migration_helpers(self) -> None:
+        path = Path(self.tmp) / "v6-noop.db"
         TaskStore(path).close()
         with mock.patch.object(TaskStore, "_execute_schema_sql", side_effect=AssertionError("should not run")), mock.patch.object(
             TaskStore, "_migrate_schema", side_effect=AssertionError("should not run")
@@ -676,14 +676,14 @@ class RecoveryMigrationTests(unittest.TestCase):
         path = Path(self.tmp) / "future.db"
         conn = sqlite3.connect(path)
         conn.executescript(
-            "CREATE TABLE marker(value TEXT NOT NULL); INSERT INTO marker VALUES ('keep'); PRAGMA user_version=6;"
+            "CREATE TABLE marker(value TEXT NOT NULL); INSERT INTO marker VALUES ('keep'); PRAGMA user_version=7;"
         )
         conn.close()
         with self.assertRaisesRegex(RuntimeError, "unsupported schema version"):
             TaskStore(path)
         conn = sqlite3.connect(path)
         try:
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 7)
             self.assertEqual(conn.execute("SELECT value FROM marker").fetchone()[0], "keep")
             self.assertIsNone(conn.execute("SELECT name FROM sqlite_master WHERE name='tasks'").fetchone())
         finally:

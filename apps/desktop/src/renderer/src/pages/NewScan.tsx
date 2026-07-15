@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button, Card, Input, Text } from "@fluentui/react-components";
 import {
   MAX_SOURCE_FILES,
+  DEFAULT_REVIEW_DISPLAY_PREFERENCES,
   SUPPORTED_SOURCE_FORMAT_LABEL,
   SearchTextSchema,
   TaskCreateParamsSchema,
+  type ReviewDisplayPreferences,
+  type ReviewHighlightSettingsResult,
 } from "@archivelens/ipc-schema";
 import { InlineFeedback, PageHeader } from "../components/feedback";
 import { buildTaskName, sourceBaseName } from "../utils/presentation";
@@ -17,6 +20,20 @@ const SOURCE_OPTIONS: Array<{ id: SourceType; title: string; detail: string }> =
   { id: "single", title: "单个文件", detail: `只扫描一个指定的 ${SUPPORTED_SOURCE_FORMAT_LABEL} 文件。` },
   { id: "multiple", title: "多个文件", detail: `将 1–${MAX_SOURCE_FILES} 个指定文件放进同一个任务，可跨目录选择。` },
 ];
+
+const QUALITY_LABELS: Record<ReviewDisplayPreferences["page_quality"], string> = {
+  standard: "标准",
+  clear: "清晰",
+  high: "高清",
+  maximum: "最清晰",
+};
+
+const DIRECTION_LABELS: Record<ReviewDisplayPreferences["context_direction"], string> = {
+  ltr: "从左到右",
+  rtl: "从右到左",
+  ttb: "从上到下",
+  btt: "从下到上",
+};
 
 function dedupeFiles(paths: string[]): { files: string[]; removed: number } {
   const seen = new Set<string>();
@@ -32,7 +49,8 @@ function dedupeFiles(paths: string[]): { files: string[]; removed: number } {
 export default function NewScan() {
   const nav = useNavigate();
   const location = useLocation();
-  const initial = location.state as { sourceDir?: unknown; sourceFiles?: unknown; sourceKind?: unknown } | null;
+  const initial = location.state as { sourceDir?: unknown; sourceFiles?: unknown; sourceKind?: unknown; sourceTaskId?: unknown } | null;
+  const sourceTaskId = typeof initial?.sourceTaskId === "string" ? initial.sourceTaskId : undefined;
   const initialFiles = Array.isArray(initial?.sourceFiles) && initial.sourceFiles.every((path) => typeof path === "string")
     ? dedupeFiles(initial.sourceFiles).files
     : [];
@@ -44,6 +62,23 @@ export default function NewScan() {
   const [searchText, setSearchText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviewPreferences, setReviewPreferences] = useState<ReviewDisplayPreferences>(DEFAULT_REVIEW_DISPLAY_PREFERENCES);
+  const [preferencesLoading, setPreferencesLoading] = useState(true);
+  const [preferencesError, setPreferencesError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setPreferencesLoading(true);
+    setPreferencesError(null);
+    window.archiveLens.settings.get(sourceTaskId).then((settings: ReviewHighlightSettingsResult) => {
+      if (active) setReviewPreferences(settings.effective_preferences);
+    }).catch((nextError: unknown) => {
+      if (active) setPreferencesError(nextError instanceof Error ? nextError.message : "无法读取校对显示设置");
+    }).finally(() => {
+      if (active) setPreferencesLoading(false);
+    });
+    return () => { active = false; };
+  }, [sourceTaskId]);
   const searchValidation = SearchTextSchema.safeParse(searchText);
   const searchError = searchText && !searchValidation.success
     ? searchValidation.error.issues[0]?.message ?? "检索词无效"
@@ -53,12 +88,16 @@ export default function NewScan() {
     ? (dir || "尚未选择")
     : files.length === 1 ? sourceBaseName(files[0]!) : files.length ? `${files.length} 个已选文件` : "尚未选择";
   const taskInput = sourceType === "folder"
-    ? { source_type: "folder" as const, source_dir: dir, search_text: searchText }
-    : { source_type: "files" as const, source_files: files, search_text: searchText };
+    ? { source_type: "folder" as const, source_dir: dir, search_text: searchText, review_preferences: reviewPreferences }
+    : { source_type: "files" as const, source_files: files, search_text: searchText, review_preferences: reviewPreferences };
   const parsedTask = TaskCreateParamsSchema.safeParse(taskInput);
-  const canStart = parsedTask.success;
+  const canStart = parsedTask.success && !preferencesLoading && !preferencesError;
   const disabledReason = busy
     ? "正在创建任务，请稍候"
+    : preferencesLoading
+      ? "正在读取校对显示与上下文设置"
+      : preferencesError
+        ? `设置读取失败：${preferencesError}`
     : sourceType === "folder" && !dir
       ? `请先选择包含 ${SUPPORTED_SOURCE_FORMAT_LABEL} 的文件夹`
       : isFileSource && files.length === 0
@@ -149,7 +188,7 @@ export default function NewScan() {
           <Card className="al-card"><Text weight="semibold">步骤 3：设置检索词</Text><div className="al-search-input-wrap"><Input value={searchText} onChange={(_, data) => { setSearchText(data.value); setError(null); }} placeholder="输入 1～32 个文字，按 OCR 结果进行精确匹配" aria-label="检索文字或词语" /><span>{Array.from(searchText).length}/32</span></div><Text className="al-muted">支持 1–32 个 Unicode 字符。精确匹配、区分大小写；不支持正则、通配符或跨 OCR 行匹配。</Text>{searchError && <InlineFeedback>{searchError}</InlineFeedback>}</Card>
           {error && <InlineFeedback>创建任务失败：{error}</InlineFeedback>}
         </section>
-        <aside className="al-new-scan-aside"><Card className="al-card"><Text weight="semibold">扫描摘要</Text><div className="al-config-summary"><span>来源方式<strong>{SOURCE_OPTIONS.find((option) => option.id === sourceType)?.title}</strong></span><span>扫描范围<strong title={sourceType === "folder" ? dir : undefined}>{sourceLabel}</strong></span>{isFileSource && <span>文件数量<strong>{files.length}/{MAX_SOURCE_FILES}</strong></span>}<span>检索词<strong>{searchText || "尚未输入"}</strong></span><span>匹配方式<strong>精确字面匹配</strong></span></div></Card><Card className="al-card al-local-card"><Text weight="semibold">本地处理</Text><Text className="al-muted">扫描文件、OCR 结果、校对备注和导出报告都将保存到本地任务工作区。</Text></Card></aside>
+        <aside className="al-new-scan-aside"><Card className="al-card"><Text weight="semibold">扫描摘要</Text><div className="al-config-summary"><span>来源方式<strong>{SOURCE_OPTIONS.find((option) => option.id === sourceType)?.title}</strong></span><span>扫描范围<strong title={sourceType === "folder" ? dir : undefined}>{sourceLabel}</strong></span>{isFileSource && <span>文件数量<strong>{files.length}/{MAX_SOURCE_FILES}</strong></span>}<span>检索词<strong>{searchText || "尚未输入"}</strong></span><span>匹配方式<strong>精确字面匹配</strong></span><span>命中页清晰度<strong>{QUALITY_LABELS[reviewPreferences.page_quality]}</strong></span><span>上下文<strong>{DIRECTION_LABELS[reviewPreferences.context_direction]} · 每侧 {reviewPreferences.context_radius} 字</strong></span></div><Text className="al-muted">以上校对配置来自“设置”，创建任务后固化。</Text></Card><Card className="al-card al-local-card"><Text weight="semibold">本地处理</Text><Text className="al-muted">扫描文件、OCR 结果、校对备注和导出报告都将保存到本地任务工作区。</Text></Card></aside>
       </div>
       <div className="al-new-scan-footer"><div>{!canStart && <Text id="scan-disabled-reason" className="al-muted">{disabledReason}</Text>}</div><Button appearance="primary" size="large" onClick={() => void start()} disabled={busy || !canStart} aria-describedby={!canStart ? "scan-disabled-reason" : undefined}>{busy ? "正在创建任务…" : "开始扫描"}</Button></div>
     </div>

@@ -1,6 +1,7 @@
 import unittest
 import tempfile
 from pathlib import Path
+from unittest import mock
 from PIL import Image
 
 from archivelens_engine.report_pipeline import DocumentRecord, ReportPipeline, discover_worker_report_paths
@@ -8,6 +9,7 @@ from archivelens_engine.report_pipeline import DocumentRecord, ReportPipeline, d
 from archivelens_engine.ocr_core import (
     assign_occurrence_indexes,
     build_context_fields,
+    build_spatial_context_fields,
     classify_verification_status,
     dedupe_occurrences,
     normalize_bbox,
@@ -54,6 +56,45 @@ class BuildContextFieldsTests(unittest.TestCase):
         self.assertEqual(context["matched_text"], "档案管理")
         self.assertEqual(context["context_before"], "前缀")
         self.assertEqual(context["context_after"], "后缀")
+
+    def test_spatial_context_uses_each_side_radius_and_crosses_horizontal_lines(self) -> None:
+        lines = [
+            {"text": "甲乙", "bbox": (0, 0, 40, 10)},
+            {"text": "丙约丁", "bbox": (0, 20, 60, 30)},
+        ]
+        context = build_spatial_context_fields(lines, 1, 1, 2, direction="ltr", radius=3)
+        self.assertEqual(context["context_before"], "甲乙\n丙")
+        self.assertEqual(context["context_after"], "丁")
+        self.assertEqual(context["context_full"], "甲乙\n丙约丁")
+
+    def test_spatial_context_reverses_horizontal_reading_order(self) -> None:
+        lines = [{"text": "甲乙约丙丁", "bbox": (0, 0, 100, 20)}]
+        context = build_spatial_context_fields(lines, 0, 2, 3, direction="rtl", radius=2)
+        self.assertEqual(context["context_before"], "丁丙")
+        self.assertEqual(context["context_after"], "乙甲")
+        self.assertEqual(context["context_full"], "丁丙约乙甲")
+
+    def test_spatial_context_uses_traditional_vertical_column_order(self) -> None:
+        lines = [
+            {"text": "甲约乙", "bbox": (100, 0, 120, 90)},
+            {"text": "丙丁", "bbox": (50, 0, 70, 60)},
+        ]
+        context = build_spatial_context_fields(lines, 0, 1, 2, direction="ttb", radius=3)
+        self.assertEqual(context["context_before"], "甲")
+        self.assertEqual(context["context_after"], "乙\n丙丁")
+
+    def test_spatial_context_counts_punctuation_but_not_whitespace(self) -> None:
+        lines = [{"text": "甲 空，约 丁", "bbox": (0, 0, 180, 20)}]
+        context = build_spatial_context_fields(lines, 0, 4, 5, direction="ltr", radius=2)
+        self.assertEqual(context["context_before"], "空，")
+        self.assertEqual(context["context_after"], "丁")
+
+    def test_spatial_context_validates_direction_and_radius(self) -> None:
+        lines = [{"text": "甲约乙", "bbox": (0, 0, 60, 20)}]
+        with self.assertRaisesRegex(ValueError, "direction"):
+            build_spatial_context_fields(lines, 0, 1, 2, direction="diagonal", radius=15)
+        with self.assertRaisesRegex(ValueError, "radius"):
+            build_spatial_context_fields(lines, 0, 1, 2, direction="ltr", radius=51)
 
 
 class UnionBboxesTests(unittest.TestCase):
@@ -279,6 +320,39 @@ class ReportPipelineLiteralMatchTests(unittest.TestCase):
             self.assertEqual(occurrences[0]["source_x0"], 0.0)
             self.assertEqual(occurrences[0]["source_x1"], 80.0)
             self.assertIsNone(occurrences[0]["matched_character"])
+
+    def test_maximum_review_quality_rerenders_pdf_at_300_dpi(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"
+            root.mkdir()
+            ocr_render = Path(tmp) / "ocr.png"
+            review_render = Path(tmp) / "review.png"
+            Image.new("RGB", (100, 100), color="white").save(ocr_render)
+            Image.new("RGB", (400, 500), color="white").save(review_render)
+            pipeline = ReportPipeline(
+                root_dir=root,
+                output_html=root / "out.html",
+                workspace_dir=Path(tmp) / "work",
+                review_image_quality="maximum",
+            )
+            pipeline.backend_registry.render_page = mock.Mock(return_value=review_render)  # type: ignore[method-assign]
+            document = DocumentRecord(
+                document_id="doc-quality",
+                file_path=root / "sample.pdf",
+                relative_path="sample.pdf",
+                file_type="PDF",
+                file_size_bytes=1,
+                file_hash_sha256="abc",
+                modified_time=0.0,
+                page_count=1,
+            )
+            try:
+                output, width, height = pipeline._create_review_page_image(document, 0, ocr_render, "page-quality")
+                self.assertTrue(output.exists())
+                self.assertEqual((width, height), (400, 500))
+                pipeline.backend_registry.render_page.assert_called_once_with(document.file_path, 0, 300)
+            finally:
+                pipeline.close()
 
 
 class PageRangeCheckpointTests(unittest.TestCase):

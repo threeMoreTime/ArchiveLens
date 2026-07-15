@@ -39,7 +39,7 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
     const result = await sidecar.call<{ task_id: string; deleted: true }>("tasks.delete", params);
     unregisterResourceRoot(result.task_id);
     await getSettingsStore().removeTaskOverride(result.task_id).catch((error) => {
-      logger.warn(`清理任务高亮设置失败：${(error as Error).message}`);
+      logger.warn(`清理任务校对设置失败：${(error as Error).message}`);
     });
     return result;
   });

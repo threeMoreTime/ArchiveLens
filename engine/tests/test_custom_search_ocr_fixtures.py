@@ -155,7 +155,8 @@ class CustomSearchFixtureTests(unittest.TestCase):
                         html_content = html_export.read_text(encoding="utf-8")
                         self.assertIn(f"检索词：{html.escape(case['search_text'], quote=True)}", html_content)
                         if items:
-                            self.assertIn("fixture A&amp;B &lt;safe&gt;", html_content)
+                            self.assertIn("fixture A\\u0026B \\u003csafe\\u003e", html_content)
+                            self.assertNotIn("fixture A&B <safe>", html_content)
                         self.assertNotIn("http://", html_content)
                         self.assertNotIn("https://", html_content)
                 self.assertGreater(bbox_widths["custom-multi"], bbox_widths["custom-single"] * 2)

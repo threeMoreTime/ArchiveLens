@@ -118,6 +118,17 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     await expect.poll(async () => page.evaluate(async (id) => {
       return (await (window as any).archiveLens.tasks.get(id)).status;
     }, taskId), { timeout: 60_000 }).toBe("completed");
+    const scanEvidence = await page.evaluate(async (id) => {
+      const task = await (window as any).archiveLens.tasks.get(id);
+      const results = await (window as any).archiveLens.results.query({ task_id: id, limit: 1 });
+      return { preferences: task.review_preferences, occurrence: results.items[0] };
+    }, taskId);
+    expect(scanEvidence.preferences).toEqual({
+      page_quality: "maximum",
+      context_direction: "ltr",
+      context_radius: 15,
+    });
+    expect(scanEvidence.occurrence.page_image_width).toBeGreaterThan(scanEvidence.occurrence.source_page_width);
 
     await page.getByRole("button", { name: "进入校对工作台" }).click();
     await expect(page.getByText("档案", { exact: true }).first()).toBeVisible();
@@ -155,6 +166,52 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
       bodyWidth: document.documentElement.scrollWidth,
     }));
     expect(dimensions.bodyWidth).toBeLessThanOrEqual(dimensions.viewportWidth + 1);
+    const workbenchLayout = await page.evaluate(() => {
+      const main = document.querySelector<HTMLElement>(".al-main");
+      const review = document.querySelector<HTMLElement>(".al-review");
+      const resultList = document.querySelector<HTMLElement>(".al-result-list");
+      const detail = document.querySelector<HTMLElement>(".al-detail");
+      const aside = document.querySelector<HTMLElement>(".al-review-aside");
+      return {
+        documentHeight: document.documentElement.scrollHeight,
+        viewportHeight: window.innerHeight,
+        mainOverflowY: main ? getComputedStyle(main).overflowY : "missing",
+        reviewHeight: review?.getBoundingClientRect().height ?? 0,
+        resultOverflowY: resultList ? getComputedStyle(resultList).overflowY : "missing",
+        detailOverflowY: detail ? getComputedStyle(detail).overflowY : "missing",
+        asideOverflowY: aside ? getComputedStyle(aside).overflowY : "missing",
+        asideWidth: aside?.getBoundingClientRect().width ?? 0,
+      };
+    });
+    expect(workbenchLayout.documentHeight).toBeLessThanOrEqual(workbenchLayout.viewportHeight + 1);
+    expect(workbenchLayout.reviewHeight).toBeLessThanOrEqual(workbenchLayout.viewportHeight + 1);
+    expect(workbenchLayout.mainOverflowY).toBe("hidden");
+    expect(workbenchLayout.resultOverflowY).toBe("hidden");
+    expect(workbenchLayout.detailOverflowY).toBe("hidden");
+    expect(workbenchLayout.asideOverflowY).toBe("hidden");
+
+    await page.getByRole("button", { name: "收起校对摘要" }).click();
+    await expect(page.getByRole("button", { name: "展开校对摘要" })).toBeVisible();
+    await expect.poll(() => page.locator(".al-review-aside").evaluate((element) => element.getBoundingClientRect().width)).toBeLessThan(80);
+    expect(await page.evaluate(() => localStorage.getItem("archivelens.reviewSummaryCollapsed"))).toBe("true");
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1080, 680));
+    await expect(page.getByRole("button", { name: "立即保存 (Ctrl+Enter)" })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)).toBeLessThanOrEqual(1);
+    await expect(page.locator(".al-page-wrap")).toBeVisible();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 820));
+    await page.getByRole("button", { name: "展开校对摘要" }).click();
+    await expect(page.getByRole("button", { name: "收起校对摘要" })).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem("archivelens.reviewSummaryCollapsed"))).toBe("false");
+
+    const zoomBefore = await page.locator(".al-page-canvas").boundingBox();
+    await page.getByRole("button", { name: "放大页面" }).click();
+    const zoomAfter = await page.locator(".al-page-canvas").boundingBox();
+    expect(zoomBefore).not.toBeNull();
+    expect(zoomAfter).not.toBeNull();
+    expect(zoomAfter!.width).toBeGreaterThan(zoomBefore!.width);
+    const zoomedViewport = await page.evaluate(() => ({ height: window.innerHeight, documentHeight: document.documentElement.scrollHeight }));
+    expect(zoomedViewport.documentHeight).toBeLessThanOrEqual(zoomedViewport.height + 1);
+    await page.getByRole("button", { name: "适应窗口" }).click();
 
     const occurrenceId = await page.evaluate(async (id) => {
       const result = await (window as any).archiveLens.results.query({ task_id: id, limit: 10 });
@@ -208,13 +265,20 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
         .flatMap((element) => [element.getAttribute("src"), element.getAttribute("href")])
         .filter((value): value is string => Boolean(value && /^https?:/i.test(value))),
       imagesLoaded: [...document.images].every((image) => image.complete && image.naturalWidth > 0),
+      pageCards: document.querySelectorAll(".page-card").length,
+      overlays: document.querySelectorAll(".hit-overlay-svg rect").length,
+      controls: ["file-filter", "status-filter", "report-search", "sort-order", "page-size", "print-report"]
+        .every((id) => Boolean(document.getElementById(id))),
     }));
     expect(offlineReport.text).toContain("检索词：档案");
     expect(offlineReport.text).toContain("A&B <script>alert(1)</script> <img src=x onerror=alert(1)>");
-    expect(offlineReport.scriptCount).toBe(0);
+    expect(offlineReport.scriptCount).toBe(1);
     expect(offlineReport.eventHandlerCount).toBe(0);
     expect(offlineReport.externalReferences).toEqual([]);
     expect(offlineReport.imagesLoaded).toBe(true);
+    expect(offlineReport.pageCards).toBeGreaterThan(0);
+    expect(offlineReport.overlays).toBeGreaterThan(0);
+    expect(offlineReport.controls).toBe(true);
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
     expect(externalRequests).toEqual([]);

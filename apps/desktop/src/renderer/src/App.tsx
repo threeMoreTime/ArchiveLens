@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ClipboardTaskListLtrRegular, DocumentAddRegular, EditRegular, HomeRegular, SettingsRegular, ShareRegular } from "@fluentui/react-icons";
 import type { TaskSummary } from "../../preload/api";
@@ -27,6 +27,7 @@ function taskIdFromPath(pathname: string): string | null {
 export default function App() {
   const nav = useNavigate();
   const location = useLocation();
+  const mainRef = useRef<HTMLElement>(null);
   const [recoverable, setRecoverable] = useState<unknown[]>([]);
   const [latestTask, setLatestTask] = useState<TaskSummary | null>(null);
   const [rememberedTaskId, setRememberedTaskId] = useState<string | null>(() => localStorage.getItem(CURRENT_TASK_STORAGE_KEY));
@@ -99,6 +100,13 @@ export default function App() {
   const sidebarTask = activeTask ?? (latestTask?.task_id === currentTaskId ? latestTask : null);
   const exportPath = currentTaskId ? `/export/${currentTaskId}` : "/export";
 
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    main.scrollTop = 0;
+    main.scrollLeft = 0;
+  }, [location.pathname]);
+
   return (
     <div className="al-app">
       <aside className="al-sidebar">
@@ -128,7 +136,7 @@ export default function App() {
           <NavLink to="/settings" className={({ isActive }) => "al-navlink al-settings-navlink" + (isActive || location.pathname === "/diagnostics" ? " active" : "")}><SettingsRegular /> 设置</NavLink>
         </div>
       </aside>
-      <main className="al-main">
+      <main ref={mainRef} className={"al-main" + (location.pathname.startsWith("/review/") ? " al-main-review" : "")}>
         <Routes>
           <Route path="/" element={<Welcome />} />
           <Route path="/scan/new" element={<NewScan />} />

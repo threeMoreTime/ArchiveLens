@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   AppSettingsFileSchema,
+  DEFAULT_REVIEW_DISPLAY_PREFERENCES,
   DEFAULT_REVIEW_HIGHLIGHT_STYLE,
   ReviewHighlightSettingsGetParamsSchema,
   ReviewHighlightSettingsResultSchema,
@@ -34,12 +35,34 @@ export class SettingsStore {
     const parsed = ReviewHighlightSettingsUpdateParamsSchema.parse(params);
     return this.enqueue(async () => {
       const settings = await this.load();
-      if (parsed.scope === "global") {
-        settings.appearance.review_highlight = parsed.highlight;
-      } else if (parsed.highlight === null) {
-        delete settings.task_overrides[parsed.task_id];
+      if ("highlight" in parsed) {
+        if (parsed.scope === "global") {
+          settings.appearance.review_highlight = parsed.highlight;
+        } else if (parsed.highlight === null) {
+          const override = settings.task_overrides[parsed.task_id];
+          if (override) {
+            delete override.review_highlight;
+            this.removeEmptyOverride(settings, parsed.task_id);
+          }
+        } else {
+          settings.task_overrides[parsed.task_id] = {
+            ...settings.task_overrides[parsed.task_id],
+            review_highlight: parsed.highlight,
+          };
+        }
+      } else if (parsed.scope === "global") {
+        settings.appearance.review_preferences = parsed.preferences;
+      } else if (parsed.preferences === null) {
+        const override = settings.task_overrides[parsed.task_id];
+        if (override) {
+          delete override.review_preferences;
+          this.removeEmptyOverride(settings, parsed.task_id);
+        }
       } else {
-        settings.task_overrides[parsed.task_id] = { review_highlight: parsed.highlight };
+        settings.task_overrides[parsed.task_id] = {
+          ...settings.task_overrides[parsed.task_id],
+          review_preferences: parsed.preferences,
+        };
       }
       await this.save(settings);
       return this.resolve(settings, parsed.task_id);
@@ -76,15 +99,27 @@ export class SettingsStore {
 
   private resolve(settings: AppSettingsFile, taskId?: string): ReviewHighlightSettingsResult {
     const parsedParams = ReviewHighlightSettingsGetParamsSchema.parse(taskId ? { task_id: taskId } : {});
-    const taskOverride = parsedParams.task_id
-      ? settings.task_overrides[parsedParams.task_id]?.review_highlight ?? null
-      : null;
+    const override = parsedParams.task_id ? settings.task_overrides[parsedParams.task_id] : undefined;
+    const taskOverride = override?.review_highlight ?? null;
+    const taskPreferencesOverride = override?.review_preferences ?? null;
     return ReviewHighlightSettingsResultSchema.parse({
       global: settings.appearance.review_highlight ?? DEFAULT_REVIEW_HIGHLIGHT_STYLE,
       task_override: taskOverride,
       effective: taskOverride ?? settings.appearance.review_highlight ?? DEFAULT_REVIEW_HIGHLIGHT_STYLE,
-      scope: taskOverride ? "task" : "global",
+      global_preferences: settings.appearance.review_preferences ?? DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      task_preferences_override: taskPreferencesOverride,
+      effective_preferences: taskPreferencesOverride
+        ?? settings.appearance.review_preferences
+        ?? DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      scope: taskOverride || taskPreferencesOverride ? "task" : "global",
     });
+  }
+
+  private removeEmptyOverride(settings: AppSettingsFile, taskId: string): void {
+    const override = settings.task_overrides[taskId];
+    if (override && !override.review_highlight && !override.review_preferences) {
+      delete settings.task_overrides[taskId];
+    }
   }
 
   private async save(settings: AppSettingsFile): Promise<void> {

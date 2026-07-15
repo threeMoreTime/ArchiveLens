@@ -114,6 +114,128 @@ def build_context_fields(
     return result
 
 
+def build_spatial_context_fields(
+    lines: list[dict],
+    target_line_index: int,
+    match_start: int,
+    match_end: int,
+    *,
+    direction: str = "ltr",
+    radius: int = 15,
+) -> dict[str, str | int]:
+    """按页面阅读方向构建以关键词为中心的上下文。
+
+    ``radius`` 表示关键词前后各自最多保留的可见字符数。空白字符不计数，
+    标点、字母、数字和汉字均计数。跨行/跨列时按配置的阅读顺序继续取字。
+    """
+    if direction not in {"ltr", "rtl", "ttb", "btt"}:
+        raise ValueError("invalid context reading direction")
+    if type(radius) is not int or not 1 <= radius <= 50:
+        raise ValueError("context radius must be between 1 and 50")
+    if target_line_index < 0 or target_line_index >= len(lines):
+        raise ValueError("invalid target line index")
+    target_text = str(lines[target_line_index].get("text") or "")
+    if match_start < 0 or match_end <= match_start or match_end > len(target_text):
+        raise ValueError("invalid match range")
+
+    ordered_tokens: list[dict] = []
+    ordered_lines = sorted(
+        enumerate(lines),
+        key=lambda item: _context_line_sort_key(item[1].get("bbox"), direction),
+    )
+    for ordered_line_index, (line_index, line) in enumerate(ordered_lines):
+        text = str(line.get("text") or "")
+        bbox = line.get("bbox")
+        if not text or not isinstance(bbox, (tuple, list)) or len(bbox) != 4:
+            continue
+        char_boxes = split_line_bbox(text, tuple(float(value) for value in bbox))
+        line_tokens = [
+            {
+                "value": value,
+                "line_index": line_index,
+                "char_index": char_index,
+                "bbox": char_boxes[char_index],
+            }
+            for char_index, value in enumerate(text)
+        ]
+        line_tokens.sort(key=lambda token: _context_character_sort_key(token["bbox"], direction))
+        if ordered_tokens and ordered_line_index > 0:
+            ordered_tokens.append({"value": "\n", "line_index": -1, "char_index": -1, "bbox": None})
+        ordered_tokens.extend(line_tokens)
+
+    target_positions = [
+        index
+        for index, token in enumerate(ordered_tokens)
+        if token["line_index"] == target_line_index and match_start <= token["char_index"] < match_end
+    ]
+    if not target_positions:
+        raise ValueError("matched text is missing from ordered OCR tokens")
+    first_match = min(target_positions)
+    last_match = max(target_positions)
+    before = _take_context_tokens(ordered_tokens[:first_match], radius, from_end=True)
+    after = _take_context_tokens(ordered_tokens[last_match + 1 :], radius, from_end=False)
+    matched_text = target_text[match_start:match_end]
+    result: dict[str, str | int] = {
+        "context_before": before,
+        "matched_text": matched_text,
+        "match_start": match_start,
+        "match_end": match_end,
+        "context_after": after,
+        "context_full": f"{before}{matched_text}{after}",
+        "text_line": target_text,
+        "text_block": f"{before}{matched_text}{after}",
+    }
+    if len(matched_text) == 1:
+        result["matched_character"] = matched_text
+    return result
+
+
+def _context_line_sort_key(raw_bbox: object, direction: str) -> tuple[float, float]:
+    if not isinstance(raw_bbox, (tuple, list)) or len(raw_bbox) != 4:
+        return (float("inf"), float("inf"))
+    x0, y0, x1, y1 = (float(value) for value in raw_bbox)
+    center_x = (x0 + x1) / 2
+    center_y = (y0 + y1) / 2
+    if direction == "ltr":
+        return (center_y, center_x)
+    if direction == "rtl":
+        return (center_y, -center_x)
+    if direction == "ttb":
+        return (-center_x, center_y)
+    return (center_x, -center_y)
+
+
+def _context_character_sort_key(
+    bbox: tuple[float, float, float, float],
+    direction: str,
+) -> tuple[float, float]:
+    x0, y0, x1, y1 = bbox
+    center_x = (x0 + x1) / 2
+    center_y = (y0 + y1) / 2
+    if direction == "ltr":
+        return (center_x, center_y)
+    if direction == "rtl":
+        return (-center_x, center_y)
+    if direction == "ttb":
+        return (center_y, -center_x)
+    return (-center_y, center_x)
+
+
+def _take_context_tokens(tokens: list[dict], radius: int, *, from_end: bool) -> str:
+    iterable = reversed(tokens) if from_end else iter(tokens)
+    selected: list[dict] = []
+    visible_count = 0
+    for token in iterable:
+        selected.append(token)
+        if not str(token["value"]).isspace():
+            visible_count += 1
+            if visible_count >= radius:
+                break
+    if from_end:
+        selected.reverse()
+    return "".join(str(token["value"]) for token in selected).strip()
+
+
 def dedupe_occurrences(items: Iterable[dict]) -> list[dict]:
     deduped: list[dict] = []
     for item in items:

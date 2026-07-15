@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import html
 import hashlib
 import json
 import os
@@ -32,6 +31,7 @@ from .documents.formats import (
     SUPPORTED_SOURCE_SUFFIXES,
     count_key,
 )
+from .html_export import write_offline_review_report
 from .ocr_core import build_bbox_hash
 from .protocol import (
     ErrorCode,
@@ -50,6 +50,13 @@ Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
 SLOWFAKE_SOURCE_ID = "source-main"
 MAX_SOURCE_FILES = 200
 RASTER_IMAGE_BACKEND = RasterImageBackend()
+REVIEW_IMAGE_QUALITIES = {"standard", "clear", "high", "maximum"}
+CONTEXT_READING_DIRECTIONS = {"ltr", "rtl", "ttb", "btt"}
+DEFAULT_REVIEW_PREFERENCES = {
+    "page_quality": "maximum",
+    "context_direction": "ltr",
+    "context_radius": 15,
+}
 
 
 def _write_protocol_line(line: str) -> None:
@@ -518,6 +525,9 @@ class Server:
                 workspace_dir=scan_workspace,
                 config=self.config,
                 search_terms=task["search_terms"],
+                review_image_quality=task["review_preferences"]["page_quality"],
+                context_direction=task["review_preferences"]["context_direction"],
+                context_radius=task["review_preferences"]["context_radius"],
                 source_files=self.store.list_task_sources(task_id) if task.get("source_kind") == "files" else None,
                 resume_state_by_source=self.store.list_task_resume_states(task_id),
                 task_control=tc,
@@ -756,6 +766,20 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         search_text = normalize_search_text(_require(params, "search_text", str))
     except ValueError as exc:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+    raw_preferences = params.get("review_preferences", DEFAULT_REVIEW_PREFERENCES)
+    if not isinstance(raw_preferences, dict):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "review_preferences 必须是对象")
+    review_preferences = {
+        "page_quality": raw_preferences.get("page_quality", DEFAULT_REVIEW_PREFERENCES["page_quality"]),
+        "context_direction": raw_preferences.get("context_direction", DEFAULT_REVIEW_PREFERENCES["context_direction"]),
+        "context_radius": raw_preferences.get("context_radius", DEFAULT_REVIEW_PREFERENCES["context_radius"]),
+    }
+    if review_preferences["page_quality"] not in REVIEW_IMAGE_QUALITIES:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "page_quality 仅支持 standard、clear、high 或 maximum")
+    if review_preferences["context_direction"] not in CONTEXT_READING_DIRECTIONS:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "context_direction 仅支持 ltr、rtl、ttb 或 btt")
+    if type(review_preferences["context_radius"]) is not int or not 1 <= review_preferences["context_radius"] <= 50:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "context_radius 必须是 1 到 50 的整数")
     source_type = params.get("source_type") or ("files" if "source_files" in params else "folder")
     if source_type not in {"folder", "files"}:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "source_type 仅支持 folder 或 files")
@@ -817,6 +841,7 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         "search_text": search_text,
         "search_terms": [search_text],
         "search_mode": EXACT_LITERAL_SEARCH_MODE,
+        "review_preferences": review_preferences,
     }
     if source_files is not None:
         payload["source_files"] = [source["file_path"] for source in source_files]
@@ -832,6 +857,9 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         status="draft",
         search_terms=[search_text],
         search_mode=EXACT_LITERAL_SEARCH_MODE,
+        review_image_quality=review_preferences["page_quality"],
+        context_direction=review_preferences["context_direction"],
+        context_radius=review_preferences["context_radius"],
         event_type="task.created",
         event_payload=payload,
     )
@@ -1213,48 +1241,37 @@ def _h_export_html(server: Server, params: dict) -> dict:
     task = server.store.get_task(task_id)
     if task is None:
         raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
-    total, items = server.store.query_occurrences(task_id=task_id, limit=10**9, offset=0)
-    integrity = _export_integrity(server, task, total)
-    def escaped(value: Any) -> str:
-        return html.escape(str(value or ""), quote=True)
-
-    rows = "".join(
-        f"<tr><td>{i + 1}</td><td>{escaped(r.get('file_name'))}</td><td>{escaped(r.get('page_number'))}</td>"
-        f"<td>{escaped(r.get('matched_text') or r.get('matched_character'))}</td><td>{escaped(r.get('context_full'))}</td>"
-        f"<td>{escaped(r.get('review_decision') or r.get('verification_status'))}</td>"
-        f"<td>{escaped(r.get('review_note'))}</td></tr>"
-        for i, r in enumerate(items)
-    )
-    search_text = escaped(task.get("search_text"))
-    if not integrity["scan_complete"]:
-        integrity_banner = "<aside class='warning'>此报告是扫描未完成时的阶段性快照，结果仍可能增加。</aside>"
-    elif not integrity["review_complete"]:
-        integrity_banner = (
-            f"<aside class='warning'>此报告包含未完成校对的结果：尚有 "
-            f"{integrity['unreviewed_count']} 条未校对。</aside>"
-        )
-    else:
-        integrity_banner = "<aside class='complete'>扫描和校对均已完成，报告结果已完整核验。</aside>"
-    html_document = (
-        "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
-        f"<title>ArchiveLens 报告 — {search_text}</title>"
-        "<style>body{font-family:'Microsoft YaHei',sans-serif;padding:24px}"
-        "table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px 8px;font-size:13px}"
-        "aside{padding:10px 12px;margin:12px 0}.warning{background:#fff4ce;border-left:4px solid #d38b00}.complete{background:#e7f5e9;border-left:4px solid #2b8a3e}</style>"
-        "</head><body>"
-        f"<h1>ArchiveLens 检索报告</h1>"
-        f"<p>检索词：{search_text}</p>"
-        f"<p>任务：{escaped(task.get('name'))} · 命中：{total}</p>{integrity_banner}"
-        f"<p>已校对：{integrity['reviewed_count']} · 未校对：{integrity['unreviewed_count']} · "
-        f"扫描完成：{str(integrity['scan_complete']).lower()} · 校对完成：{str(integrity['review_complete']).lower()} · "
-        f"导出完整：true</p>"
-        f"<table><thead><tr><th>#</th><th>文件</th><th>页</th><th>匹配词</th><th>上下文</th><th>校对</th><th>备注</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table></body></html>"
-    )
     out = _export_dir(server, task_id) / f"{task_id}-report.html"
-    out.write_text(html_document, encoding="utf-8")
+    try:
+        with server.store.occurrence_export_snapshot(task_id) as (total, page_count, items):
+            integrity = _export_integrity(server, task, total)
+            exported_at = integrity["exported_at"]
+            workspace_value = task.get("workspace_dir")
+            server.emit_event("export.progress", task_id, {"stage": "preparing", "completed": 0, "total": total})
+
+            def report_progress(stage: str, completed: int, progress_total: int) -> None:
+                server.emit_event(
+                    "export.progress",
+                    task_id,
+                    {"stage": stage, "completed": completed, "total": progress_total},
+                )
+
+            result = write_offline_review_report(
+                output_path=out,
+                task=task,
+                items=items,
+                integrity=integrity,
+                workspace_dir=Path(workspace_value) if workspace_value else None,
+                exported_at=exported_at,
+                expected_page_count=page_count,
+                progress=report_progress,
+            )
+    except Exception:
+        server.emit_event("export.progress", task_id, {"stage": "failed", "completed": 0, "total": 0})
+        raise
     server.store.add_export(task_id=task_id, kind="html", path=str(out))
-    return {"path": str(out), "occurrence_count": total}
+    server.emit_event("export.progress", task_id, {"stage": "completed", "completed": total, "total": total})
+    return {"path": str(out), "occurrence_count": total, "file_size_bytes": result["file_size_bytes"]}
 
 
 def run_server(config: EngineConfig | None = None, workspace_root: str | Path | None = None) -> None:
