@@ -1,23 +1,22 @@
 import { app, BrowserWindow, Menu, nativeImage, shell, Tray } from "electron";
+import { resolveTrayIconPath } from "./appIcon";
 import { logger } from "./logging/logger";
 
 /**
  * 系统托盘（任务 §六）。
  *
  * 单例：只创建一次；窗口隐藏后保持；点击恢复并聚焦；退出时安全销毁。
- * 使用内嵌 PNG 生成可见图标，避免依赖未随包的本机资源文件。
+ * 开发环境读取品牌资源，打包后读取 extraResources 中的托盘图标。
  */
 
 let tray: Tray | null = null;
 let trayWindowGetter: (() => BrowserWindow | null) | null = null;
 
-const TRAY_ICON_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAQklEQVR42mMw9M77P5CYYdQBow7AJfHl/XOq4lEHjDpgaDuA3Cw2GgWjDhhNhKMOGE2Eo1Ew6oCh7YDRfsGoA+iFAZd8jtc0U6yAAAAAAElFTkSuQmCC";
-
 function createTrayIcon() {
-  const icon = nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_PNG_BASE64, "base64"));
+  const iconPath = resolveTrayIconPath();
+  const icon = nativeImage.createFromPath(iconPath);
   if (icon.isEmpty()) {
-    throw new Error("无法创建 ArchiveLens 托盘图标");
+    throw new Error(`无法创建 ArchiveLens 托盘图标：${iconPath}`);
   }
   return icon.resize({ width: 16, height: 16 });
 }

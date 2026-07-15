@@ -1,5 +1,6 @@
 import { BrowserWindow, shell } from "electron";
 import { join } from "node:path";
+import { resolveApplicationIconPath } from "../appIcon";
 import { logger } from "../logging/logger";
 
 const DEV_SERVER_URL = process.env["ELECTRON_RENDERER_URL"] ?? "";
@@ -23,6 +24,7 @@ export async function createMainWindow(): Promise<BrowserWindow> {
     autoHideMenuBar: true,
     backgroundColor: "#f4efe7",
     title: "ArchiveLens",
+    icon: resolveApplicationIconPath(),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       nodeIntegration: false,

@@ -11,6 +11,7 @@ import TaskCenter from "./pages/TaskCenter";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import SettingsPage from "./pages/SettingsPage";
 import { taskDisplayName, taskStatusView } from "./utils/presentation";
+import brandIconUrl from "../../../resources/icon-64.png";
 
 const CURRENT_TASK_STORAGE_KEY = "archivelens.currentTaskId";
 
@@ -110,7 +111,7 @@ export default function App() {
   return (
     <div className="al-app">
       <aside className="al-sidebar">
-        <div className="al-brand"><span className="al-brand-mark">◆</span> ArchiveLens</div>
+        <div className="al-brand"><img className="al-brand-icon" src={brandIconUrl} alt="" aria-hidden="true" /> ArchiveLens</div>
         <nav>
           <NavLink to="/" className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}>
             <HomeRegular /> 首页
