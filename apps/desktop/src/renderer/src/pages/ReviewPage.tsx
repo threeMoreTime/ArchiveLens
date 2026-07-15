@@ -24,6 +24,7 @@ import {
 } from "@shared/index";
 import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
 import { highlightBackground } from "../components/ReviewHighlightSettings";
+import { getReviewShortcutAction } from "../utils/reviewShortcuts";
 
 const DEFAULT_PAGE_SIZE = 100;
 const PAGE_SIZES = [50, 100, 200] as const;
@@ -549,14 +550,16 @@ export default function ReviewPage() {
         }
         return;
       }
-      const key = event.key.toLowerCase();
-      if (key === "a") void applyDecision("confirmed");
-      else if (key === "s") void applyDecision("needs_review");
-      else if (key === "d") void applyDecision("rejected");
-      else if (key === "j" || event.key === "ArrowDown") void goNext();
-      else if (key === "k" || event.key === "ArrowUp") void goPrev();
-      else if (key === "n") void goNext(true);
-      else if (key === "f") setOffset({ x: 0, y: 0 });
+      const action = getReviewShortcutAction(event);
+      if (!action) return;
+      event.preventDefault();
+      if (action === "confirm") void applyDecision("confirmed");
+      else if (action === "needs_review") void applyDecision("needs_review");
+      else if (action === "reject") void applyDecision("rejected");
+      else if (action === "next") void goNext();
+      else if (action === "previous") void goPrev();
+      else if (action === "next_pending") void goNext(true);
+      else if (action === "reset_view") setOffset({ x: 0, y: 0 });
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
