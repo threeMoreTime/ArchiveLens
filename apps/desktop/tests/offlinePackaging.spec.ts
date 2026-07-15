@@ -39,6 +39,8 @@ describe("完整离线安装包", () => {
     expect(prepare).toContain("Resolve-CurlExecutable");
     expect(prepare).toContain('"--proto-redir", "=https"');
     expect(prepare).toContain('Move-Item -LiteralPath $partial -Destination $target -Force');
+    expect(prepare).toContain('$djvusedExit = $LASTEXITCODE');
+    expect(prepare).toContain('[int]::TryParse($pageCountText, [ref]$pageCount)');
     expect(prepare).not.toContain("Invoke-WebRequest");
     expect(prepare).not.toContain("Start-Process");
   });

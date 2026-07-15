@@ -181,8 +181,15 @@ try {
     Copy-Item -LiteralPath $source -Destination $djvuOut
   }
   $sampleDjvu = Join-Path $djvuStage "doc/lizard2002.djvu"
-  $pageCount = (& (Join-Path $djvuOut "djvused.exe") -e n $sampleDjvu 2>&1 | Select-Object -First 1)
-  if ($LASTEXITCODE -ne 0 -or [int]$pageCount -lt 1) { throw "Bundled djvused validation failed: $pageCount" }
+  $djvusedOutput = & (Join-Path $djvuOut "djvused.exe") -e n $sampleDjvu 2>&1
+  $djvusedExit = $LASTEXITCODE
+  $pageCountText = @($djvusedOutput) | ForEach-Object { "$($_)".Trim() } | Where-Object { $_ -match "^[0-9]+$" } | Select-Object -First 1
+  $pageCount = 0
+  $pageCountValid = $pageCountText -and [int]::TryParse($pageCountText, [ref]$pageCount) -and $pageCount -ge 1
+  if ($djvusedExit -ne 0 -or -not $pageCountValid) {
+    $outputSummary = (@($djvusedOutput) | ForEach-Object { "$($_)".Trim() } | Where-Object { $_ }) -join " | "
+    throw "Bundled djvused validation failed: exit=$djvusedExit output=$outputSummary"
+  }
   $renderProbe = Join-Path $stageRoot "djvu-render-probe.ppm"
   & (Join-Path $djvuOut "ddjvu.exe") -format=ppm -page=1 $sampleDjvu $renderProbe 2>&1 | Out-Null
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $renderProbe)) { throw "Bundled ddjvu validation failed" }
