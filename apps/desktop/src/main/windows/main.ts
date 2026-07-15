@@ -1,7 +1,9 @@
 import { BrowserWindow, shell } from "electron";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveApplicationIconPath } from "../appIcon";
 import { logger } from "../logging/logger";
+import { isAllowedAppNavigation } from "../security/navigation";
 
 const DEV_SERVER_URL = process.env["ELECTRON_RENDERER_URL"] ?? "";
 
@@ -15,6 +17,7 @@ const DEV_SERVER_URL = process.env["ELECTRON_RENDERER_URL"] ?? "";
  * * 生产禁止 DevTools（除非 ``AL_DEBUG=1``）。
  */
 export async function createMainWindow(): Promise<BrowserWindow> {
+  const rendererEntryUrl = DEV_SERVER_URL || pathToFileURL(join(__dirname, "../renderer/index.html")).toString();
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -51,7 +54,7 @@ export async function createMainWindow(): Promise<BrowserWindow> {
 
   // 拦截导航到非本地 URL。
   win.webContents.on("will-navigate", (event, url) => {
-    if (url.startsWith(DEV_SERVER_URL) || url.startsWith("file://")) {
+    if (isAllowedAppNavigation(url, rendererEntryUrl)) {
       return;
     }
     event.preventDefault();
@@ -64,11 +67,7 @@ export async function createMainWindow(): Promise<BrowserWindow> {
     }
   });
 
-  if (DEV_SERVER_URL) {
-    await win.loadURL(DEV_SERVER_URL);
-  } else {
-    await win.loadFile(join(__dirname, "../renderer/index.html"));
-  }
+  await win.loadURL(rendererEntryUrl);
 
   // 生产环境禁用 DevTools，除非显式 debug。
   if (!process.env["AL_DEBUG"] && !DEV_SERVER_URL) {

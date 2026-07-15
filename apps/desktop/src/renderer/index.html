@@ -4,13 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
-      CSP：默认只允许同源；图片允许 al-resource:（自定义协议）与 data:（base64）；
-      connect-src 仅 'self'，禁止任何公网请求（任务 §三十六）。
-      Phase 6 将在 main 进程按 dev/prod 动态收紧。
+      生产 CSP：默认只允许同源；图片允许 al-resource:（自定义协议）与 data:（base64）。
+      Vite serve 阶段由 electron.vite.config.ts 仅为开发页面追加本机 HMR 连接许可。
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data: blob: al-resource:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; connect-src 'self' ws: http://localhost:*;"
+      content="default-src 'self'; img-src 'self' data: blob: al-resource:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none';"
     />
     <title>ArchiveLens</title>
   </head>

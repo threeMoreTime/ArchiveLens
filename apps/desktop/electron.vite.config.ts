@@ -2,6 +2,17 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 
+const devCspPlugin = {
+  name: "archivelens-dev-csp",
+  apply: "serve" as const,
+  transformIndexHtml(html: string): string {
+    return html.replace(
+      "connect-src 'self';",
+      "connect-src 'self' ws: http://localhost:*;",
+    );
+  },
+};
+
 /**
  * electron-vite 构建：main / preload 编译为 CJS（Electron 主进程要求），
  * renderer 编译为 ESM（浏览器侧）。
@@ -32,7 +43,7 @@ export default defineConfig({
     build: {
       outDir: "out/renderer",
     },
-    plugins: [react()],
+    plugins: [react(), devCspPlugin],
     resolve: {
       alias: {
         "@renderer": resolve(__dirname, "src/renderer/src"),

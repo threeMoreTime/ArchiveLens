@@ -964,6 +964,23 @@ test("Lifecycle: production mode does not expose the E2E bridge", async () => {
       return typeof (window as any).archiveLens.test !== "undefined";
     });
     expect(hasBridge).toBe(false);
+
+    const initialUrl = win.url();
+    const inlineScriptExecuted = await win.evaluate(async () => {
+      (window as any).__archiveLensCspProbe = false;
+      const script = document.createElement("script");
+      script.textContent = "window.__archiveLensCspProbe = true";
+      document.head.appendChild(script);
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      return (window as any).__archiveLensCspProbe === true;
+    });
+    expect(inlineScriptExecuted).toBe(false);
+
+    await win.evaluate(() => {
+      window.location.href = "data:text/html,<title>untrusted</title>";
+    });
+    await win.waitForTimeout(500);
+    expect(win.url()).toBe(initialUrl);
   } finally {
     if (win) {
       const appPid = getAppProcessPid(app);
