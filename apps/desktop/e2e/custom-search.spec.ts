@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
-import { access, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -52,6 +52,12 @@ async function waitForSidecar(page: Page): Promise<void> {
     const environment = await (window as any).archiveLens.app.getEnvironment();
     return environment.sidecarReady;
   })).toBe(true);
+}
+
+
+async function comparableExistingPath(value: string): Promise<string> {
+  const canonical = path.normalize(await realpath(value));
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
 
@@ -454,10 +460,17 @@ test("multiple file selection creates one cross-directory task", async () => {
     await page.getByRole("button", { name: "开始扫描" }).click();
     await expect(page).toHaveURL(/#\/tasks\/task_/);
     const taskId = page.url().split("/tasks/")[1]!;
-    await expect.poll(async () => page.evaluate(async (id) => {
-      const task = await (window as any).archiveLens.tasks.get(id);
-      return { source_kind: task.source_kind, file_count: task.file_count, source_files: task.source_files };
-    }, taskId)).toEqual({ source_kind: "files", file_count: 2, source_files: [firstFile, secondFile] });
+    const expectedSourceFiles = await Promise.all([firstFile, secondFile].map(comparableExistingPath));
+    await expect.poll(async () => {
+      const task = await page.evaluate(async (id) => {
+        const value = await (window as any).archiveLens.tasks.get(id);
+        return { source_kind: value.source_kind, file_count: value.file_count, source_files: value.source_files };
+      }, taskId);
+      return {
+        ...task,
+        source_files: await Promise.all((task.source_files as string[]).map(comparableExistingPath)),
+      };
+    }).toEqual({ source_kind: "files", file_count: 2, source_files: expectedSourceFiles });
     await expect.poll(async () => page.evaluate(async (id) => {
       return (await (window as any).archiveLens.tasks.get(id)).status;
     }, taskId)).toBe("completed");
