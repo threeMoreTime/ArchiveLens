@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scope": "public-distribution-license-review",
+  "approved": false,
+  "candidate_sha": "",
+  "reviewer": "",
+  "reviewed_at": "",
+  "technical_evidence_reviewed": false,
+  "decisions": {
+    "djvulibre_binary_source_correspondence_reviewed": false,
+    "djvulibre_gpl_distribution_obligations_reviewed": false,
+    "rapidocr_model_redistribution_reviewed": false,
+    "bundled_notices_and_source_offer_reviewed": false
+  },
+  "blockers": [
+    "尚未对 DjVuLibre Windows 二进制与对应源码关系完成人工签署",
+    "尚未对 RapidOCR 内置模型的公开再分发完成权利归属复核"
+  ],
+  "notes": "这是默认拒绝的审核记录。只有针对冻结候选 SHA 完成人工审阅后才能修改；许可证审核通过仍不等于批准正式发布。"
+}

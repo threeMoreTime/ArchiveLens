@@ -29,7 +29,12 @@ pnpm prepare:native
 
 - `release-manifest.json` 必须记录组件版本、来源、许可证、文件哈希和运行树哈希。
 - `verify-release-chain.ps1` 必须证明 clean 构建、win-unpacked、Setup 和 Portable 的原生组件一致。
-- 正式公开发布前必须人工复核 GPL-2.0 与其他第三方许可证义务；本说明不构成法律意见。
+- `python scripts/verify-license-compliance.py --mode packaged --resources-root <resources> --candidate-sha <sha>`
+  必须验证安装包内的 ArchiveLens 许可证、第三方声明、DjVuLibre GPL 文本与对应源码、
+  RapidOCR 模型清单和 ONNX Runtime 许可材料。
+- 正式公开发布前还必须使用 `--require-public-approval`，并针对冻结候选 SHA 完成
+  `docs/compliance/public-release-license-approval.json`。默认审核记录为未批准。
+- 许可证审核通过不等于批准正式发布；本说明和自动检查不构成法律意见。
 
 ## 离线验证
 

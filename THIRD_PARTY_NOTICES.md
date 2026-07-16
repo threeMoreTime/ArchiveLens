@@ -1,57 +1,95 @@
 # Third-Party Notices
 
-ArchiveLens 包含或依赖以下第三方组件。本清单基于各项目公开的许可证信息整理；
-**正式发布前必须逐项到官方来源最终核实版本与许可证文本**（任务 §十.1：不得虚构）。
+ArchiveLens 是本地优先的 Windows 桌面应用，发行包包含下列第三方代码、模型和
+原生二进制。精确版本、来源与 SHA-256 以 `engine/requirements-lock.txt`、
+`scripts/native-dependencies.lock.json` 和冻结候选的 release manifest 为准。
 
-## Python Engine 运行时依赖
+完整安装包内的许可证和源码证据位于 `resources/licenses/` 与
+`resources/sources/`。同一份 Apache License 2.0 全文位于
+`resources/licenses/Tesseract/LICENSE.txt`，适用于下表中标记为 Apache-2.0
+且没有独立附加条款的组件；组件归属仍以本声明分别列明。
 
-| 组件 | 许可证 | 说明 |
-| --- | --- | --- |
-| [pypdfium2 / PDFium](https://pypdfium2.readthedocs.io/) | BSD-3-Clause / BSD-style | PDF 图片渲染主链路；包内保留对应许可证文本。 |
-| [Pillow](https://python-pillow.org/) | HPND-like（CMU License） | 允许再分发，需保留版权声明。 |
-| [RapidOCR (rapidocr-onnxruntime)](https://github.com/RapidAI/RapidOCR) | Apache-2.0 | 含模型文件，需确认模型单独许可证（见下）。 |
-| [ONNX Runtime](https://onnxruntime.ai/) | MIT | 含原生 DLL，允许再分发。 |
-| [pytesseract](https://github.com/madmaze/pytesseract) | Apache-2.0 | Python 封装层。 |
-| [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) | Apache-2.0 | 原生可执行；语言包见下。 |
-| [DjVuLibre](https://djvu.sourceforge.net/) | **GPL-2.0-only** | 以独立命令行组件随包分发；应用通过子进程调用。包内同时提供 GPL 文本与对应 3.5.29 源码归档，发布前仍需人工许可复核。 |
+## ArchiveLens
 
-### OCR 模型与语言包（独立许可证，需单独核实）
+ArchiveLens 自有代码采用 MIT License，全文位于
+`resources/licenses/ArchiveLens/LICENSE.txt`。
 
-| 资源 | 来源 | 许可证 |
-| --- | --- | --- |
-| RapidOCR ONNX 模型 | RapidAI 发布 | 需核实模型本身的许可证（通常 Apache-2.0，但发布前确认）。 |
-| `chi_sim` / `chi_sim_vert` 简体中文 traineddata | tesseract-ocr/tessdata_fast 固定提交 | Apache-2.0；下载地址与逐文件 SHA-256 记录在原生依赖锁中。 |
-| `chi_tra` / `chi_tra_vert` 繁体中文 traineddata | 同上 | Apache-2.0；下载地址与逐文件 SHA-256 记录在原生依赖锁中。 |
+## Python Engine 与模型
 
-> 完整安装包随附 Tesseract、四个中文 tessdata_fast 模型与 DjVuLibre，不依赖宿主安装。
-> 生产包不包含 PyMuPDF/fitz。组件精确版本、来源与哈希以 `scripts/native-dependencies.lock.json` 和 release manifest 为准。
+| 组件 | 锁定版本 | 许可证或权利信息 | 分发说明 |
+| --- | --- | --- | --- |
+| pypdfium2 / PDFium | 5.11.0 / 随 wheel | BSD-3-Clause / BSD-style | PDF 渲染；PyInstaller 包内保留随 wheel 提供的许可材料。 |
+| Pillow | 12.1.1 | HPND-like（CMU License） | 图像解码与处理。 |
+| RapidOCR (`rapidocr-onnxruntime`) | 1.4.4 | 工程代码元数据为 Apache-2.0；上游声明 OCR 模型版权归百度 | 随包包含三个 ONNX 模型；技术门禁记录实际文件名、大小和 SHA-256。模型公开再分发必须单独人工审核。 |
+| ONNX Runtime | 1.24.4 | MIT | 包内保留 `onnxruntime/LICENSE` 与 `ThirdPartyNotices.txt`。 |
+| pytesseract | 0.3.13 | Apache-2.0 | Tesseract Python 封装。 |
+| Tesseract OCR | 5.5.0.20241111 | Apache-2.0 | 原生可执行与 Windows 构建信息随包。 |
+| tessdata_fast | 固定提交 `87416418657359cb625c412a48b6e1d6d41c29bd` | Apache-2.0 | `chi_sim`、`chi_tra`、`chi_sim_vert`、`chi_tra_vert` 均逐文件锁定 SHA-256。 |
 
-## 桌面端依赖
+RapidOCR 上游许可证文件：
+`https://github.com/RapidAI/RapidOCR/blob/v1.4.4/LICENSE`。上游同版本 README
+明确区分工程代码版权与模型版权，因此 Apache-2.0 项目标识不能被自动解释为
+已经完成模型公开再分发审核。
+
+## DjVuLibre
+
+ArchiveLens 内置 SourceForge 发布的
+`DjVuLibre-3.5.29_DjView-4.12_Setup.exe` 中以下运行时文件：
+
+- `ddjvu.exe`
+- `djvused.exe`
+- `libdjvulibre.dll`
+- `libjpeg.dll`
+- `libtiff.dll`
+- `libz.dll`
+- `COPYING.txt`
+
+依赖锁将该组件标记为 GPL-2.0-only。发行包同时提供：
+
+- GPL-2.0 全文：`resources/licenses/DjVuLibre/COPYING.txt`
+- 对应上游源码：`resources/sources/djvulibre/djvulibre-3.5.29.tar.gz`
+- Windows 二进制、源码归档和运行树的 SHA-256：
+  `resources/native-dependencies.lock.json`
+
+ArchiveLens 通过参数数组和 `shell: false` 启动 `ddjvu.exe` / `djvused.exe`，
+不把 DjVuLibre 链接进 Electron 或 Python 进程。该工程边界、许可证文本和源码
+归档是技术事实，不替代对具体发行方式下 GPL 义务的人工判断。
+
+Windows 包中的 `libjpeg.dll`、`libtiff.dll` 与 `libz.dll` 来自同一锁定的
+DjVuLibre Windows 制品。公开发布前必须人工确认这些二进制与所附源码、声明及
+上游构建材料之间的对应关系。
+
+## 桌面端
 
 | 组件 | 许可证 |
 | --- | --- |
-| [Electron](https://www.electronjs.org/) | MIT（含 Chromium / Node.js，各自 BSD/MIT/等） |
-| [electron-builder](https://www.electron.build/) | MIT |
-| [electron-vite](https://electron-vite.org/) | MIT |
-| [React](https://react.dev/) | MIT |
-| [Fluent UI React v9](https://react.fluentui.dev/) | MIT |
-| [React Router](https://reactrouter.com/) | MIT |
-| [Zustand](https://github.com/pmndrs/zustand) | MIT |
-| [TanStack Query / Virtual](https://tanstack.com/) | MIT |
-| [Zod](https://zod.dev/) | MIT |
-| [Vitest](https://vitest.dev/) | MIT |
-| [Playwright](https://playwright.dev/) | Apache-2.0 |
+| Electron（含 Chromium / Node.js 的各自声明） | MIT / BSD / 其他随发行材料提供的许可 |
+| electron-builder | MIT |
+| electron-vite | MIT |
+| React / React DOM | MIT |
+| Fluent UI React v9 | MIT |
+| React Router | MIT |
+| Zustand | MIT |
+| TanStack Query / Virtual | MIT |
+| Zod | MIT |
+| Playwright | Apache-2.0 |
 
-## 字体
+## 字体与用户数据
 
-应用界面使用 Windows 系统字体（Microsoft YaHei 等），未随包分发字体文件。
+应用使用 Windows 系统字体，不随包再分发字体文件。测试和发布材料不得包含真实
+用户文档、OCR 结果或本地数据库。
 
----
+## 公开发布阻塞项
 
-## 发布前阻塞（不得绕过）
+以下项目必须在 `docs/compliance/public-release-license-approval.json` 中针对
+冻结候选 SHA 完成真实人工审核，默认均为未批准：
 
-1. **DjVuLibre GPL-2.0**：公开发布前人工确认独立进程分发、许可证文本和对应源码归档满足实际发行义务。
-2. **原生组件完整性**：发布证据链必须包含锁文件、运行树哈希和包内许可证；人工复核 Tesseract Windows 构建 README 所列原生 DLL 的实际再分发义务。
-3. **RapidOCR 模型**：发布证据链记录实际随包模型和第三方许可文件。
+1. DjVuLibre Windows 二进制与对应源码关系；
+2. 目标发行方式下 DjVuLibre GPL 分发义务；
+3. RapidOCR 内置模型的公开再分发权利；
+4. 最终安装包和 Portable 中许可证、声明、源码归档及 source offer 的完整性。
 
-> 本清单为占位与风险提示，**不构成法律意见**。发布前请由有资质的人员完成最终许可证审查。
+技术检查命令见 `docs/compliance/public-release-license-gate.md`。许可证审核通过
+也不等于批准正式发布。
+
+本清单是零成本工程证据，不构成法律意见、法律服务或合规保证。

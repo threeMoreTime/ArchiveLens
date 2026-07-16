@@ -43,6 +43,9 @@ jobs:
           PYTHONPATH: engine/src;.
         run: python -m unittest discover -s engine/tests -t engine -v
 
+      - name: Run source license compliance gate
+        run: python scripts/verify-license-compliance.py --mode source
+
   desktop-tests:
     name: Desktop Tests
     runs-on: windows-latest
@@ -284,6 +287,13 @@ jobs:
 
       - name: Build win-unpacked
         run: pnpm --filter @archivelens/desktop exec electron-builder --dir
+
+      - name: Run packaged license compliance gate
+        run: |
+          python scripts/verify-license-compliance.py `
+            --mode packaged `
+            --resources-root apps/desktop/release/win-unpacked/resources `
+            --candidate-sha $env:GITHUB_SHA
 
       - name: Run bundled native offline smoke
         run: |

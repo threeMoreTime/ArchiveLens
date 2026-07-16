@@ -41,13 +41,16 @@ pnpm --filter @archivelens/desktop dist
 - `appId: io.archivelens.desktop`；
 - NSIS 安装器（per-user、可卸载、默认保留用户数据）；
 - portable；
-- `extraResources`：Engine、Tesseract、tessdata、DjVuLibre、许可证与 DjVu 对应源码均随包分发。
+- `extraResources`：Engine、Tesseract、tessdata、DjVuLibre、ArchiveLens MIT 文本、
+  第三方声明、原生许可证与 DjVu 对应源码均随包分发。
 
 ### 发布闭环要求
 
 - 开发 worktree 全量回归通过后，才允许升级版本并冻结候选 SHA；
 - clean worktree 必须重新安装依赖、重跑测试、重建 Engine / win-unpacked；
 - 仅在 clean Engine、clean OCR、clean lifecycle E2E 全部通过后，才允许生成 Setup / Portable；
+- `verify-license-compliance.py` 的源码与打包技术门禁必须通过；
+- 公开发布必须另外通过绑定冻结候选 SHA 的许可证人工门禁，且仍需独立的正式发布授权；
 - 最终交付必须附带 `release-manifest.json`、`SHA256SUMS.txt` 与 `verify-release-chain.ps1` 输出。
 
 ### 安装包产物（目标）
@@ -65,7 +68,7 @@ SHA256SUMS.txt
 - [ ] Python tests / Desktop tests / IPC contract
 - [ ] Electron E2E / packaged smoke / installer smoke
 - [ ] 包内无用户数据 / 开发机绝对路径 / `.venv` / `node_modules` / Git 历史
-- [ ] 许可证 / 校验和（SHA-256）
+- [ ] 许可证技术门禁 / 人工许可证审核 / 校验和（SHA-256）
 
 真实 OCR fixture 使用 Windows 系统 SimHei 5.05 生成图片 PDF；字体文件不进入仓库或发布包。生成脚本固定页面参数与 PDF metadata，`expected.json` 记录字体及每个 fixture 的 SHA-256。
 

@@ -1,86 +1,93 @@
 {
-  "_comment": "ArchiveLens 依赖许可证清单（任务 §七）。精确版本与许可证；发布前需逐项到官方来源最终核实。",
+  "_comment": "ArchiveLens 零成本许可证技术清单。它记录工程证据，不构成法律意见。",
+  "schema_version": 2,
+  "project": {
+    "name": "ArchiveLens",
+    "license": "MIT",
+    "license_file": "LICENSE",
+    "distribution": "bundled"
+  },
   "bundled": {
     "pypdfium2": {
       "version": "5.11.0",
       "license": "BSD-3-Clause",
-      "source": "https://github.com/pypdfium2/pypdfium2",
-      "distribution": "bundled",
-      "role": "PDF 渲染（替代 PyMuPDF）",
-      "sha256_note": "发布前对 wheel 与内含 PDFium 二进制记录 SHA-256"
-    },
-    "pdfium": {
-      "version": "随 pypdfium2 分发",
-      "license": "BSD-3-Clause",
-      "source": "https://pdfium.googlesource.com/pdfium/",
-      "distribution": "bundled-in-pypdfium2",
-      "role": "PDF 渲染内核"
+      "source": "https://github.com/pypdfium2-team/pypdfium2",
+      "distribution": "bundled-in-engine",
+      "role": "PDF 渲染"
     },
     "rapidocr-onnxruntime": {
       "version": "1.4.4",
-      "license": "Apache-2.0",
-      "source": "https://github.com/RapidAI/RapidOCR",
-      "distribution": "bundled",
+      "code_license": "Apache-2.0",
+      "source": "https://github.com/RapidAI/RapidOCR/tree/v1.4.4",
+      "distribution": "bundled-in-engine",
       "role": "主 OCR 识别",
-      "model_license_note": "模型文件许可证需单独核实（通常 Apache-2.0）"
+      "model_copyright_owner": "Baidu",
+      "model_files": [
+        "ch_PP-OCRv4_det_infer.onnx",
+        "ch_PP-OCRv4_rec_infer.onnx",
+        "ch_ppocr_mobile_v2.0_cls_infer.onnx"
+      ],
+      "public_redistribution_review": "required"
     },
     "onnxruntime": {
       "version": "1.24.4",
       "license": "MIT",
-      "source": "https://onnxruntime.ai/",
-      "distribution": "bundled",
-      "role": "模型推理运行时"
+      "source": "https://github.com/microsoft/onnxruntime",
+      "distribution": "bundled-in-engine",
+      "license_material": [
+        "onnxruntime/LICENSE",
+        "onnxruntime/ThirdPartyNotices.txt"
+      ]
     },
     "Pillow": {
       "version": "12.1.1",
       "license": "HPND-like (CMU License)",
-      "source": "https://python-pillow.org/",
-      "distribution": "bundled",
-      "role": "图像处理"
+      "source": "https://github.com/python-pillow/Pillow",
+      "distribution": "bundled-in-engine"
     },
     "pytesseract": {
       "version": "0.3.13",
       "license": "Apache-2.0",
       "source": "https://github.com/madmaze/pytesseract",
-      "distribution": "bundled",
-      "role": "Tesseract Python 封装（可选二次复核）"
-    }
-  },
-  "optional_not_bundled": {
+      "distribution": "bundled-in-engine"
+    },
     "tesseract": {
+      "version": "5.5.0.20241111",
       "license": "Apache-2.0",
       "source": "https://github.com/tesseract-ocr/tesseract",
-      "distribution": "optional-not-bundled",
-      "strategy": "缺失时二次复核 skipped_unavailable，不阻断主 OCR（任务 §4.2）",
-      "path_resolution": "打包资源(待) → 用户配置 → 环境变量 → PATH → 常见安装目录"
+      "distribution": "bundled-native",
+      "lock": "scripts/native-dependencies.lock.json"
     },
-    "tessdata": {
-      "files": ["chi_sim.traineddata", "chi_tra.traineddata", "chi_sim_vert.traineddata", "chi_tra_vert.traineddata"],
+    "tessdata_fast": {
+      "version": "87416418657359cb625c412a48b6e1d6d41c29bd",
       "license": "Apache-2.0",
-      "source": "https://github.com/tesseract-ocr/tessdata",
-      "distribution": "optional-not-bundled",
-      "strategy": "需固定 commit + SHA-256 后随 resources/tessdata/ 分发（下一迭代）"
+      "source": "https://github.com/tesseract-ocr/tessdata_fast",
+      "distribution": "bundled-native",
+      "lock": "scripts/native-dependencies.lock.json"
     },
     "djvulibre": {
-      "license": "GPL-2.0",
-      "source": "https://djvu.sourceforge.net/",
-      "distribution": "optional-external",
-      "strategy": "默认不随包；检测到外部安装后 DJVU 可用；PDF 不受影响（任务 §4.3）"
+      "version": "3.5.29+4.12",
+      "license": "GPL-2.0-only",
+      "source": "https://sourceforge.net/projects/djvu/files/DjVuLibre/",
+      "binary_source": "https://sourceforge.net/projects/djvu/files/DjVuLibre_Windows/3.5.29%2B4.12/",
+      "distribution": "bundled",
+      "process_boundary": "independent-command-line-process",
+      "corresponding_source": "djvulibre-3.5.29.tar.gz",
+      "lock": "scripts/native-dependencies.lock.json",
+      "public_redistribution_review": "required"
     }
   },
   "removed": {
     "PyMuPDF": {
-      "version": "was 1.27.2.2",
-      "license": "AGPL-3.0",
+      "license": "AGPL-3.0-or-later or commercial",
       "distribution": "removed",
-      "reason": "AGPL 传染性；已迁移到 pypdfium2 (BSD-3)。门禁 test_no_pymupdf 阻止回归。",
-      "alternatives": ["AGPL 合规（源码披露）", "商业授权", "pypdfium2（已采纳）"]
+      "reason": "PDF 渲染已迁移到 pypdfium2；test_no_pymupdf 阻止回归。"
     }
   },
-  "pending_legal_review": [
-    "pypdfium2 对 PDFium 二进制的再分发条款（BSD-3，需保留版权声明）",
-    "RapidOCR 模型文件独立许可证",
-    "tessdata 来源与版本固定（commit + SHA-256）",
-    "ArchiveLens 项目根许可证（未决，见 docs/adr/0001）"
-  ]
+  "public_release_gate": {
+    "technical_script": "scripts/verify-license-compliance.py",
+    "approval_record": "docs/compliance/public-release-license-approval.json",
+    "default": "blocked",
+    "formal_release_authorization": "separate and still required"
+  }
 }
