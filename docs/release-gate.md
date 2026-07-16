@@ -41,7 +41,10 @@ pnpm gate:release-local -- -OfflineNative
 7. 运行完整 Playwright E2E；
 8. 运行包内许可证、离线原生组件、八组 OCR、推理中退出和 HTML 导出 smoke；
 9. 对 Setup 执行任务隔离的静默安装、启动、Sidecar 就绪、进程清理和卸载；
-10. 对 Portable 执行任务隔离的启动、包内资源验证、进程和解压目录清理；
+10. 对 Portable 执行任务隔离的启动、包内资源验证、进程和解压目录清理。若
+    electron-builder wrapper 未自动删除随机临时目录，门禁只会删除已由子进程关系、
+    候选 SHA、Desktop 哈希、系统临时目录边界和无残留进程共同证明归属本次运行的
+    精确目录，并记录 `GATE_OWNED_DIRECTORY`；
 11. 记录 Setup / Portable 的 Authenticode 状态。当前 Alpha 接受 `Valid` 或
     `NotSigned`，不会购买或调用付费签名服务；
 12. 生成非 partial 的 `release-manifest.json`、`SHA256SUMS.txt`，并验证源码、

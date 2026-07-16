@@ -69,7 +69,10 @@ try {
   $existingInstall = @(
     Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue |
       ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue } |
-      Where-Object { $_.DisplayName -eq "ArchiveLens" }
+      Where-Object {
+        $displayName = $_.PSObject.Properties["DisplayName"]
+        $displayName -and [string]$displayName.Value -eq "ArchiveLens"
+      }
   )
   if ($existingInstall.Count -gt 0) {
     throw "Existing per-user ArchiveLens installation detected; run installer smoke in an isolated Windows account or VM."

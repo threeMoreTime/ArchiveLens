@@ -73,6 +73,7 @@ class ReleaseGateTests(unittest.TestCase):
             'formal_release_action = "NOT_PERFORMED"',
             'upgrade_rollback_status = "NOT_VERIFIED"',
             '$ErrorActionPreference = "Continue"',
+            "[Management.Automation.ErrorRecord]",
             "$script:Steps.ToArray()",
         ):
             self.assertIn(required, text)
@@ -80,6 +81,9 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertNotIn("--allow-partial", text)
         for forbidden in ("git push", "gh release", "gh pr create", "npm publish", "pnpm publish"):
             self.assertNotIn(forbidden, text.lower())
+
+        installer_text = (ROOT / "scripts" / "smoke-installer.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn('PSObject.Properties["DisplayName"]', installer_text)
 
     def test_smoke_helper_rejects_paths_outside_owned_temp_prefix(self) -> None:
         with tempfile.TemporaryDirectory(prefix="archivelens-setup-smoke-unit-") as owned:
@@ -116,6 +120,108 @@ catch {{
         self.assertIn("SAFE=", result.stdout)
         self.assertIn("UNSAFE_REJECTED", result.stdout)
         self.assertNotIn("UNSAFE_ACCEPTED", result.stdout)
+
+    def test_smoke_helper_can_enumerate_process_descendants_on_powershell_51(self) -> None:
+        command = f"""
+. '{ps_quote(SMOKE_HELPER)}'
+$descendants = @(Get-ReleaseSmokeDescendants $PID)
+Write-Output ('DESCENDANT_PROBE_PASS=' + $descendants.Count)
+"""
+        result = subprocess.run(
+            [
+                self.powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                command,
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("DESCENDANT_PROBE_PASS=", result.stdout)
+
+    def test_smoke_helper_stops_only_the_requested_process_tree(self) -> None:
+        root_process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import subprocess,sys,time;"
+                    "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+                    "time.sleep(60)"
+                ),
+            ]
+        )
+        try:
+            command = f"""
+. '{ps_quote(SMOKE_HELPER)}'
+Start-Sleep -Milliseconds 500
+Stop-ReleaseSmokeProcessTree {root_process.pid}
+Write-Output 'PROCESS_TREE_STOP_PASS'
+"""
+            result = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    command,
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+            )
+            root_process.wait(timeout=5)
+        finally:
+            if root_process.poll() is None:
+                subprocess.run(
+                    ["taskkill.exe", "/PID", str(root_process.pid), "/T", "/F"],
+                    capture_output=True,
+                    check=False,
+                )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("PROCESS_TREE_STOP_PASS", result.stdout)
+
+    def test_smoke_helper_removes_only_verified_portable_extraction(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="archivelens-portable-extraction-unit-") as temp_dir:
+            extraction = Path(temp_dir)
+            desktop = extraction / "ArchiveLens.exe"
+            desktop.write_bytes(b"verified portable desktop")
+            command = f"""
+. '{ps_quote(SMOKE_HELPER)}'
+Remove-ReleaseSmokePortableExtraction '{ps_quote(extraction)}' '{sha256(desktop)}'
+if (Test-Path -LiteralPath '{ps_quote(extraction)}') {{ exit 3 }}
+Write-Output 'PORTABLE_EXTRACTION_CLEANUP_PASS'
+"""
+            result = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    command,
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("PORTABLE_EXTRACTION_CLEANUP_PASS", result.stdout)
 
     def test_complete_release_chain_accepts_bound_evidence_and_rejects_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -275,6 +381,7 @@ catch {{
                 "application_ready": True,
                 "process_cleanup": "PASS",
                 "resource_evidence": {
+                    "desktop_sha256": sha256(desktop),
                     "engine_sha256": sha256(engine),
                     "native_tesseract_tree_sha256": tesseract_tree,
                     "native_djvulibre_tree_sha256": djvu_tree,
@@ -290,6 +397,7 @@ catch {{
             portable_evidence = dict(evidence_base)
             portable_evidence["kind"] = "portable"
             portable_evidence["extraction_cleanup"] = "PASS"
+            portable_evidence["extraction_cleanup_mode"] = "GATE_OWNED_DIRECTORY"
             portable_evidence["resource_evidence"] = dict(evidence_base["resource_evidence"])
             portable_evidence["resource_evidence"]["artifact_sha256"] = sha256(portable)
             setup_evidence_path = artifacts / "setup-smoke.json"

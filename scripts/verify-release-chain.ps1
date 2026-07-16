@@ -71,6 +71,7 @@ function Assert-SmokeEvidence(
   [string]$EvidencePath,
   [string]$Kind,
   [string]$ExpectedArtifactSha,
+  [string]$ExpectedDesktopSha,
   [string]$ExpectedEngineSha,
   [hashtable]$ExpectedNativeHashes
 ) {
@@ -92,6 +93,9 @@ function Assert-SmokeEvidence(
   if ($resource.artifact_sha256 -ne $ExpectedArtifactSha) {
     Fail "RELEASE_ARTIFACT_HASH_MISMATCH" ('{0} smoke artifact SHA mismatch' -f $Kind)
   }
+  if ($resource.desktop_sha256 -ne $ExpectedDesktopSha) {
+    Fail "RELEASE_ARTIFACT_HASH_MISMATCH" ('{0} embedded Desktop SHA mismatch' -f $Kind)
+  }
   if ($resource.engine_sha256 -ne $ExpectedEngineSha) {
     Fail "RELEASE_ARTIFACT_HASH_MISMATCH" ('{0} embedded Engine SHA mismatch' -f $Kind)
   }
@@ -112,6 +116,12 @@ function Assert-SmokeEvidence(
   }
   if ($Kind -eq "portable" -and $evidence.extraction_cleanup -ne "PASS") {
     Fail "RELEASE_SMOKE_EVIDENCE_INVALID" "Portable extraction cleanup evidence did not pass"
+  }
+  if (
+    $Kind -eq "portable" -and
+    $evidence.extraction_cleanup_mode -notin @("WRAPPER", "GATE_OWNED_DIRECTORY")
+  ) {
+    Fail "RELEASE_SMOKE_EVIDENCE_INVALID" "Portable extraction cleanup mode is invalid"
   }
   return $resolved
 }
@@ -298,6 +308,7 @@ if (-not [string]::IsNullOrWhiteSpace($SetupEvidenceJson)) {
     $SetupEvidenceJson `
     "setup" `
     $manifest.setup_sha256 `
+    $desktopSha `
     $engineSha `
     $cleanNativeHashes
 }
@@ -307,6 +318,7 @@ if (-not [string]::IsNullOrWhiteSpace($PortableEvidenceJson)) {
     $PortableEvidenceJson `
     "portable" `
     $manifest.portable_sha256 `
+    $desktopSha `
     $engineSha `
     $cleanNativeHashes
 }

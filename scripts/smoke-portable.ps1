@@ -51,6 +51,7 @@ $evidence = [ordered]@{
   application_ready = $false
   process_cleanup = "NOT_RUN"
   extraction_cleanup = "NOT_RUN"
+  extraction_cleanup_mode = "NOT_RUN"
   error = $null
 }
 
@@ -128,7 +129,11 @@ try {
     Start-Sleep -Milliseconds 250
   }
   if (Test-Path -LiteralPath $extractedExe) {
-    throw "Portable wrapper left its extracted application behind: $appDirectory"
+    Remove-ReleaseSmokePortableExtraction $appDirectory $resourceEvidence.desktop_sha256
+    $evidence.extraction_cleanup_mode = "GATE_OWNED_DIRECTORY"
+  }
+  else {
+    $evidence.extraction_cleanup_mode = "WRAPPER"
   }
   $evidence.extraction_cleanup = "PASS"
   $evidence.status = "PASS"
@@ -151,6 +156,21 @@ finally {
   if ($wrapperProcess) {
     try {
       Stop-ReleaseSmokeProcessTree $wrapperProcess.Id
+    }
+    catch {
+      if (-not $failure) { $failure = $_ }
+    }
+  }
+  if (
+    $appDirectory -and
+    (Test-Path -LiteralPath $appDirectory -PathType Container) -and
+    $resourceEvidence -and
+    $resourceEvidence.desktop_sha256
+  ) {
+    try {
+      Remove-ReleaseSmokePortableExtraction $appDirectory $resourceEvidence.desktop_sha256
+      $evidence.extraction_cleanup = "PASS"
+      $evidence.extraction_cleanup_mode = "GATE_OWNED_DIRECTORY"
     }
     catch {
       if (-not $failure) { $failure = $_ }

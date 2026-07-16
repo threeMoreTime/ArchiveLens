@@ -37,6 +37,61 @@ function Remove-ReleaseSmokeOwnedRoot([string]$PathValue, [string]$ExpectedPrefi
   }
 }
 
+function Remove-ReleaseSmokePortableExtraction(
+  [string]$PathValue,
+  [string]$ExpectedDesktopSha256
+) {
+  $resolved = [IO.Path]::GetFullPath($PathValue).TrimEnd("\")
+  $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd("\") + "\"
+  if (-not $resolved.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Portable extraction is outside the system temp root: $resolved"
+  }
+  if (-not (Test-Path -LiteralPath $resolved -PathType Container)) { return }
+  $rootItem = Get-Item -LiteralPath $resolved -Force
+  if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw "Portable extraction root is a reparse point: $resolved"
+  }
+  $reparsePoints = @(
+    Get-ChildItem -LiteralPath $resolved -Recurse -Force -ErrorAction SilentlyContinue |
+      Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }
+  )
+  if ($reparsePoints.Count -gt 0) {
+    throw "Portable extraction contains a reparse point: $($reparsePoints[0].FullName)"
+  }
+  $desktopExe = Join-Path $resolved "ArchiveLens.exe"
+  if (-not (Test-Path -LiteralPath $desktopExe -PathType Leaf)) {
+    throw "Portable extraction is missing ArchiveLens.exe: $resolved"
+  }
+  if ((Get-ReleaseSmokeSha256 $desktopExe) -ne $ExpectedDesktopSha256) {
+    throw "Portable extraction desktop SHA mismatch: $desktopExe"
+  }
+  $residual = @(
+    Get-CimInstance Win32_Process |
+      Where-Object {
+        $_.ExecutablePath -and
+        ([string]$_.ExecutablePath).StartsWith($resolved, [StringComparison]::OrdinalIgnoreCase)
+      }
+  )
+  if ($residual.Count -gt 0) {
+    throw "Portable extraction still has running processes: $($residual.ProcessId -join ',')"
+  }
+  Remove-Item -LiteralPath $resolved -Recurse -Force
+  if (Test-Path -LiteralPath $resolved) {
+    throw "Portable extraction cleanup did not remove: $resolved"
+  }
+}
+
+function Invoke-ReleaseSmokeTaskkill([int]$ProcessId) {
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "SilentlyContinue"
+    & "$env:SystemRoot\System32\taskkill.exe" /PID $ProcessId /T /F 2>&1 | Out-Null
+  }
+  finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+}
+
 function Stop-ReleaseSmokeProcessTree([int]$RootProcessId) {
   if ($RootProcessId -le 0) { return }
   $descendantIds = @(
@@ -45,16 +100,17 @@ function Stop-ReleaseSmokeProcessTree([int]$RootProcessId) {
   )
   $process = Get-Process -Id $RootProcessId -ErrorAction SilentlyContinue
   if ($process) {
-    & "$env:SystemRoot\System32\taskkill.exe" /PID $RootProcessId /T /F 2>&1 | Out-Null
+    Invoke-ReleaseSmokeTaskkill $RootProcessId
   }
   foreach ($descendantId in $descendantIds) {
     if (Get-Process -Id $descendantId -ErrorAction SilentlyContinue) {
-      & "$env:SystemRoot\System32\taskkill.exe" /PID $descendantId /T /F 2>&1 | Out-Null
+      Invoke-ReleaseSmokeTaskkill $descendantId
     }
   }
   for ($attempt = 0; $attempt -lt 50; $attempt += 1) {
+    $candidateIds = @([int]$RootProcessId) + @($descendantIds)
     $remaining = @(
-      @($RootProcessId) + $descendantIds |
+      $candidateIds |
         Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
     )
     if ($remaining.Count -eq 0) { return }
@@ -80,7 +136,7 @@ function Get-ReleaseSmokeDescendants([int]$RootProcessId) {
       }
     }
   }
-  return @($result)
+  return $result.ToArray()
 }
 
 function Invoke-ReleaseSmokePythonJson(
@@ -138,10 +194,11 @@ function Get-ReleaseSmokeResourceEvidence(
   }
 
   $appInfoPath = Join-Path $resolvedResources "app.info.json"
+  $desktopPath = Join-Path (Split-Path -Parent $resolvedResources) "ArchiveLens.exe"
   $engineInfoPath = Join-Path $resolvedResources "engine\win-x64\app.info.json"
   $enginePath = Join-Path $resolvedResources "engine\win-x64\archivelens-engine.exe"
   $nativeRuntimePath = Join-Path $resolvedResources "native-runtime.json"
-  foreach ($required in @($appInfoPath, $engineInfoPath, $enginePath, $nativeRuntimePath)) {
+  foreach ($required in @($appInfoPath, $desktopPath, $engineInfoPath, $enginePath, $nativeRuntimePath)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
       throw "Release smoke evidence is missing: $required"
     }
@@ -165,6 +222,7 @@ function Get-ReleaseSmokeResourceEvidence(
     version = $Version
     app_info = $appInfo
     engine_info = $engineInfo
+    desktop_sha256 = Get-ReleaseSmokeSha256 $desktopPath
     engine_sha256 = Get-ReleaseSmokeSha256 $enginePath
     native_tesseract_tree_sha256 = [string]$nativeRuntime.tesseract_runtime_tree_sha256
     native_djvulibre_tree_sha256 = [string]$nativeRuntime.djvulibre_runtime_tree_sha256

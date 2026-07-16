@@ -54,7 +54,16 @@ function Invoke-GateStep(
   $previousErrorActionPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
-    & $Command @Arguments 2>&1 | Tee-Object -FilePath $logPath
+    & $Command @Arguments 2>&1 |
+      ForEach-Object {
+        if ($_ -is [Management.Automation.ErrorRecord]) {
+          $_.ToString()
+        }
+        else {
+          $_
+        }
+      } |
+      Tee-Object -FilePath $logPath
     $exitCode = $LASTEXITCODE
   }
   catch {
