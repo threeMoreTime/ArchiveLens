@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -34,7 +35,14 @@ from ..search_terms import (
     unicode_sequence,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+OCR_CORPUS_VERSION = 1
+OCR_INDEX_NOT_BUILT = "not_built"
+OCR_INDEX_BUILDING = "building"
+OCR_INDEX_READY = "ready"
+OCR_INDEX_PARTIAL = "partial"
+OCR_INDEX_FAILED = "failed"
+OCR_INDEX_LEGACY_REQUIRES_REOCR = "legacy_requires_reocr"
 LEGACY_TASK_REQUIRES_REVIEW = "LEGACY_TASK_REQUIRES_REVIEW"
 DEFAULT_REVIEW_IMAGE_QUALITY = "maximum"
 DEFAULT_CONTEXT_DIRECTION = "ltr"
@@ -68,7 +76,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     search_mode TEXT NOT NULL DEFAULT 'legacy_fixed_pair',
     review_image_quality TEXT NOT NULL DEFAULT 'maximum',
     context_direction TEXT NOT NULL DEFAULT 'ltr',
-    context_radius INTEGER NOT NULL DEFAULT 15
+    context_radius INTEGER NOT NULL DEFAULT 15,
+    ocr_corpus_version INTEGER NOT NULL DEFAULT 0,
+    ocr_index_status TEXT NOT NULL DEFAULT 'not_built',
+    ocr_model_id TEXT,
+    ocr_model_sha256 TEXT,
+    ocr_indexed_pages INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS occurrences (
     occurrence_id TEXT PRIMARY KEY,
@@ -176,6 +189,115 @@ CREATE TABLE IF NOT EXISTS task_sources (
     UNIQUE (task_id, file_path)
 );
 CREATE INDEX IF NOT EXISTS idx_task_sources_task ON task_sources(task_id, ordinal);
+CREATE TABLE IF NOT EXISTS ocr_corpus_pages (
+    task_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    page_no INTEGER NOT NULL,
+    document_id TEXT NOT NULL DEFAULT '',
+    page_index INTEGER NOT NULL,
+    source_page_width INTEGER NOT NULL DEFAULT 0,
+    source_page_height INTEGER NOT NULL DEFAULT 0,
+    line_count INTEGER NOT NULL DEFAULT 0,
+    model_id TEXT NOT NULL,
+    model_source_version TEXT NOT NULL DEFAULT '',
+    model_sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, source_id, page_no)
+);
+CREATE INDEX IF NOT EXISTS idx_ocr_corpus_pages_task
+    ON ocr_corpus_pages(task_id, source_id, page_no);
+CREATE TABLE IF NOT EXISTS ocr_lines (
+    ocr_line_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    document_id TEXT NOT NULL DEFAULT '',
+    page_no INTEGER NOT NULL,
+    page_index INTEGER NOT NULL,
+    line_index INTEGER NOT NULL,
+    raw_text TEXT NOT NULL,
+    resolved_text TEXT NOT NULL,
+    line_confidence REAL NOT NULL,
+    bbox_json TEXT NOT NULL,
+    word_boxes_json TEXT NOT NULL DEFAULT '[]',
+    word_text_json TEXT NOT NULL DEFAULT '[]',
+    word_confidences_json TEXT NOT NULL DEFAULT '[]',
+    isolated_top_k_json TEXT NOT NULL DEFAULT '[]',
+    script_reconciliations_json TEXT NOT NULL DEFAULT '[]',
+    model_id TEXT NOT NULL,
+    model_source_version TEXT NOT NULL DEFAULT '',
+    model_sha256 TEXT NOT NULL,
+    source_page_width INTEGER NOT NULL DEFAULT 0,
+    source_page_height INTEGER NOT NULL DEFAULT 0,
+    correction_text TEXT,
+    correction_provenance_json TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (task_id, source_id, page_no, line_index)
+);
+CREATE INDEX IF NOT EXISTS idx_ocr_lines_task_page
+    ON ocr_lines(task_id, source_id, page_no, line_index);
+CREATE TABLE IF NOT EXISTS ocr_line_indexes (
+    ocr_line_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    index_kind TEXT NOT NULL,
+    indexed_text TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (ocr_line_id, index_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_ocr_line_indexes_task_kind
+    ON ocr_line_indexes(task_id, index_kind);
+CREATE TABLE IF NOT EXISTS ocr_search_sessions (
+    search_session_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    query_text TEXT NOT NULL,
+    normalized_query TEXT NOT NULL,
+    script_scope TEXT NOT NULL,
+    status TEXT NOT NULL,
+    corpus_version INTEGER NOT NULL,
+    query_forms_json TEXT NOT NULL DEFAULT '{}',
+    counts_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ocr_search_sessions_task
+    ON ocr_search_sessions(task_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS ocr_search_hits (
+    search_hit_id TEXT PRIMARY KEY,
+    search_session_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    ocr_line_id TEXT NOT NULL,
+    match_layer TEXT NOT NULL,
+    layer_priority INTEGER NOT NULL,
+    index_kind TEXT NOT NULL,
+    matched_text TEXT NOT NULL,
+    index_start INTEGER NOT NULL,
+    index_end INTEGER NOT NULL,
+    source_start INTEGER,
+    source_end INTEGER,
+    source_text TEXT NOT NULL DEFAULT '',
+    source_script TEXT NOT NULL DEFAULT 'neutral',
+    verification_status TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE (
+        search_session_id, ocr_line_id, match_layer, index_kind,
+        index_start, index_end
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_ocr_search_hits_session
+    ON ocr_search_hits(search_session_id, layer_priority, ocr_line_id);
+CREATE TRIGGER IF NOT EXISTS trg_ocr_lines_raw_immutable
+BEFORE UPDATE OF
+    task_id, source_id, document_id, page_no, page_index, line_index,
+    raw_text, resolved_text, line_confidence, bbox_json, word_boxes_json,
+    word_text_json, word_confidences_json, isolated_top_k_json,
+    script_reconciliations_json, model_id, model_source_version,
+    model_sha256, source_page_width, source_page_height, created_at
+ON ocr_lines
+BEGIN
+    SELECT RAISE(ABORT, 'OCR source evidence is immutable');
+END;
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -268,6 +390,15 @@ class TaskStore:
         self._ensure_column("tasks", "review_image_quality", "TEXT NOT NULL DEFAULT 'standard'")
         self._ensure_column("tasks", "context_direction", "TEXT NOT NULL DEFAULT 'ltr'")
         self._ensure_column("tasks", "context_radius", "INTEGER NOT NULL DEFAULT 15")
+        self._ensure_column("tasks", "ocr_corpus_version", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(
+            "tasks",
+            "ocr_index_status",
+            "TEXT NOT NULL DEFAULT 'not_built'",
+        )
+        self._ensure_column("tasks", "ocr_model_id", "TEXT")
+        self._ensure_column("tasks", "ocr_model_sha256", "TEXT")
+        self._ensure_column("tasks", "ocr_indexed_pages", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("occurrences", "source_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("occurrences", "bbox_hash", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("occurrences", "matched_text", "TEXT")
@@ -380,6 +511,18 @@ class TaskStore:
             """
         )
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_task_sources_task ON task_sources(task_id, ordinal)")
+        if current < 7:
+            self.conn.execute(
+                """
+                UPDATE tasks
+                SET ocr_corpus_version=0,
+                    ocr_index_status=?,
+                    ocr_model_id=NULL,
+                    ocr_model_sha256=NULL,
+                    ocr_indexed_pages=0
+                """,
+                (OCR_INDEX_LEGACY_REQUIRES_REOCR,),
+            )
         if current < 2:
             self._mark_untrusted_legacy_tasks_for_review()
 
@@ -711,6 +854,11 @@ class TaskStore:
                 for table in (
                     "review_records",
                     "occurrences",
+                    "ocr_search_hits",
+                    "ocr_search_sessions",
+                    "ocr_line_indexes",
+                    "ocr_lines",
+                    "ocr_corpus_pages",
                     "task_processed_pages",
                     "task_checkpoints",
                     "task_events",
@@ -1005,6 +1153,7 @@ class TaskStore:
         page_no: int,
         worker_generation: int,
         occurrences: Iterable[dict[str, Any]],
+        ocr_page: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if page_no < 1:
             raise ValueError("page_no must be >= 1")
@@ -1024,9 +1173,18 @@ class TaskStore:
                     "checkpoint": checkpoint,
                     "event": None,
                     "already_processed": True,
+                    "ocr_line_count": 0,
                 }
             try:
                 with self.conn:
+                    ocr_line_count = 0
+                    if ocr_page is not None:
+                        ocr_line_count = self._insert_ocr_corpus_page_locked(
+                            task_id=task_id,
+                            source_id=source_id,
+                            page_no=page_no,
+                            ocr_page=ocr_page,
+                        )
                     for item in occurrence_items:
                         self.add_occurrence(task_id, item)
                     created_at = now_iso()
@@ -1072,11 +1230,21 @@ class TaskStore:
                             occurrence_count=(
                                 SELECT COUNT(*) FROM occurrences WHERE task_id=?
                             ),
+                            ocr_indexed_pages=(
+                                SELECT COUNT(*) FROM ocr_corpus_pages WHERE task_id=?
+                            ),
                             worker_generation=?,
                             updated_at=?
                         WHERE task_id=?
                         """,
-                        (task_id, task_id, worker_generation, created_at, task_id),
+                        (
+                            task_id,
+                            task_id,
+                            task_id,
+                            worker_generation,
+                            created_at,
+                            task_id,
+                        ),
                     )
                     event = self._append_task_event_locked(
                         task_id=task_id,
@@ -1085,6 +1253,7 @@ class TaskStore:
                             "page_no": page_no,
                             "processed_pages": len(processed_page_ids),
                             "source_id": source_id,
+                            "ocr_line_count": ocr_line_count,
                         },
                         source_id=source_id,
                         worker_generation=worker_generation,
@@ -1096,10 +1265,314 @@ class TaskStore:
                     "checkpoint": checkpoint,
                     "event": event,
                     "already_processed": False,
+                    "ocr_line_count": ocr_line_count,
                 }
             except Exception:
                 self.conn.rollback()
                 raise
+
+    @staticmethod
+    def _json_value(value: Any, default: Any) -> str:
+        def serialize_runtime_value(item: Any) -> Any:
+            to_list = getattr(item, "tolist", None)
+            if callable(to_list):
+                return to_list()
+            scalar = getattr(item, "item", None)
+            if callable(scalar):
+                return scalar()
+            raise TypeError(
+                f"OCR evidence contains a non-JSON value: {type(item).__name__}"
+            )
+
+        return json.dumps(
+            value if value is not None else default,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=serialize_runtime_value,
+        )
+
+    @staticmethod
+    def _ocr_line_id(task_id: str, source_id: str, page_no: int, line_index: int) -> str:
+        payload = f"{task_id}\x1f{source_id}\x1f{page_no}\x1f{line_index}".encode("utf-8")
+        return f"line_{hashlib.sha256(payload).hexdigest()[:32]}"
+
+    def _insert_ocr_corpus_page_locked(
+        self,
+        *,
+        task_id: str,
+        source_id: str,
+        page_no: int,
+        ocr_page: dict[str, Any],
+    ) -> int:
+        if int(ocr_page.get("page_no", page_no)) != page_no:
+            raise ValueError("OCR corpus page number does not match completion page")
+        lines = ocr_page.get("lines")
+        if not isinstance(lines, list):
+            raise ValueError("OCR corpus lines must be a list")
+        model = ocr_page.get("model")
+        if not isinstance(model, dict):
+            raise ValueError("OCR corpus model metadata is required")
+        model_id = str(model.get("id") or "")
+        model_sha256 = str(model.get("sha256") or "").lower()
+        model_source_version = str(model.get("source_version") or "")
+        if (
+            not model_id
+            or len(model_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in model_sha256)
+        ):
+            raise ValueError("OCR corpus model id and SHA-256 are required")
+        current_model = self.conn.execute(
+            """
+            SELECT ocr_model_id, ocr_model_sha256
+            FROM tasks WHERE task_id=?
+            """,
+            (task_id,),
+        ).fetchone()
+        if current_model is None:
+            raise KeyError(task_id)
+        existing_model_id = current_model["ocr_model_id"]
+        existing_model_sha256 = current_model["ocr_model_sha256"]
+        if (
+            existing_model_id is not None
+            and (
+                str(existing_model_id) != model_id
+                or str(existing_model_sha256 or "").lower() != model_sha256
+            )
+        ):
+            raise ValueError("OCR corpus model cannot change within a task")
+        page_index = int(ocr_page.get("page_index", page_no - 1))
+        page_width = int(ocr_page.get("source_page_width", 0) or 0)
+        page_height = int(ocr_page.get("source_page_height", 0) or 0)
+        document_id = str(ocr_page.get("document_id") or "")
+        created_at = now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO ocr_corpus_pages (
+                task_id, source_id, page_no, document_id, page_index,
+                source_page_width, source_page_height, line_count,
+                model_id, model_source_version, model_sha256, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                source_id,
+                page_no,
+                document_id,
+                page_index,
+                page_width,
+                page_height,
+                len(lines),
+                model_id,
+                model_source_version,
+                model_sha256,
+                created_at,
+            ),
+        )
+        for expected_index, line in enumerate(lines):
+            if not isinstance(line, dict):
+                raise ValueError("OCR corpus line must be an object")
+            line_index = int(line.get("line_index", expected_index))
+            if line_index != expected_index:
+                raise ValueError("OCR corpus line indexes must be contiguous and ordered")
+            raw_text = line.get("raw_text")
+            resolved_text = line.get("resolved_text")
+            if not isinstance(raw_text, str) or not isinstance(resolved_text, str):
+                raise ValueError("OCR raw and resolved text must be strings")
+            line_id = self._ocr_line_id(task_id, source_id, page_no, line_index)
+            self.conn.execute(
+                """
+                INSERT INTO ocr_lines (
+                    ocr_line_id, task_id, source_id, document_id, page_no,
+                    page_index, line_index, raw_text, resolved_text,
+                    line_confidence, bbox_json, word_boxes_json, word_text_json,
+                    word_confidences_json, isolated_top_k_json,
+                    script_reconciliations_json, model_id, model_source_version,
+                    model_sha256, source_page_width, source_page_height,
+                    correction_text, correction_provenance_json, created_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, NULL, NULL, ?
+                )
+                """,
+                (
+                    line_id,
+                    task_id,
+                    source_id,
+                    document_id,
+                    page_no,
+                    page_index,
+                    line_index,
+                    raw_text,
+                    resolved_text,
+                    float(line.get("confidence", 0.0) or 0.0),
+                    self._json_value(line.get("bbox"), []),
+                    self._json_value(line.get("word_boxes"), []),
+                    self._json_value(line.get("word_text"), []),
+                    self._json_value(line.get("word_confidences"), []),
+                    self._json_value(line.get("isolated_character_top_k"), []),
+                    self._json_value(line.get("script_reconciliations"), []),
+                    model_id,
+                    model_source_version,
+                    model_sha256,
+                    page_width,
+                    page_height,
+                    created_at,
+                ),
+            )
+            forms = line.get("search_forms")
+            if not isinstance(forms, dict):
+                raise ValueError("OCR line search forms are required")
+            for index_kind in ("simplified", "traditional", "taiwan", "hong_kong"):
+                indexed_text = forms.get(index_kind)
+                if not isinstance(indexed_text, str):
+                    raise ValueError(f"OCR line index is missing: {index_kind}")
+                self.conn.execute(
+                    """
+                    INSERT INTO ocr_line_indexes (
+                        ocr_line_id, task_id, index_kind, indexed_text,
+                        payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, '{}', ?)
+                    """,
+                    (line_id, task_id, index_kind, indexed_text, created_at),
+                )
+        self.conn.execute(
+            """
+            UPDATE tasks
+            SET ocr_corpus_version=?,
+                ocr_index_status=?,
+                ocr_model_id=?,
+                ocr_model_sha256=?,
+                updated_at=?
+            WHERE task_id=?
+            """,
+            (
+                OCR_CORPUS_VERSION,
+                OCR_INDEX_BUILDING,
+                model_id,
+                model_sha256,
+                created_at,
+                task_id,
+            ),
+        )
+        return len(lines)
+
+    def finalize_ocr_corpus(
+        self,
+        task_id: str,
+        *,
+        expected_pages: int,
+        failure_count: int,
+    ) -> dict[str, Any]:
+        with self._lock:
+            task = self.conn.execute(
+                """
+                SELECT ocr_index_status, ocr_corpus_version
+                FROM tasks WHERE task_id=?
+                """,
+                (task_id,),
+            ).fetchone()
+            if task is None:
+                raise KeyError(task_id)
+            indexed_pages = int(
+                self.conn.execute(
+                    "SELECT COUNT(*) AS count FROM ocr_corpus_pages WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()["count"]
+            )
+            line_count = int(
+                self.conn.execute(
+                    "SELECT COUNT(*) AS count FROM ocr_lines WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()["count"]
+            )
+            if indexed_pages == 0:
+                status = str(task["ocr_index_status"] or OCR_INDEX_NOT_BUILT)
+            elif failure_count > 0 or indexed_pages != expected_pages:
+                status = OCR_INDEX_PARTIAL
+            else:
+                status = OCR_INDEX_READY
+            self.conn.execute(
+                """
+                UPDATE tasks
+                SET ocr_index_status=?, ocr_indexed_pages=?, updated_at=?
+                WHERE task_id=?
+                """,
+                (status, indexed_pages, now_iso(), task_id),
+            )
+            self.conn.commit()
+            return {
+                "status": status,
+                "corpus_version": int(task["ocr_corpus_version"] or 0),
+                "indexed_pages": indexed_pages,
+                "expected_pages": expected_pages,
+                "line_count": line_count,
+                "failure_count": failure_count,
+            }
+
+    def get_ocr_corpus_status(self, task_id: str) -> dict[str, Any]:
+        with self._lock:
+            task = self.conn.execute(
+                """
+                SELECT ocr_index_status, ocr_corpus_version, ocr_model_id,
+                       ocr_model_sha256, ocr_indexed_pages
+                FROM tasks WHERE task_id=?
+                """,
+                (task_id,),
+            ).fetchone()
+            if task is None:
+                raise KeyError(task_id)
+            line_count = int(
+                self.conn.execute(
+                    "SELECT COUNT(*) AS count FROM ocr_lines WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()["count"]
+            )
+        return {
+            "status": str(task["ocr_index_status"] or OCR_INDEX_NOT_BUILT),
+            "corpus_version": int(task["ocr_corpus_version"] or 0),
+            "model_id": task["ocr_model_id"],
+            "model_sha256": task["ocr_model_sha256"],
+            "indexed_pages": int(task["ocr_indexed_pages"] or 0),
+            "line_count": line_count,
+            "requires_reocr": task["ocr_index_status"] == OCR_INDEX_LEGACY_REQUIRES_REOCR,
+        }
+
+    def list_ocr_lines(
+        self,
+        task_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM ocr_lines
+                WHERE task_id=?
+                ORDER BY source_id, page_no, line_index
+                LIMIT ? OFFSET ?
+                """,
+                (task_id, limit, offset),
+            ).fetchall()
+        json_fields = (
+            "bbox_json",
+            "word_boxes_json",
+            "word_text_json",
+            "word_confidences_json",
+            "isolated_top_k_json",
+            "script_reconciliations_json",
+            "correction_provenance_json",
+        )
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            for field in json_fields:
+                value = item.get(field)
+                item[field.removesuffix("_json")] = (
+                    json.loads(value) if isinstance(value, str) and value else None
+                )
+            result.append(item)
+        return result
 
     def _validate_recovery_occurrence(self, occurrence: dict[str, Any], *, source_id: str, page_no: int) -> None:
         matched = occurrence.get("matched_text") or occurrence.get("matched_character")
@@ -1501,4 +1974,17 @@ class TaskStore:
             self.conn.close()
 
 
-__all__ = ["TaskStore", "SCHEMA_VERSION", "SCHEMA_SQL", "now_iso", "new_id"]
+__all__ = [
+    "TaskStore",
+    "SCHEMA_VERSION",
+    "SCHEMA_SQL",
+    "OCR_CORPUS_VERSION",
+    "OCR_INDEX_BUILDING",
+    "OCR_INDEX_FAILED",
+    "OCR_INDEX_LEGACY_REQUIRES_REOCR",
+    "OCR_INDEX_NOT_BUILT",
+    "OCR_INDEX_PARTIAL",
+    "OCR_INDEX_READY",
+    "now_iso",
+    "new_id",
+]

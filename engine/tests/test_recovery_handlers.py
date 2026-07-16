@@ -281,6 +281,33 @@ class RecoveryHandlerTests(unittest.TestCase):
                                     "crop_image_path": str(crop_path),
                                 }
                             ],
+                            ocr_page={
+                                "document_id": "real-doc.pdf",
+                                "page_no": page_no,
+                                "page_index": page_no - 1,
+                                "source_page_width": 1000,
+                                "source_page_height": 1400,
+                                "model": {
+                                    "id": "PP-OCRv6-small",
+                                    "source_version": "RapidOCR-3.9.1",
+                                    "sha256": "a" * 64,
+                                },
+                                "lines": [
+                                    {
+                                        "line_index": 0,
+                                        "raw_text": matched_character,
+                                        "resolved_text": matched_character,
+                                        "confidence": 0.99,
+                                        "bbox": [[10, 10], [20, 10], [20, 20], [10, 20]],
+                                        "search_forms": {
+                                            "simplified": "约",
+                                            "traditional": "約",
+                                            "taiwan": "約",
+                                            "hong_kong": "約",
+                                        },
+                                    }
+                                ],
+                            },
                         )
                 self.output_html.parent.mkdir(parents=True, exist_ok=True)
                 self.output_html.write_text("<html>ok</html>", encoding="utf-8")
@@ -303,6 +330,10 @@ class RecoveryHandlerTests(unittest.TestCase):
             ["task.created", "task.started", "task.progress", "task.progress", "task.completed"],
         )
         self.assertEqual(len(state["occurrence_ids"]), 2)
+        corpus_status = self.server.store.get_ocr_corpus_status(task_id)
+        self.assertEqual(corpus_status["status"], "ready")
+        self.assertEqual(corpus_status["indexed_pages"], 2)
+        self.assertEqual(corpus_status["line_count"], 2)
 
     def test_real_scan_path_backfills_bbox_hash_for_report_occurrences(self) -> None:
         created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})

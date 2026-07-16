@@ -10,7 +10,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from archivelens_engine.db.store import TaskStore
+from archivelens_engine.db.store import (
+    OCR_INDEX_LEGACY_REQUIRES_REOCR,
+    SCHEMA_VERSION,
+    TaskStore,
+)
 
 
 SOURCE_ID = "source-main"
@@ -455,14 +459,30 @@ class RecoveryMigrationTests(unittest.TestCase):
         conn.close()
         return db_path
 
-    def _assert_schema_v6(self, store: TaskStore) -> None:
+    def _assert_current_schema(self, store: TaskStore) -> None:
         self.assertEqual(
             store.conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0],
-            "6",
+            str(SCHEMA_VERSION),
         )
-        self.assertEqual(store.conn.execute("PRAGMA user_version").fetchone()[0], 6)
+        self.assertEqual(
+            store.conn.execute("PRAGMA user_version").fetchone()[0],
+            SCHEMA_VERSION,
+        )
         self.assertTrue(
-            {"search_terms_json", "search_mode", "source_kind", "source_label", "review_image_quality", "context_direction", "context_radius"}.issubset(
+            {
+                "search_terms_json",
+                "search_mode",
+                "source_kind",
+                "source_label",
+                "review_image_quality",
+                "context_direction",
+                "context_radius",
+                "ocr_corpus_version",
+                "ocr_index_status",
+                "ocr_model_id",
+                "ocr_model_sha256",
+                "ocr_indexed_pages",
+            }.issubset(
                 {row[1] for row in store.conn.execute("PRAGMA table_info(tasks)").fetchall()}
             )
         )
@@ -475,18 +495,41 @@ class RecoveryMigrationTests(unittest.TestCase):
             {
                 row[0]
                 for row in store.conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('task_processed_pages', 'task_checkpoints', 'task_events', 'task_failures', 'task_sources')"
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name IN (
+                        'task_processed_pages', 'task_checkpoints', 'task_events',
+                        'task_failures', 'task_sources', 'ocr_corpus_pages',
+                        'ocr_lines', 'ocr_line_indexes', 'ocr_search_sessions',
+                        'ocr_search_hits'
+                    )
+                    """
                 ).fetchall()
             },
-            {"task_processed_pages", "task_checkpoints", "task_events", "task_failures", "task_sources"},
+            {
+                "task_processed_pages",
+                "task_checkpoints",
+                "task_events",
+                "task_failures",
+                "task_sources",
+                "ocr_corpus_pages",
+                "ocr_lines",
+                "ocr_line_indexes",
+                "ocr_search_sessions",
+                "ocr_search_hits",
+            },
         )
 
     def test_empty_legacy_database_migrates_and_supports_new_progress_contract(self) -> None:
         db_path = self._create_legacy_db("legacy-empty.db")
         store = TaskStore(db_path)
         try:
-            self._assert_schema_v6(store)
+            self._assert_current_schema(store)
             task_id = store.create_task(source_dir="X", output_dir="Y", workspace_dir="Z", name="migrated-empty")
+            self.assertEqual(
+                store.get_ocr_corpus_status(task_id)["status"],
+                "not_built",
+            )
             store.append_task_event(
                 task_id=task_id,
                 event_type="task.started",
@@ -560,10 +603,15 @@ class RecoveryMigrationTests(unittest.TestCase):
         for _ in range(2):
             store = TaskStore(db_path)
             try:
-                self._assert_schema_v6(store)
+                self._assert_current_schema(store)
                 task = store.get_task("task_completed")
                 assert task is not None
                 self.assertEqual(task["status"], "completed")
+                self.assertEqual(
+                    task["ocr_index_status"],
+                    OCR_INDEX_LEGACY_REQUIRES_REOCR,
+                )
+                self.assertEqual(store.list_ocr_lines("task_completed"), [])
                 total, items = store.query_occurrences(task_id="task_completed", limit=100, offset=0)
                 self.assertEqual(total, 2)
                 self.assertEqual([item["occurrence_id"] for item in items], ["occ_completed_1", "occ_completed_2"])
@@ -610,7 +658,7 @@ class RecoveryMigrationTests(unittest.TestCase):
         )
         store = TaskStore(db_path)
         try:
-            self._assert_schema_v6(store)
+            self._assert_current_schema(store)
             task = store.get_task("task_unfinished")
             assert task is not None
             self.assertEqual(task["status"], "recoverable")
@@ -657,15 +705,15 @@ class RecoveryMigrationTests(unittest.TestCase):
 
         store = TaskStore(db_path)
         try:
-            self._assert_schema_v6(store)
+            self._assert_current_schema(store)
             task = store.get_task("task_rollback")
             assert task is not None
             self.assertEqual(task["name"], "rollback")
         finally:
             store.close()
 
-    def test_schema_v6_reopen_skips_migration_helpers(self) -> None:
-        path = Path(self.tmp) / "v6-noop.db"
+    def test_current_schema_reopen_skips_migration_helpers(self) -> None:
+        path = Path(self.tmp) / "current-noop.db"
         TaskStore(path).close()
         with mock.patch.object(TaskStore, "_execute_schema_sql", side_effect=AssertionError("should not run")), mock.patch.object(
             TaskStore, "_migrate_schema", side_effect=AssertionError("should not run")
@@ -676,14 +724,19 @@ class RecoveryMigrationTests(unittest.TestCase):
         path = Path(self.tmp) / "future.db"
         conn = sqlite3.connect(path)
         conn.executescript(
-            "CREATE TABLE marker(value TEXT NOT NULL); INSERT INTO marker VALUES ('keep'); PRAGMA user_version=7;"
+            f"CREATE TABLE marker(value TEXT NOT NULL); "
+            f"INSERT INTO marker VALUES ('keep'); "
+            f"PRAGMA user_version={SCHEMA_VERSION + 1};"
         )
         conn.close()
         with self.assertRaisesRegex(RuntimeError, "unsupported schema version"):
             TaskStore(path)
         conn = sqlite3.connect(path)
         try:
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0],
+                SCHEMA_VERSION + 1,
+            )
             self.assertEqual(conn.execute("SELECT value FROM marker").fetchone()[0], "keep")
             self.assertIsNone(conn.execute("SELECT name FROM sqlite_master WHERE name='tasks'").fetchone())
         finally:

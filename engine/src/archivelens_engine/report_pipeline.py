@@ -39,6 +39,7 @@ from .ocr_core import (
     union_bboxes,
 )
 from .ocr_engine import ArchiveLensOCR
+from .script_variants import ScriptVariantResolver
 from .search_terms import LEGACY_SEARCH_TERMS, find_literal_matches, normalize_search_text, unicode_sequence
 
 
@@ -143,6 +144,7 @@ class ReportPipeline:
         self.json_path = self.run_dir / "report.json"
         self.started_at = datetime.now()
         self.ocr_engine = ocr_engine or ArchiveLensOCR(self.config.ocr_rec_model_path)
+        self.script_variants = ScriptVariantResolver()
         self._ensure_dirs()
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
@@ -372,6 +374,7 @@ class ReportPipeline:
         for page_index in page_indexes:
             page_payload: dict[str, Any] | None = None
             page_occurrences: list[dict[str, Any]] = []
+            ocr_page: dict[str, Any] | None = None
             page_completed = False
             if self.task_control is not None:
                 if self.task_control.should_cancel():
@@ -383,7 +386,10 @@ class ReportPipeline:
                     f"[page] file={document.relative_path} page={page_index + 1}/{document.page_count}",
                 )
             try:
-                page_payload, page_occurrences = self._process_page(document, page_index)
+                page_payload, page_occurrences, ocr_page = self._process_page(
+                    document,
+                    page_index,
+                )
                 if page_payload is not None:
                     pages.append(page_payload)
                 occurrences.extend(page_occurrences)
@@ -408,6 +414,7 @@ class ReportPipeline:
                     page_index=page_index,
                     page_payload=page_payload,
                     page_occurrences=list(page_occurrences),
+                    ocr_page=ocr_page,
                 )
         deduped = dedupe_occurrences(occurrences)
         assign_occurrence_indexes(deduped)
@@ -432,26 +439,104 @@ class ReportPipeline:
         self,
         document: DocumentRecord,
         page_index: int,
-    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    ) -> tuple[
+        dict[str, Any] | None,
+        list[dict[str, Any]],
+        dict[str, Any],
+    ]:
         render_path = self._render_page(document, page_index)
         try:
             with Image.open(render_path) as opened_image:
                 image = opened_image.copy()
             width, height = image.size
             ocr_results, _ = self.ocr_engine(str(render_path))
-            if not ocr_results:
-                render_path.unlink(missing_ok=True)
-                return None, []
+            model_info = getattr(self.ocr_engine, "model_info", {})
+            if not isinstance(model_info, dict):
+                model_info = {}
             page_occurrences: list[dict[str, Any]] = []
             page_image_id = f"{document.document_id}-p{page_index+1}"
-            page_lines = [
-                {
-                    "text": str(line[1]),
-                    "bbox": self._line_rect(line[0]),
-                    "confidence": float(line[2]),
-                }
-                for line in ocr_results
-            ]
+            page_lines: list[dict[str, Any]] = []
+            corpus_lines: list[dict[str, Any]] = []
+            for line_index, result in enumerate(ocr_results or []):
+                if len(result) < 3:
+                    raise ValueError("OCR result line must contain bbox, text, and confidence")
+                metadata = result[-1] if isinstance(result[-1], dict) else {}
+                line_model = metadata.get("model")
+                if isinstance(line_model, dict):
+                    if model_info and (
+                        model_info.get("id") != line_model.get("id")
+                        or model_info.get("sha256") != line_model.get("sha256")
+                    ):
+                        raise ValueError("OCR result model metadata changed within one page")
+                    model_info = dict(line_model)
+                contextual_text = metadata.get("contextual_text")
+                resolved_text = metadata.get("resolved_text")
+                raw_text = (
+                    contextual_text
+                    if isinstance(contextual_text, str)
+                    else str(result[1])
+                )
+                text = (
+                    resolved_text
+                    if isinstance(resolved_text, str)
+                    else str(result[1])
+                )
+                polygon = [
+                    [float(point[0]), float(point[1])]
+                    for point in result[0]
+                ]
+                confidence = float(result[2])
+                page_lines.append(
+                    {
+                        "text": text,
+                        "bbox": self._line_rect(polygon),
+                        "confidence": confidence,
+                    }
+                )
+                word_boxes = result[3] if len(result) >= 6 and isinstance(result[3], list) else []
+                word_text = result[4] if len(result) >= 6 and isinstance(result[4], list) else []
+                word_confidences = (
+                    result[5] if len(result) >= 6 and isinstance(result[5], list) else []
+                )
+                forms = self.script_variants.forms(text)
+                corpus_lines.append(
+                    {
+                        "line_index": line_index,
+                        "raw_text": raw_text,
+                        "resolved_text": text,
+                        "confidence": confidence,
+                        "bbox": polygon,
+                        "word_boxes": word_boxes,
+                        "word_text": [str(value) for value in word_text],
+                        "word_confidences": [
+                            float(value) for value in word_confidences
+                        ],
+                        "isolated_character_top_k": list(
+                            metadata.get("isolated_character_top_k", [])
+                        ),
+                        "script_reconciliations": list(
+                            metadata.get("script_reconciliations", [])
+                        ),
+                        "search_forms": {
+                            "simplified": forms.simplified,
+                            "traditional": forms.traditional,
+                            "taiwan": forms.taiwan,
+                            "hong_kong": forms.hong_kong,
+                        },
+                    }
+                )
+            ocr_page = {
+                "document_id": document.document_id,
+                "page_no": page_index + 1,
+                "page_index": page_index,
+                "source_page_width": width,
+                "source_page_height": height,
+                "model": dict(model_info),
+                "lines": corpus_lines,
+            }
+            if not ocr_results:
+                render_path.unlink(missing_ok=True)
+                return None, [], ocr_page
             for line_index, line in enumerate(page_lines):
                 text = line["text"]
                 confidence = line["confidence"]
@@ -485,7 +570,7 @@ class ReportPipeline:
                         page_occurrences.append(occurrence)
             if not page_occurrences:
                 render_path.unlink(missing_ok=True)
-                return None, []
+                return None, [], ocr_page
             review_image_path, review_width, review_height = self._create_review_page_image(
                 document,
                 page_index,
@@ -505,7 +590,7 @@ class ReportPipeline:
                 "file_name": document.file_path.name,
             }
             render_path.unlink(missing_ok=True)
-            return page_meta, page_occurrences
+            return page_meta, page_occurrences, ocr_page
         finally:
             if render_path.exists():
                 render_path.unlink(missing_ok=True)

@@ -312,7 +312,7 @@ class ReportPipelineLiteralMatchTests(unittest.TestCase):
                 page_count=1,
             )
             try:
-                _page, occurrences = pipeline._process_page(document, 0)
+                _page, occurrences, ocr_page = pipeline._process_page(document, 0)
             finally:
                 pipeline.close()
             self.assertEqual([(item["match_start"], item["match_end"]) for item in occurrences], [(0, 2), (2, 4)])
@@ -320,6 +320,11 @@ class ReportPipelineLiteralMatchTests(unittest.TestCase):
             self.assertEqual(occurrences[0]["source_x0"], 0.0)
             self.assertEqual(occurrences[0]["source_x1"], 80.0)
             self.assertIsNone(occurrences[0]["matched_character"])
+            self.assertEqual(ocr_page["lines"][0]["raw_text"], "档案档案")
+            self.assertEqual(
+                ocr_page["lines"][0]["search_forms"]["traditional"],
+                "檔案檔案",
+            )
 
     def test_review_page_image_is_lossless_png_without_quality_rerender(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

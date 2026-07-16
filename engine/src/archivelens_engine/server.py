@@ -92,6 +92,10 @@ class ThreadSafeRapidOCR:
         with self._lock:
             return self._engine(*args, **kwargs)
 
+    @property
+    def model_info(self) -> dict[str, Any]:
+        return dict(self._engine.model_info)
+
 
 def _require(params: dict[str, Any], key: str, typ: type) -> Any:
     if key not in params:
@@ -465,6 +469,7 @@ class Server:
         page_index: int,
         page_payload: dict[str, Any] | None,
         page_occurrences: list[dict[str, Any]],
+        ocr_page: dict[str, Any] | None = None,
     ) -> None:
         source_id = str(getattr(document, "source_id", "") or getattr(document, "relative_path", "") or getattr(document, "document_id", "") or "")
         if not source_id:
@@ -485,6 +490,7 @@ class Server:
                 page_occurrences=page_occurrences,
                 source_id=source_id,
             ),
+            ocr_page=ocr_page,
         )
         if outcome["event"] is not None:
             outcome["event"]["payload"]["total_pages"] = int(getattr(document, "page_count", 0) or 0)
@@ -558,12 +564,20 @@ class Server:
             if not isinstance(report_failures, list):
                 report_failures = []
             failure_count = self.store.replace_task_failures(task_id, report_failures)
+            corpus_status = self.store.finalize_ocr_corpus(
+                task_id,
+                expected_pages=final_total_pages,
+                failure_count=failure_count,
+            )
             if tc.should_cancel():
                 self.store.update_task(task_id, status="cancelled", failure_count=failure_count, finished_at=now_iso())
                 self.emit_task_event(
                     "task.cancelled",
                     task_id,
-                    {"reason": "cancelled"},
+                    {
+                        "reason": "cancelled",
+                        "ocr_corpus": corpus_status,
+                    },
                     worker_generation=worker_generation,
                 )
             else:
@@ -587,6 +601,7 @@ class Server:
                         "total_pages": final_total_pages,
                         "occurrence_count": final_occurrence_count,
                         "failure_count": failure_count,
+                        "ocr_corpus": corpus_status,
                     },
                     worker_generation=worker_generation,
                 )
