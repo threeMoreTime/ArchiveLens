@@ -1574,6 +1574,305 @@ class TaskStore:
             result.append(item)
         return result
 
+    def list_ocr_search_candidate_lines(
+        self,
+        task_id: str,
+        *,
+        normalized_query: str,
+        query_forms: dict[str, str],
+        include_top_k: bool = False,
+    ) -> list[dict[str, Any]]:
+        required_kinds = ("simplified", "traditional", "taiwan", "hong_kong")
+        if any(not isinstance(query_forms.get(kind), str) for kind in required_kinds):
+            raise ValueError("all OCR query forms are required")
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT l.*, i.index_kind, i.indexed_text
+                FROM ocr_lines AS l
+                LEFT JOIN ocr_line_indexes AS i
+                    ON i.ocr_line_id=l.ocr_line_id
+                WHERE l.task_id=?
+                  AND (
+                    instr(l.raw_text, ?) > 0
+                    OR instr(l.resolved_text, ?) > 0
+                    OR (
+                        i.index_kind='simplified'
+                        AND instr(i.indexed_text, ?) > 0
+                    )
+                    OR (
+                        i.index_kind='traditional'
+                        AND instr(i.indexed_text, ?) > 0
+                    )
+                    OR (
+                        i.index_kind='taiwan'
+                        AND instr(i.indexed_text, ?) > 0
+                    )
+                    OR (
+                        i.index_kind='hong_kong'
+                        AND instr(i.indexed_text, ?) > 0
+                    )
+                    OR (
+                        ? = 1
+                        AND l.isolated_top_k_json <> '[]'
+                    )
+                  )
+                ORDER BY l.source_id, l.page_no, l.line_index, i.index_kind
+                """,
+                (
+                    task_id,
+                    normalized_query,
+                    normalized_query,
+                    query_forms["simplified"],
+                    query_forms["traditional"],
+                    query_forms["taiwan"],
+                    query_forms["hong_kong"],
+                    1 if include_top_k else 0,
+                ),
+            ).fetchall()
+        result_by_id: dict[str, dict[str, Any]] = {}
+        json_fields = (
+            "bbox_json",
+            "word_boxes_json",
+            "word_text_json",
+            "word_confidences_json",
+            "isolated_top_k_json",
+            "script_reconciliations_json",
+            "correction_provenance_json",
+        )
+        for row in rows:
+            line_id = str(row["ocr_line_id"])
+            item = result_by_id.get(line_id)
+            if item is None:
+                item = dict(row)
+                item.pop("index_kind", None)
+                item.pop("indexed_text", None)
+                item["indexes"] = {}
+                for field in json_fields:
+                    value = item.get(field)
+                    item[field.removesuffix("_json")] = (
+                        json.loads(value)
+                        if isinstance(value, str) and value
+                        else None
+                    )
+                result_by_id[line_id] = item
+            index_kind = row["index_kind"]
+            indexed_text = row["indexed_text"]
+            if isinstance(index_kind, str) and isinstance(indexed_text, str):
+                item["indexes"][index_kind] = indexed_text
+        return list(result_by_id.values())
+
+    def save_ocr_search_results(
+        self,
+        *,
+        task_id: str,
+        query_text: str,
+        normalized_query: str,
+        script_scope: str,
+        query_forms: dict[str, Any],
+        hits: Iterable[dict[str, Any]],
+        counts: dict[str, Any],
+    ) -> dict[str, Any]:
+        if script_scope not in {"simplified", "traditional", "both"}:
+            raise ValueError("invalid OCR search script scope")
+        hit_items = [dict(hit) for hit in hits]
+        created_at = now_iso()
+        search_session_id = new_id("search_")
+        with self._lock:
+            task = self.conn.execute(
+                """
+                SELECT ocr_corpus_version, ocr_index_status
+                FROM tasks WHERE task_id=?
+                """,
+                (task_id,),
+            ).fetchone()
+            if task is None:
+                raise KeyError(task_id)
+            if int(task["ocr_corpus_version"] or 0) <= 0:
+                raise ValueError(
+                    f"OCR corpus is unavailable: {task['ocr_index_status']}"
+                )
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT INTO ocr_search_sessions (
+                        search_session_id, task_id, query_text,
+                        normalized_query, script_scope, status,
+                        corpus_version, query_forms_json, counts_json,
+                        created_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        search_session_id,
+                        task_id,
+                        query_text,
+                        normalized_query,
+                        script_scope,
+                        int(task["ocr_corpus_version"]),
+                        self._json_value(query_forms, {}),
+                        self._json_value(counts, {}),
+                        created_at,
+                        created_at,
+                    ),
+                )
+                for hit in hit_items:
+                    self.conn.execute(
+                        """
+                        INSERT INTO ocr_search_hits (
+                            search_hit_id, search_session_id, task_id,
+                            ocr_line_id, match_layer, layer_priority,
+                            index_kind, matched_text, index_start, index_end,
+                            source_start, source_end, source_text,
+                            source_script, verification_status, confidence,
+                            payload_json, created_at
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?
+                        )
+                        """,
+                        (
+                            new_id("hit_"),
+                            search_session_id,
+                            task_id,
+                            hit["ocr_line_id"],
+                            hit["match_layer"],
+                            int(hit["layer_priority"]),
+                            hit["index_kind"],
+                            hit["matched_text"],
+                            int(hit["index_start"]),
+                            int(hit["index_end"]),
+                            hit.get("source_start"),
+                            hit.get("source_end"),
+                            str(hit.get("source_text") or ""),
+                            str(hit.get("source_script") or "neutral"),
+                            hit["verification_status"],
+                            float(hit.get("confidence", 0.0) or 0.0),
+                            self._json_value(hit.get("payload"), {}),
+                            created_at,
+                        ),
+                    )
+        return self.get_ocr_search_session(search_session_id)
+
+    def get_ocr_search_session(
+        self,
+        search_session_id: str,
+    ) -> dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT * FROM ocr_search_sessions
+                WHERE search_session_id=?
+                """,
+                (search_session_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(search_session_id)
+        item = dict(row)
+        item["query_forms"] = json.loads(item.pop("query_forms_json"))
+        item["counts"] = json.loads(item.pop("counts_json"))
+        return item
+
+    def list_ocr_search_sessions(
+        self,
+        task_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("search session limit must be between 1 and 200")
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM ocr_search_sessions
+                WHERE task_id=?
+                ORDER BY created_at DESC, search_session_id DESC
+                LIMIT ?
+                """,
+                (task_id, limit),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["query_forms"] = json.loads(item.pop("query_forms_json"))
+            item["counts"] = json.loads(item.pop("counts_json"))
+            result.append(item)
+        return result
+
+    def query_ocr_search_hits(
+        self,
+        search_session_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("search hit limit must be between 1 and 200")
+        if type(offset) is not int or offset < 0:
+            raise ValueError("search hit offset must be non-negative")
+        with self._lock:
+            session_exists = self.conn.execute(
+                """
+                SELECT 1 FROM ocr_search_sessions
+                WHERE search_session_id=?
+                """,
+                (search_session_id,),
+            ).fetchone()
+            if session_exists is None:
+                raise KeyError(search_session_id)
+            total = int(
+                self.conn.execute(
+                    """
+                    SELECT COUNT(*) AS count FROM ocr_search_hits
+                    WHERE search_session_id=?
+                    """,
+                    (search_session_id,),
+                ).fetchone()["count"]
+            )
+            rows = self.conn.execute(
+                """
+                SELECT
+                    h.*,
+                    l.document_id,
+                    l.source_id,
+                    l.page_no,
+                    l.page_index,
+                    l.line_index,
+                    l.raw_text,
+                    l.resolved_text,
+                    l.line_confidence,
+                    l.bbox_json,
+                    l.word_boxes_json,
+                    l.isolated_top_k_json,
+                    s.display_path,
+                    s.file_name
+                FROM ocr_search_hits AS h
+                JOIN ocr_lines AS l ON l.ocr_line_id=h.ocr_line_id
+                LEFT JOIN task_sources AS s
+                    ON s.task_id=h.task_id AND s.source_id=l.source_id
+                WHERE h.search_session_id=?
+                ORDER BY
+                    h.layer_priority,
+                    l.source_id,
+                    l.page_no,
+                    l.line_index,
+                    h.source_start,
+                    h.index_start
+                LIMIT ? OFFSET ?
+                """,
+                (search_session_id, limit, offset),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = json.loads(item.pop("payload_json"))
+            item["bbox"] = json.loads(item.pop("bbox_json"))
+            item["word_boxes"] = json.loads(item.pop("word_boxes_json"))
+            item["isolated_top_k"] = json.loads(
+                item.pop("isolated_top_k_json")
+            )
+            result.append(item)
+        return total, result
+
     def _validate_recovery_occurrence(self, occurrence: dict[str, Any], *, source_id: str, page_no: int) -> None:
         matched = occurrence.get("matched_text") or occurrence.get("matched_character")
         if not isinstance(matched, str) or not matched:
