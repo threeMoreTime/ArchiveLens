@@ -46,12 +46,17 @@ pnpm --filter @archivelens/desktop dist
 
 ### 发布闭环要求
 
-- 开发 worktree 全量回归通过后，才允许升级版本并冻结候选 SHA；
-- clean worktree 必须重新安装依赖、重跑测试、重建 Engine / win-unpacked；
-- 仅在 clean Engine、clean OCR、clean lifecycle E2E 全部通过后，才允许生成 Setup / Portable；
+- `pnpm gate:release-local` 是 Windows 10/11 x64 的零成本、本地、非发布候选门禁；
+- 门禁只接受 clean worktree，并冻结完整候选 SHA，重新安装锁定依赖、运行源码与
+  E2E 回归、重建 Engine / Setup / Portable、执行安装/便携版 smoke 和同 SHA 校验；
+- 已具备校验缓存时可运行 `pnpm gate:release-local -- -OfflineNative`，原生组件
+  准备阶段完全离线且仍逐项验证 SHA-256；
 - `verify-license-compliance.py` 的源码与打包技术门禁必须通过；
-- 公开发布必须另外通过绑定冻结候选 SHA 的许可证人工门禁，且仍需独立的正式发布授权；
-- 最终交付必须附带 `release-manifest.json`、`SHA256SUMS.txt` 与 `verify-release-chain.ps1` 输出。
+- 门禁不会 push、创建 PR、合并、购买签名、部署或发布。公开发布必须另外通过
+  绑定冻结候选 SHA 的许可证人工门禁，且仍需独立的正式发布授权；
+- 当前没有上一可信稳定版安装器时，跨版本升级与回滚必须标记 `NOT_VERIFIED`，
+  不得据此宣称稳定发布就绪；
+- 详细步骤、证据和阻塞规则见 [`release-gate.md`](release-gate.md)。
 
 ### 安装包产物（目标）
 
@@ -66,9 +71,10 @@ SHA256SUMS.txt
 ## 发布前检查清单（任务 §三十四）
 
 - [ ] Python tests / Desktop tests / IPC contract
-- [ ] Electron E2E / packaged smoke / installer smoke
+- [ ] Electron E2E / packaged smoke / installer + portable smoke
 - [ ] 包内无用户数据 / 开发机绝对路径 / `.venv` / `node_modules` / Git 历史
 - [ ] 许可证技术门禁 / 人工许可证审核 / 校验和（SHA-256）
+- [ ] 使用上一可信稳定版完成真实升级与回滚验证
 
 真实 OCR fixture 使用 Windows 系统 SimHei 5.05 生成图片 PDF；字体文件不进入仓库或发布包。生成脚本固定页面参数与 PDF metadata，`expected.json` 记录字体及每个 fixture 的 SHA-256。
 

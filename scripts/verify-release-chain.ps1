@@ -15,7 +15,10 @@
   [string]$SetupEngineExe,
   [string]$PortableEngineExe,
   [string]$SetupResourcesRoot,
-  [string]$PortableResourcesRoot
+  [string]$PortableResourcesRoot,
+  [string]$SetupEvidenceJson,
+  [string]$PortableEvidenceJson,
+  [switch]$RequireCompleteCandidate
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,6 +65,55 @@ function Get-TreeSha256([string]$PathValue) {
   finally {
     $sha.Dispose()
   }
+}
+
+function Assert-SmokeEvidence(
+  [string]$EvidencePath,
+  [string]$Kind,
+  [string]$ExpectedArtifactSha,
+  [string]$ExpectedEngineSha,
+  [hashtable]$ExpectedNativeHashes
+) {
+  $resolved = Resolve-OptionalPath $EvidencePath
+  if (-not $resolved) {
+    Fail "RELEASE_SMOKE_EVIDENCE_MISSING" ('Missing {0} smoke evidence: {1}' -f $Kind, $EvidencePath)
+  }
+  $evidence = Read-Json $resolved
+  if ($evidence.status -ne "PASS" -or $evidence.kind -ne $Kind) {
+    Fail "RELEASE_SMOKE_EVIDENCE_INVALID" ('{0} smoke did not pass: {1}' -f $Kind, ($evidence | ConvertTo-Json -Compress -Depth 8))
+  }
+  if ($evidence.candidate_sha -ne $CandidateSha -or $evidence.version -ne $Version) {
+    Fail "RELEASE_SMOKE_EVIDENCE_INVALID" ('{0} smoke candidate/version mismatch' -f $Kind)
+  }
+  $resource = $evidence.resource_evidence
+  if (-not $resource) {
+    Fail "RELEASE_SMOKE_EVIDENCE_INVALID" ('{0} smoke is missing resource evidence' -f $Kind)
+  }
+  if ($resource.artifact_sha256 -ne $ExpectedArtifactSha) {
+    Fail "RELEASE_ARTIFACT_HASH_MISMATCH" ('{0} smoke artifact SHA mismatch' -f $Kind)
+  }
+  if ($resource.engine_sha256 -ne $ExpectedEngineSha) {
+    Fail "RELEASE_ARTIFACT_HASH_MISMATCH" ('{0} embedded Engine SHA mismatch' -f $Kind)
+  }
+  if (
+    $resource.native_tesseract_tree_sha256 -ne $ExpectedNativeHashes["tesseract"] -or
+    $resource.native_djvulibre_tree_sha256 -ne $ExpectedNativeHashes["djvulibre"]
+  ) {
+    Fail "RELEASE_NATIVE_HASH_MISMATCH" ('{0} native runtime evidence mismatch' -f $Kind)
+  }
+  if ($resource.license_gate_status -ne "PASS" -or $resource.offline_native_status -ne "PASS") {
+    Fail "RELEASE_SMOKE_EVIDENCE_INVALID" ('{0} packaged license/offline-native evidence did not pass' -f $Kind)
+  }
+  if ($evidence.application_ready -ne $true -or $evidence.process_cleanup -ne "PASS") {
+    Fail "RELEASE_SMOKE_EVIDENCE_INVALID" ('{0} startup/process cleanup evidence did not pass' -f $Kind)
+  }
+  if ($Kind -eq "setup" -and $evidence.uninstall -ne "PASS") {
+    Fail "RELEASE_SMOKE_EVIDENCE_INVALID" "Setup uninstall evidence did not pass"
+  }
+  if ($Kind -eq "portable" -and $evidence.extraction_cleanup -ne "PASS") {
+    Fail "RELEASE_SMOKE_EVIDENCE_INVALID" "Portable extraction cleanup evidence did not pass"
+  }
+  return $resolved
 }
 
 function Assert-NativeRuntime([string]$RootPath, [bool]$PackagedLayout, [string]$Label, [object]$ManifestPayload) {
@@ -154,6 +206,37 @@ foreach ($payload in @($engineInfo, $desktopInfo, $manifest)) {
   }
 }
 
+if ($RequireCompleteCandidate) {
+  foreach ($requiredInput in @(
+    @{ Name = "SetupExe"; Value = $SetupExe },
+    @{ Name = "PortableExe"; Value = $PortableExe },
+    @{ Name = "SetupEvidenceJson"; Value = $SetupEvidenceJson },
+    @{ Name = "PortableEvidenceJson"; Value = $PortableEvidenceJson }
+  )) {
+    if ([string]::IsNullOrWhiteSpace([string]$requiredInput.Value)) {
+      Fail "RELEASE_COMPLETE_CANDIDATE_REQUIRED" ('Missing complete-candidate input: {0}' -f $requiredInput.Name)
+    }
+  }
+  if (-not $manifest.setup_sha256 -or -not $manifest.portable_sha256) {
+    Fail "RELEASE_COMPLETE_CANDIDATE_REQUIRED" "Manifest is missing Setup or Portable hashes"
+  }
+  $testSummary = $manifest.test_summary
+  if (
+    -not $testSummary -or
+    $testSummary.schema_version -ne 1 -or
+    $testSummary.candidate_sha -ne $CandidateSha -or
+    $testSummary.scope -ne "local-zero-cost-non-release" -or
+    $testSummary.monetary_cost -ne 0 -or
+    $testSummary.formal_release_action -ne "NOT_PERFORMED"
+  ) {
+    Fail "RELEASE_TEST_SUMMARY_INVALID" "Manifest test summary does not describe the frozen zero-cost non-release candidate"
+  }
+  $failedSteps = @($testSummary.steps | Where-Object { $_.status -ne "PASS" })
+  if ($failedSteps.Count -gt 0) {
+    Fail "RELEASE_TEST_SUMMARY_INVALID" ('Manifest test summary contains non-passing steps: {0}' -f (($failedSteps | ConvertTo-Json -Compress -Depth 6)))
+  }
+}
+
 if (-not $manifest.native_dependencies -or -not $manifest.native_lock_sha256) {
   Fail "RELEASE_NATIVE_MANIFEST_INVALID" "Manifest does not contain locked native dependency evidence"
 }
@@ -207,6 +290,27 @@ foreach ($artifact in $optionalArtifacts) {
   }
 }
 
+$setupEvidenceResolved = $null
+$portableEvidenceResolved = $null
+if (-not [string]::IsNullOrWhiteSpace($SetupEvidenceJson)) {
+  if (-not $manifest.setup_sha256) { Fail "RELEASE_SMOKE_EVIDENCE_INVALID" "Manifest is missing setup_sha256" }
+  $setupEvidenceResolved = Assert-SmokeEvidence `
+    $SetupEvidenceJson `
+    "setup" `
+    $manifest.setup_sha256 `
+    $engineSha `
+    $cleanNativeHashes
+}
+if (-not [string]::IsNullOrWhiteSpace($PortableEvidenceJson)) {
+  if (-not $manifest.portable_sha256) { Fail "RELEASE_SMOKE_EVIDENCE_INVALID" "Manifest is missing portable_sha256" }
+  $portableEvidenceResolved = Assert-SmokeEvidence `
+    $PortableEvidenceJson `
+    "portable" `
+    $manifest.portable_sha256 `
+    $engineSha `
+    $cleanNativeHashes
+}
+
 [pscustomobject]@{
   candidate_sha = $CandidateSha
   version = $Version
@@ -217,4 +321,6 @@ foreach ($artifact in $optionalArtifacts) {
   native_tesseract_tree_sha256 = $cleanNativeHashes["tesseract"]
   native_djvulibre_tree_sha256 = $cleanNativeHashes["djvulibre"]
   manifest = $manifestResolved
+  setup_smoke_evidence = $setupEvidenceResolved
+  portable_smoke_evidence = $portableEvidenceResolved
 } | ConvertTo-Json -Depth 4

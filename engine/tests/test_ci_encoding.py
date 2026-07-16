@@ -23,6 +23,8 @@ CI_SMOKE_SCRIPTS = [
 ]
 POWERSHELL_RELEASE_SCRIPTS = [
     ROOT / "scripts" / "build-engine.ps1",
+    ROOT / "scripts" / "release-smoke-evidence.ps1",
+    ROOT / "scripts" / "run-zero-cost-release-gate.ps1",
     ROOT / "scripts" / "verify-release-chain.ps1",
     ROOT / "scripts" / "smoke-installer.ps1",
     ROOT / "scripts" / "smoke-portable.ps1",
@@ -114,6 +116,8 @@ class CiEncodingTests(unittest.TestCase):
 $ErrorActionPreference = 'Stop'
 $scripts = @(
   'scripts/build-engine.ps1',
+  'scripts/release-smoke-evidence.ps1',
+  'scripts/run-zero-cost-release-gate.ps1',
   'scripts/verify-release-chain.ps1',
   'scripts/smoke-installer.ps1',
   'scripts/smoke-portable.ps1',
@@ -196,6 +200,8 @@ Write-Output 'WINDOWS_POWERSHELL_PARSE_PASS'
 $ErrorActionPreference = 'Stop'
 $scripts = @(
   'scripts/build-engine.ps1',
+  'scripts/release-smoke-evidence.ps1',
+  'scripts/run-zero-cost-release-gate.ps1',
   'scripts/verify-release-chain.ps1',
   'scripts/smoke-installer.ps1',
   'scripts/smoke-portable.ps1',

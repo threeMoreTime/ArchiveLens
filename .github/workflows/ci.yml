@@ -220,6 +220,8 @@ jobs:
           $scripts = @(
             'scripts/build-engine.ps1',
             'scripts/prepare-native-runtime.ps1',
+            'scripts/release-smoke-evidence.ps1',
+            'scripts/run-zero-cost-release-gate.ps1',
             'scripts/verify-release-chain.ps1',
             'scripts/smoke-installer.ps1',
             'scripts/smoke-portable.ps1',
@@ -251,6 +253,8 @@ jobs:
           $scripts = @(
             'scripts/build-engine.ps1',
             'scripts/prepare-native-runtime.ps1',
+            'scripts/release-smoke-evidence.ps1',
+            'scripts/run-zero-cost-release-gate.ps1',
             'scripts/verify-release-chain.ps1',
             'scripts/smoke-installer.ps1',
             'scripts/smoke-portable.ps1',

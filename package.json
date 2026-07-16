@@ -17,6 +17,7 @@
     "test:contract": "pnpm --filter @archivelens/desktop run test:contract",
     "lint": "pnpm -r lint",
     "check:licenses": "python scripts/verify-license-compliance.py --mode source",
+    "gate:release-local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-zero-cost-release-gate.ps1",
     "prepare:native": "powershell -ExecutionPolicy Bypass -File scripts/prepare-native-runtime.ps1",
     "build:engine": "powershell -ExecutionPolicy Bypass -File scripts/build-engine.ps1",
     "build:installer": "pnpm run prepare:native && pnpm run build:engine && pnpm --filter @archivelens/desktop dist:prepared",
