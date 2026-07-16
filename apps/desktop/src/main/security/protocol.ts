@@ -1,7 +1,7 @@
 import { net, protocol } from "electron";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isWithin } from "./paths";
+import { isWithin, resolveRealPathWithin } from "./paths";
 import { logger } from "../logging/logger";
 
 /**
@@ -54,7 +54,7 @@ export function registerAssetProtocol(): void {
   protocol.handle(ASSET_SCHEME, (request) => handleAssetRequest(request));
 }
 
-function handleAssetRequest(request: GlobalRequest): Response | Promise<Response> {
+async function handleAssetRequest(request: GlobalRequest): Promise<Response> {
   try {
     const url = new URL(request.url);
     const host = url.hostname;
@@ -72,7 +72,15 @@ function handleAssetRequest(request: GlobalRequest): Response | Promise<Response
       logger.warn(`al-resource 路径逃逸拦截：${relPath}`);
       return new Response("forbidden", { status: 403 });
     }
-    return net.fetch(pathToFileURL(full).toString());
+    const containment = await resolveRealPathWithin(full, base);
+    if (containment.status === "escaped") {
+      logger.warn(`al-resource 联接路径逃逸拦截：${relPath}`);
+      return new Response("forbidden", { status: 403 });
+    }
+    if (containment.status === "missing") {
+      return new Response("not found", { status: 404 });
+    }
+    return net.fetch(pathToFileURL(containment.path).toString());
   } catch (err) {
     logger.error(`al-resource 协议错误：${(err as Error).message}`);
     return new Response("internal error", { status: 500 });

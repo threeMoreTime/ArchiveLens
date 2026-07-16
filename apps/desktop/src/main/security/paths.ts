@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
 /**
@@ -14,4 +15,23 @@ export function isWithin(target: string, base: string): boolean {
 /** 同时校验多个 base，命中任一即通过。 */
 export function isWithinAny(target: string, bases: string[]): boolean {
   return bases.some((base) => isWithin(target, base));
+}
+
+export type RealPathContainment =
+  | { status: "ok"; path: string }
+  | { status: "missing" }
+  | { status: "escaped" };
+
+/**
+ * 解析文件系统真实路径后再次执行包含关系校验，阻止目录联接或符号链接绕过词法检查。
+ */
+export async function resolveRealPathWithin(target: string, base: string): Promise<RealPathContainment> {
+  try {
+    const [realTarget, realBase] = await Promise.all([realpath(target), realpath(base)]);
+    return isWithin(realTarget, realBase)
+      ? { status: "ok", path: realTarget }
+      : { status: "escaped" };
+  } catch {
+    return { status: "missing" };
+  }
 }
