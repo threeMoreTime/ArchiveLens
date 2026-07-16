@@ -4,6 +4,16 @@
 
 ArchiveLens 桌面端由三个进程层级 + 一个 Python Sidecar 组成：
 
+### 桌面运行时基线
+
+稳定候选使用 Electron 43.1.1（Chromium 150 / Node 24），目标平台保持
+Windows 10/11 x64。升级只改变 Electron 运行时，不同时升级 React、Vite、
+electron-vite 或 electron-builder，以便把兼容性回归限制在单一变量内。
+
+升级后必须继续保持 `sandbox: true`、`contextIsolation: true`、
+`nodeIntegration: false`、生产 CSP、应用内导航白名单和最小化 preload API；
+任何需要放宽这些边界的兼容方式都不得采用。
+
 ```
 ┌─────────────────────────────────────────────┐
 │ Electron Renderer                           │
