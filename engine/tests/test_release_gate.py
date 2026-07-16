@@ -72,6 +72,8 @@ class ReleaseGateTests(unittest.TestCase):
             'monetary_cost = 0',
             'formal_release_action = "NOT_PERFORMED"',
             'upgrade_rollback_status = "NOT_VERIFIED"',
+            '$ErrorActionPreference = "Continue"',
+            "$script:Steps.ToArray()",
         ):
             self.assertIn(required, text)
 

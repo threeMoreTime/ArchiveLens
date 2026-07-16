@@ -51,7 +51,9 @@ function Invoke-GateStep(
   $logPath = Join-Path $script:LogsRoot ("{0:d2}-{1}.log" -f ($script:Steps.Count + 1), $safeName)
   Write-Host ("[RUN] {0}" -f $Name)
   $exitCode = 1
+  $previousErrorActionPreference = $ErrorActionPreference
   try {
+    $ErrorActionPreference = "Continue"
     & $Command @Arguments 2>&1 | Tee-Object -FilePath $logPath
     $exitCode = $LASTEXITCODE
   }
@@ -61,6 +63,7 @@ function Invoke-GateStep(
     throw
   }
   finally {
+    $ErrorActionPreference = $previousErrorActionPreference
     $completed = Get-Date
     $record = [ordered]@{
       name = $Name
@@ -178,11 +181,11 @@ function Save-GateSummary([string]$Status, [string]$ErrorMessage = "") {
     deployment = "NOT_PERFORMED"
     public_release_license_gate = $script:PublicLicenseStatus
     stable_public_release_status = "BLOCKED"
-    stable_public_release_blockers = @($stableBlockers)
+    stable_public_release_blockers = $stableBlockers.ToArray()
     upgrade_rollback_status = "NOT_VERIFIED"
     signature_policy = "Alpha accepts Valid or NotSigned artifacts; no paid signing service is used"
     signatures = $script:Signatures
-    steps = @($script:Steps)
+    steps = $script:Steps.ToArray()
     evidence_root = $script:ResolvedEvidenceRoot
     release_manifest = $script:ManifestPath
     sha256sums = $script:Sha256SumsPath
