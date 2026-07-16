@@ -158,9 +158,16 @@ export default function TaskCenter() {
           onChange={(event) => { setStatus(event.target.value); setPageIndex(0); }}
         >
           <option value="">全部状态</option>
+          <option value="draft">待启动</option>
+          <option value="queued">排队中</option>
+          <option value="starting">正在启动</option>
           <option value="running">扫描中</option>
+          <option value="pausing">正在暂停</option>
           <option value="paused">已暂停</option>
+          <option value="resuming">正在恢复</option>
           <option value="recoverable">可恢复</option>
+          <option value="stopping">正在取消</option>
+          <option value="stale">状态异常</option>
           <option value="completed">已完成或部分完成</option>
           <option value="failed">失败</option>
           <option value="cancelled">已取消</option>

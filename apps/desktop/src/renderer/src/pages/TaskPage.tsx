@@ -105,7 +105,7 @@ export default function TaskPage() {
 
   const knownTotal = Boolean(task && task.total_pages > 0);
   const percent = task && knownTotal ? Math.min(100, Math.round(task.processed_pages / task.total_pages * 100)) : 0;
-  const activeStatus = Boolean(task && ["queued", "starting", "running", "pausing", "resuming"].includes(task.status));
+  const activeStatus = Boolean(task && ["queued", "starting", "running", "pausing", "resuming", "stopping"].includes(task.status));
   const statusView = task ? taskStatusView(task) : null;
   const failureDetails = task?.failures ?? [];
   const statusDetail = !task ? "" : task.status === "completed" && task.failure_count > 0
@@ -114,13 +114,17 @@ export default function TaskPage() {
       ? "任务已经创建，但尚未启动。确认本地识别环境后，点击“启动任务”继续；无需重新创建任务。"
       : task.status === "completed"
       ? "扫描已完成。可进入校对工作台确认每条命中，或导出完整结果。"
-      : ["paused", "recoverable"].includes(task.status)
-        ? "任务处于可恢复状态，已完成的数据已安全保留在本机。"
-        : task.status === "failed"
-          ? "任务未能继续执行。已完成的数据仍会保留；查看失败原因和日志后，可使用原目录重新创建任务。"
-          : task.status === "cancelled"
-            ? "任务已取消，取消前保存的结果仍可查看和导出。"
-            : "正在从本地档案中提取 OCR 结果，进度会自动刷新。";
+      : task.status === "stopping"
+        ? "正在安全取消任务；当前页处理结束后会保留已经写入的结果，请勿重复提交取消请求。"
+        : task.status === "stale"
+          ? "任务运行状态异常，已有数据仍保留在本机。请查看日志并等待状态恢复，或在确认来源后重新创建任务。"
+          : ["paused", "recoverable"].includes(task.status)
+            ? "任务处于可恢复状态，已完成的数据已安全保留在本机。"
+            : task.status === "failed"
+              ? "任务未能继续执行。已完成的数据仍会保留；查看失败原因和日志后，可使用原目录重新创建任务。"
+              : task.status === "cancelled"
+                ? "任务已取消，取消前保存的结果仍可查看和导出。"
+                : "正在从本地档案中提取 OCR 结果，进度会自动刷新。";
 
   return (
     <div className="al-welcome al-task-page">
@@ -162,7 +166,7 @@ export default function TaskPage() {
               <Button onClick={() => nav(`/export/${taskId}`)}>导出结果</Button>
               {task.status === "running" && <Button disabled={Boolean(action)} onClick={() => void runAction("pause")}>{action === "pause" ? "正在请求暂停…" : "暂停任务"}</Button>}
               {!legacyRequiresReview && ["paused", "recoverable"].includes(task.status) && <Button disabled={Boolean(action)} onClick={() => void runAction("resume")}>{action === "resume" ? "正在恢复…" : "继续任务"}</Button>}
-              {!legacyRequiresReview && !["cancelled", "completed", "failed"].includes(task.status) && <Button disabled={Boolean(action)} onClick={() => void runAction("cancel")}>{action === "cancel" ? "正在取消…" : "取消任务"}</Button>}
+              {!legacyRequiresReview && !["cancelled", "completed", "failed", "stopping"].includes(task.status) && <Button disabled={Boolean(action)} onClick={() => void runAction("cancel")}>{action === "cancel" ? "正在取消…" : "取消任务"}</Button>}
               <Button onClick={() => nav("/scan/new", {
                 state: task.source_kind === "files"
                   ? { sourceKind: "files", sourceFiles: task.source_files, sourceTaskId: task.task_id }

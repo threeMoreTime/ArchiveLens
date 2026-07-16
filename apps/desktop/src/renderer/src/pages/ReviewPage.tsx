@@ -148,6 +148,7 @@ export default function ReviewPage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [variantFilter, setVariantFilter] = useState<string>("");
   const [searchMode, setSearchMode] = useState<string>("");
+  const [readyTaskId, setReadyTaskId] = useState("");
   const [search, setSearch] = useState("");
   const [reviewSummary, setReviewSummary] = useState<ReviewSummary>(EMPTY_SUMMARY);
   const [taskStatus, setTaskStatus] = useState("");
@@ -293,6 +294,8 @@ export default function ReviewPage() {
     setTaskStatus("");
     setScanComplete(false);
     setReviewComplete(false);
+    setReadyTaskId("");
+    setLoading(true);
     setQueryError("");
     setActionError("");
     setPageOrientations({});
@@ -318,13 +321,22 @@ export default function ReviewPage() {
   }, [taskId]);
 
   useEffect(() => {
+    if (readyTaskId !== taskId) return;
     void loadPage(pageIndex);
-  }, [loadPage, pageIndex]);
+  }, [loadPage, pageIndex, readyTaskId, taskId]);
 
   useEffect(() => {
+    let active = true;
     window.archiveLens.tasks.get(taskId).then((task: { search_mode?: string }) => {
+      if (!active) return;
       setSearchMode(task.search_mode ?? "");
-    }).catch((error: unknown) => setQueryError(errorMessage(error)));
+      setReadyTaskId(taskId);
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setLoading(false);
+      setQueryError(errorMessage(error));
+    });
+    return () => { active = false; };
   }, [taskId]);
 
   useEffect(() => {

@@ -38,14 +38,16 @@ export function taskStatusView(
     pausing: "正在暂停",
     paused: "已暂停",
     resuming: "正在恢复",
+    stopping: "正在取消",
     recoverable: "可恢复",
+    stale: "状态异常",
     completed: "已完成",
     failed: "失败",
     cancelled: "已取消",
   };
   const tone: BadgeTone = task.status === "completed"
     ? "PASS"
-    : ["failed", "cancelled"].includes(task.status)
+    : ["failed", "cancelled", "stale"].includes(task.status)
       ? "FAIL"
       : "WARN";
   return { label: (labels[task.status] ?? task.status) || "状态未知", tone };
