@@ -9,6 +9,7 @@ const execFileAsync = promisify(execFile);
 const APP_DIR = path.resolve(__dirname, "..");
 const ROOT_DIR = path.resolve(APP_DIR, "..", "..");
 const ENGINE_SRC = path.join(ROOT_DIR, "engine", "src");
+const SEED_REVIEW_TASK = path.join(__dirname, "helpers", "seed-review-task.py");
 const RUN_ID = (process.env["ARCHIVELENS_TEST_RUN_ID"] ?? "review-completeness").replace(/[^A-Za-z0-9._-]/g, "-");
 
 async function resolvePythonExecutable(): Promise<string> {
@@ -30,36 +31,7 @@ async function makeOwnedUserData(): Promise<string> {
 
 async function seedReviewTask(userDataDir: string, count: number): Promise<{ taskId: string; occurrenceIds: string[] }> {
   const python = await resolvePythonExecutable();
-  const script = String.raw`
-import json, sys
-from pathlib import Path
-from archivelens_engine.db.store import TaskStore
-root = Path(sys.argv[1]) / "engine"
-root.mkdir(parents=True, exist_ok=True)
-store = TaskStore(root / "archivelens.db")
-task_id = store.create_task(name="review completeness", search_terms=["档案"], search_mode="exact_literal", status="completed")
-items = []
-for index in range(int(sys.argv[2])):
-    items.append({
-        "occurrence_id": f"occ-{index:04d}",
-        "document_id": f"document-{index // 100:02d}",
-        "source_id": f"document-{index // 100:02d}.pdf",
-        "file_name": f"document-{index // 100:02d}.pdf",
-        "relative_path": f"document-{index // 100:02d}.pdf",
-        "page_number": index // 4 + 1,
-        "page_occurrence_index": index % 4,
-        "matched_text": "档案",
-        "match_start": 0,
-        "match_end": 2,
-        "bbox_hash": f"bbox-{index:04d}",
-        "context_full": f"档案结果 {index}",
-        "verification_status": "needs_review",
-    })
-store.add_occurrences(task_id, items)
-print(json.dumps({"taskId": task_id, "occurrenceIds": [item["occurrence_id"] for item in items]}))
-store.close()
-`;
-  const result = await execFileAsync(python, ["-c", script, userDataDir, String(count)], {
+  const result = await execFileAsync(python, [SEED_REVIEW_TASK, userDataDir, String(count)], {
     env: { ...process.env, PYTHONPATH: ENGINE_SRC, PYTHONUTF8: "1" },
   });
   return JSON.parse(result.stdout) as { taskId: string; occurrenceIds: string[] };

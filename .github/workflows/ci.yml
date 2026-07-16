@@ -167,10 +167,10 @@ jobs:
       - name: Build desktop app
         run: pnpm --filter @archivelens/desktop build
 
-      - name: Run lifecycle and custom-search Playwright suites
+      - name: Run lifecycle, custom-search, and review-completeness Playwright suites
         run: |
           $env:ARCHIVELENS_E2E_PYTHON = Join-Path $env:pythonLocation "python.exe"
-          pnpm --filter @archivelens/desktop exec playwright test e2e/lifecycle.spec.ts e2e/custom-search.spec.ts
+          pnpm --filter @archivelens/desktop exec playwright test e2e/lifecycle.spec.ts e2e/custom-search.spec.ts e2e/review-completeness.spec.ts
 
       - name: Upload lifecycle artifacts
         if: failure()
