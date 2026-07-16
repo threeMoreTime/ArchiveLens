@@ -45,7 +45,7 @@ from .protocol import (
     safe_parse,
 )
 from .runtime.task_control import TaskControl
-from .runtime.task_state import LEGAL_TRANSITIONS, TERMINAL_TASK_STATUSES, TaskStateConflict
+from .runtime.task_state import LEGAL_TRANSITIONS, TERMINAL_TASK_STATUSES, TaskStateConflict, can_resume
 from .search_terms import EXACT_LITERAL_SEARCH_MODE, normalize_search_text, unicode_sequence
 
 Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
@@ -933,11 +933,27 @@ def _h_tasks_pause(server: Server, params: dict) -> dict:
 def _h_tasks_resume(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     task = server.store.get_task(task_id)
-    if task is not None and task.get("error_code") == LEGACY_TASK_REQUIRES_REVIEW:
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    if task.get("error_code") == LEGACY_TASK_REQUIRES_REVIEW:
         raise ProtocolError(
             ErrorCode.TASK_STATE_CONFLICT,
             "旧任务缺少可信进度，不能自动恢复。请人工确认或重新创建任务。",
             {"reason": LEGACY_TASK_REQUIRES_REVIEW},
+        )
+    current = str(task["status"])
+    if not can_resume(current):
+        guidance = (
+            "失败任务不能直接继续；请使用原任务参数重新创建任务。"
+            if current == "failed"
+            else "陈旧任务必须先转换为可恢复状态后才能继续。"
+            if current == "stale"
+            else "当前任务状态不支持继续。"
+        )
+        raise ProtocolError(
+            ErrorCode.TASK_STATE_CONFLICT,
+            guidance,
+            {"current": current, "allowed": ["paused", "recoverable"]},
         )
     tc = server._task_controls.get(task_id)
     server._transition(task_id, "running")

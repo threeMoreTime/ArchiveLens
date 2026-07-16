@@ -186,8 +186,12 @@ export function createLifecycleController(deps: LifecycleControllerDeps): Lifecy
 
       if (action === "cancel") {
         if (state.awaitingTimeoutResolution && taskId) {
-          const status = await getTaskStatus(taskId);
-          if (status !== null && status !== "running" && status !== "completed" && status !== "cancelled") {
+          let status = await getTaskStatus(taskId);
+          if (status === "pausing") {
+            await waitForPausedState(taskId);
+            status = await getTaskStatus(taskId);
+          }
+          if (status === "paused" || status === "recoverable") {
             try {
               await deps.sidecar.call("tasks.resume", { task_id: taskId }, controlRequestTimeoutMs);
             } catch (error) {

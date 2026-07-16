@@ -175,7 +175,8 @@ describe("LifecycleController", () => {
       if (method === "tasks.pause") return { task_id: "task-1", status: "pausing" };
       if (method === "tasks.get") {
         getCalls += 1;
-        return { task_id: "task-1", status: getCalls === 1 ? "running" : "paused" };
+        const status = getCalls === 1 ? "running" : getCalls === 2 ? "pausing" : "paused";
+        return { task_id: "task-1", status };
       }
       if (method === "tasks.resume") return { task_id: "task-1", status: "running" };
       return {};
@@ -186,6 +187,7 @@ describe("LifecycleController", () => {
     const cancelled = await controller.selectCloseAction("cancel");
 
     expect(cancelled.outcome).toBe("cancelled");
+    expect(sidecar.call).toHaveBeenCalledWith("tasks.get", { task_id: "task-1" }, 5_000);
     expect(sidecar.call).toHaveBeenCalledWith("tasks.resume", { task_id: "task-1" }, 5_000);
     expect(controller.getState().shutdownFlowRunning).toBe(false);
     expect(controller.getState().awaitingTimeoutResolution).toBe(false);

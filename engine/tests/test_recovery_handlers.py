@@ -71,6 +71,36 @@ class RecoveryHandlerTests(unittest.TestCase):
                 _h_tasks_resume(self.server, {"task_id": task_id})
         start_scan_thread.assert_called_once()
 
+    def test_recoverable_task_can_resume_without_live_control(self) -> None:
+        created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
+        task_id = created["task_id"]
+        self.server.store.update_task(task_id, status="recoverable")
+
+        with patch.object(self.server, "start_scan_thread") as start_scan_thread:
+            result = _h_tasks_resume(self.server, {"task_id": task_id})
+
+        self.assertEqual(result["status"], "running")
+        start_scan_thread.assert_called_once()
+
+    def test_non_resumable_tasks_cannot_resume_directly(self) -> None:
+        for status in ("pausing", "failed", "stale"):
+            with self.subTest(status=status):
+                created = _h_tasks_create(
+                    self.server,
+                    {"source_dir": str(self.src), "search_text": "档案"},
+                )
+                task_id = created["task_id"]
+                self.server.store.update_task(task_id, status=status)
+
+                with patch.object(self.server, "start_scan_thread") as start_scan_thread:
+                    with self.assertRaises(ProtocolError) as raised:
+                        _h_tasks_resume(self.server, {"task_id": task_id})
+
+                self.assertEqual(raised.exception.code, "TASK_STATE_CONFLICT")
+                self.assertEqual(raised.exception.details["current"], status)
+                self.assertEqual(self.server.store.get_task(task_id)["status"], status)
+                start_scan_thread.assert_not_called()
+
     def test_legacy_task_requiring_review_cannot_resume_automatically(self) -> None:
         created = _h_tasks_create(self.server, {"source_dir": str(self.src), "search_text": "档案"})
         task_id = created["task_id"]

@@ -29,8 +29,11 @@ TASK_STATUSES = (
 #: 终态：不再自动流转。
 TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
-#: 对外可见的“可恢复”状态集合。
-RESUMABLE_STATUSES = frozenset({"paused", "recoverable", "stale", "failed"})
+#: 可由 ``tasks.resume`` 直接恢复的状态集合。
+#:
+#: ``stale`` 必须先由恢复协调逻辑归一化为 ``recoverable``；``failed`` 是
+#: 已完成失败记录，未来如需重试应使用独立 retry 合同，不能复用 resume。
+RESUMABLE_STATUSES = frozenset({"paused", "recoverable"})
 
 #: 合法状态转换（from → {to...}）。
 LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {

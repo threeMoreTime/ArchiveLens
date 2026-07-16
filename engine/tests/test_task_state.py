@@ -77,10 +77,10 @@ class CapabilityTests(unittest.TestCase):
         self.assertFalse(can_pause("completed"))
 
     def test_can_resume_resumable_set(self) -> None:
-        for status in ("paused", "recoverable", "stale", "failed"):
+        for status in ("paused", "recoverable"):
             self.assertTrue(can_resume(status), status)
-        self.assertFalse(can_resume("running"))
-        self.assertFalse(can_resume("completed"))
+        for status in ("running", "pausing", "completed", "stale", "failed"):
+            self.assertFalse(can_resume(status), status)
 
     def test_can_cancel_until_terminal(self) -> None:
         self.assertTrue(can_cancel("running"))
