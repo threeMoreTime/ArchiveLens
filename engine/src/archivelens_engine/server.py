@@ -34,6 +34,7 @@ from .documents.formats import (
 )
 from .html_export import write_offline_review_report
 from .ocr_core import build_bbox_hash
+from .ocr_engine import ArchiveLensOCR
 from .page_evidence import PageEvidenceError, PageEvidenceService
 from .protocol import (
     ErrorCode,
@@ -83,10 +84,8 @@ class ThreadSafeRapidOCR:
     避免多 Worker 同时推理导致崩溃/死锁。shutdown 时正在推理的调用会先完成。
     """
 
-    def __init__(self) -> None:
-        from rapidocr_onnxruntime import RapidOCR
-
-        self._engine = RapidOCR()
+    def __init__(self, model_path: str | Path | None = None) -> None:
+        self._engine = ArchiveLensOCR(model_path)
         self._lock = threading.RLock()
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -141,7 +140,7 @@ class Server:
         # 主线程预初始化 RapidOCR：打包冻结环境下后台线程内 onnxruntime InferenceSession
         # 创建会死锁（diag2 实证 task.started 后卡 90s）。主线程 init 后注入避免该问题。
         if self.slowfake_pages == 0:
-            self.ocr_engine: Any = ThreadSafeRapidOCR()
+            self.ocr_engine: Any = ThreadSafeRapidOCR(self.config.ocr_rec_model_path)
         else:
             self.ocr_engine = None
         self._shutting_down = False

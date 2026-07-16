@@ -20,8 +20,9 @@ ArchiveLens 自有代码采用 MIT License，全文位于
 | --- | --- | --- | --- |
 | pypdfium2 / PDFium | 5.11.0 / 随 wheel | BSD-3-Clause / BSD-style | PDF 渲染；PyInstaller 包内保留随 wheel 提供的许可材料。 |
 | Pillow | 12.1.1 | HPND-like（CMU License） | 图像解码与处理。 |
-| RapidOCR (`rapidocr-onnxruntime`) | 1.4.4 | 工程代码元数据为 Apache-2.0；上游声明 OCR 模型版权归百度 | 随包包含三个 ONNX 模型；技术门禁记录实际文件名、大小和 SHA-256。模型公开再分发必须单独人工审核。 |
+| RapidOCR (`rapidocr-onnxruntime`) | 1.4.4 运行库；RapidOCR 3.9.1 转换模型 | 工程代码元数据为 Apache-2.0；上游声明 OCR 模型版权归百度 | 检测和方向模型保留 PP-OCRv4；唯一文字识别模型锁定为 PP-OCRv6 small（18,680 字表），用于直接保留简繁字形并输出 CTC 候选。技术门禁记录实际文件名、大小和 SHA-256；模型公开再分发必须单独人工审核。 |
 | ONNX Runtime | 1.24.4 | MIT | 包内保留 `onnxruntime/LICENSE` 与 `ThirdPartyNotices.txt`。 |
+| OpenCC | 1.2.0 | Apache-2.0 | 仅在本机生成简体、标准繁体、台湾和香港字形关系，并约束同一 OCR 模型内的简繁字形复核；OCR 上下文原文始终单独保留。 |
 | pytesseract | 0.3.13 | Apache-2.0 | Tesseract Python 封装。 |
 | Tesseract OCR | 5.5.0.20241111 | Apache-2.0 | 原生可执行与 Windows 构建信息随包。 |
 | tessdata_fast | 固定提交 `87416418657359cb625c412a48b6e1d6d41c29bd` | Apache-2.0 | `chi_sim`、`chi_tra`、`chi_sim_vert`、`chi_tra_vert` 均逐文件锁定 SHA-256。 |

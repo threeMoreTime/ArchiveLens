@@ -12,7 +12,11 @@ pwsh scripts/build-engine.ps1
 ```
 
 - 模式：one-folder（不盲目追求 one-file，便于审计模型 / 原生 DLL）；
-- `--collect-all rapidocr_onnxruntime` / `--collect-all onnxruntime`：确保模型与原生 DLL 纳入；
+- `--collect-all rapidocr_onnxruntime` / `--collect-all onnxruntime` /
+  `--collect-all opencc`：确保模型、OpenCC 字典、许可证与原生 DLL 纳入；
+- `--add-data ...;archivelens_models`：只加入锁定的 PP-OCRv6 small 文字识别模型；
+- 打包后删除 RapidOCR wheel 自带且不再使用的 PP-OCRv4 文字识别模型，并验证
+  包内只存在一个 PP-OCRv6 small 文字识别模型；
 - 产物：`dist/engine/win-x64/archivelens-engine.exe`（约 355MB）；
 - smoke 验证（已通过）：
 
@@ -28,7 +32,10 @@ echo '{"protocol_version":2,"request_id":"r1","method":"app.info","params":{}}' 
 pnpm prepare:native
 ```
 
-该步骤按 `scripts/native-dependencies.lock.json` 下载并校验 Tesseract、四个简繁中文 `tessdata_fast` 模型和 DjVuLibre，将结果写入 `dist/native/win-x64`。使用 `-Offline` 时只接受已校验缓存；最终用户运行时不存在下载逻辑。
+该步骤按 `scripts/native-dependencies.lock.json` 下载并校验 PP-OCRv6 small、
+Tesseract、四个简繁中文 `tessdata_fast` 模型和 DjVuLibre，将结果写入
+`dist/native/win-x64`。使用 `-Offline` 时只接受已校验缓存；最终用户运行时
+不存在下载逻辑。
 
 ## Electron 打包
 

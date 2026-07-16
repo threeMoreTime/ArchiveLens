@@ -18,6 +18,12 @@ try {
   Write-Host "    Root:   $Root"
   Write-Host "    Output: $OutDir"
 
+  $modelName = "PP-OCRv6_rec_small.onnx"
+  $modelPath = Join-Path $Root "dist/native/win-x64/rapidocr/$modelName"
+  if (-not (Test-Path -LiteralPath $modelPath -PathType Leaf)) {
+    throw "Missing locked unified OCR model: $modelPath. Run pnpm prepare:native first."
+  }
+
   # --collect-all 确保 RapidOCR / onnxruntime 的模型与原生 DLL 纳入打包审计（§二十六.3）。
   pyinstaller `
     --name archivelens-engine `
@@ -26,7 +32,9 @@ try {
     --onedir `
     --collect-all rapidocr_onnxruntime `
     --collect-all onnxruntime `
+    --collect-all opencc `
     --collect-all pypdfium2 `
+    --add-data "$modelPath;archivelens_models" `
     --hidden-import pytesseract `
     --distpath "$Root/dist/engine/_build" `
     --workpath "$Root/build/engine" `
@@ -37,6 +45,22 @@ try {
   if (Test-Path $OutDir) { Remove-Item $OutDir -Recurse -Force }
   New-Item -ItemType Directory -Force -Path (Split-Path $OutDir) | Out-Null
   Move-Item "$Root/dist/engine/_build/archivelens-engine" $OutDir
+
+  # RapidOCR wheel 自带的 PP-OCRv4 识别模型不再参与运行；只保留检测、方向
+  # 模型和本项目锁定的统一 PP-OCRv6 small 识别模型。
+  $legacyRecognitionModels = @(
+    Get-ChildItem -LiteralPath $OutDir -Recurse -File -Filter "ch_PP-OCRv4_rec_infer.onnx"
+  )
+  if ($legacyRecognitionModels.Count -ne 1) {
+    throw "Expected exactly one bundled legacy recognition model, found $($legacyRecognitionModels.Count)"
+  }
+  Remove-Item -LiteralPath $legacyRecognitionModels[0].FullName -Force
+  $packagedUnifiedModels = @(
+    Get-ChildItem -LiteralPath $OutDir -Recurse -File -Filter $modelName
+  )
+  if ($packagedUnifiedModels.Count -ne 1) {
+    throw "Expected exactly one packaged unified OCR model, found $($packagedUnifiedModels.Count)"
+  }
 
   $exe = Join-Path $OutDir "archivelens-engine.exe"
   if (-not (Test-Path $exe)) { throw "Missing build artifact: $exe" }

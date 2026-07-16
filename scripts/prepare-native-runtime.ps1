@@ -2,7 +2,8 @@ param(
   [string]$Root = (Resolve-Path "$PSScriptRoot/..").Path,
   [string]$OutDir = "dist/native/win-x64",
   [string]$CacheDir = ".tmp/native-downloads",
-  [switch]$Offline
+  [switch]$Offline,
+  [switch]$OcrOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -117,8 +118,36 @@ try {
   $resolvedOutDir = Resolve-FromRoot $OutDir
   $stageRoot = Join-Path $Root ".tmp/native-stage-build"
   $script:CurlExecutable = Resolve-CurlExecutable
-  $sevenZip = Resolve-SevenZip
   New-Item -ItemType Directory -Force -Path $script:ResolvedCacheDir | Out-Null
+  $rapidocrModel = $lock.components.rapidocr_recognition_model
+  $rapidocrAsset = Get-LockedAsset $rapidocrModel.asset
+
+  if ($OcrOnly) {
+    $rapidocrOut = Join-Path $resolvedOutDir "rapidocr"
+    if (Test-Path -LiteralPath $rapidocrOut) {
+      Remove-Item -LiteralPath $rapidocrOut -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $rapidocrOut | Out-Null
+    $rapidocrTarget = Join-Path $rapidocrOut $rapidocrModel.asset.file_name
+    Copy-Item -LiteralPath $rapidocrAsset -Destination $rapidocrTarget
+    $rapidocrHash = Get-Sha256 $rapidocrTarget
+    if ($rapidocrHash -ne $rapidocrModel.asset.sha256) {
+      throw "Unified OCR model hash mismatch: actual=$rapidocrHash expected=$($rapidocrModel.asset.sha256)"
+    }
+    $ocrSummary = [ordered]@{
+      model_id = $rapidocrModel.version
+      conversion_release = $rapidocrModel.conversion_release
+      file_name = $rapidocrModel.asset.file_name
+      sha256 = $rapidocrHash
+      size_bytes = (Get-Item -LiteralPath $rapidocrTarget).Length
+    }
+    $ocrSummary | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $rapidocrOut "ocr-model.json") -Encoding UTF8
+    Write-Host "==> Unified OCR model prepared: $rapidocrTarget" -ForegroundColor Green
+    $ocrSummary | ConvertTo-Json
+    return
+  }
+
+  $sevenZip = Resolve-SevenZip
   if (Test-Path -LiteralPath $stageRoot) { Remove-Item -LiteralPath $stageRoot -Recurse -Force }
   if (Test-Path -LiteralPath $resolvedOutDir) { Remove-Item -LiteralPath $resolvedOutDir -Recurse -Force }
   New-Item -ItemType Directory -Force -Path $stageRoot,$resolvedOutDir | Out-Null
@@ -199,6 +228,26 @@ try {
     throw "DjVuLibre runtime tree mismatch: actual=$djvuTreeHash expected=$($djvulibre.runtime_tree_sha256)"
   }
 
+  $rapidocrOut = Join-Path $resolvedOutDir "rapidocr"
+  New-Item -ItemType Directory -Force -Path $rapidocrOut | Out-Null
+  $rapidocrTarget = Join-Path $rapidocrOut $rapidocrModel.asset.file_name
+  Copy-Item -LiteralPath $rapidocrAsset -Destination $rapidocrTarget
+  $rapidocrHash = Get-Sha256 $rapidocrTarget
+  if ($rapidocrHash -ne $rapidocrModel.asset.sha256) {
+    throw "Unified OCR model hash mismatch: actual=$rapidocrHash expected=$($rapidocrModel.asset.sha256)"
+  }
+  if ((Get-Item -LiteralPath $rapidocrTarget).Length -ne $rapidocrModel.asset.size_bytes) {
+    throw "Unified OCR model size mismatch: $rapidocrTarget"
+  }
+  $ocrSummary = [ordered]@{
+    model_id = $rapidocrModel.version
+    conversion_release = $rapidocrModel.conversion_release
+    file_name = $rapidocrModel.asset.file_name
+    sha256 = $rapidocrHash
+    size_bytes = (Get-Item -LiteralPath $rapidocrTarget).Length
+  }
+  $ocrSummary | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $rapidocrOut "ocr-model.json") -Encoding UTF8
+
   $licensesDir = Join-Path $resolvedOutDir "licenses"
   New-Item -ItemType Directory -Force -Path (Join-Path $licensesDir "Tesseract"),(Join-Path $licensesDir "tessdata_fast"),(Join-Path $licensesDir "DjVuLibre") | Out-Null
   Copy-Item -LiteralPath $tesseractLicense -Destination (Join-Path $licensesDir "Tesseract/LICENSE.txt")
@@ -225,6 +274,8 @@ try {
     tesseract_version = $tesseract.version
     tesseract_runtime_tree_sha256 = $tesseractTreeHash
     tessdata_fast_commit = $tessdata.version
+    rapidocr_recognition_model = $rapidocrModel.version
+    rapidocr_recognition_model_sha256 = $rapidocrHash
     djvulibre_version = $djvulibre.version
     djvulibre_runtime_tree_sha256 = $djvuTreeHash
   }

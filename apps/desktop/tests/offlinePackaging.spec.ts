@@ -29,20 +29,33 @@ describe("完整离线安装包", () => {
   it("锁定每项下载制品并使用无提权 NSIS 提取", () => {
     const lock = JSON.parse(readFileSync(path.join(root, "scripts/native-dependencies.lock.json"), "utf-8"));
     const prepare = readFileSync(path.join(root, "scripts/prepare-native-runtime.ps1"), "utf-8");
+    const engineBuild = readFileSync(path.join(root, "scripts/build-engine.ps1"), "utf-8");
 
     expect(lock.platform).toBe("win-x64");
     expect(lock.components.tesseract.installer.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(lock.components.djvulibre.source.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(lock.components.tessdata_fast.files).toHaveLength(4);
+    expect(lock.components.rapidocr_recognition_model.version).toBe("PP-OCRv6-small");
+    expect(lock.components.rapidocr_recognition_model.asset.sha256).toBe(
+      "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884",
+    );
+    expect(lock.components.rapidocr_recognition_model.asset.size_bytes).toBe(21234383);
     expect(prepare).toContain("7zip-bin-full");
     expect(prepare).toContain("Expand-NsisArchive");
     expect(prepare).toContain("Resolve-CurlExecutable");
+    expect(prepare).toContain("[switch]$OcrOnly");
+    expect(prepare).toContain("$lock.components.rapidocr_recognition_model");
+    expect(prepare).toContain("$rapidocrModel.asset.file_name");
     expect(prepare).toContain('"--proto-redir", "=https"');
     expect(prepare).toContain('Move-Item -LiteralPath $partial -Destination $target -Force');
     expect(prepare).toContain('$djvusedExit = $LASTEXITCODE');
     expect(prepare).toContain('[int]::TryParse($pageCountText, [ref]$pageCount)');
     expect(prepare).not.toContain("Invoke-WebRequest");
     expect(prepare).not.toContain("Start-Process");
+    expect(engineBuild).toContain('--add-data "$modelPath;archivelens_models"');
+    expect(engineBuild).toContain("--collect-all opencc");
+    expect(engineBuild).toContain('"ch_PP-OCRv4_rec_infer.onnx"');
+    expect(engineBuild).toContain("Expected exactly one packaged unified OCR model");
   });
 
   it("发布 CI 使用无宿主 PATH 的全格式离线冒烟", () => {

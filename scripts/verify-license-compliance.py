@@ -30,9 +30,10 @@ REQUIRED_APPROVAL_DECISIONS = (
 )
 RAPIDOCR_MODELS = (
     "ch_PP-OCRv4_det_infer.onnx",
-    "ch_PP-OCRv4_rec_infer.onnx",
+    "PP-OCRv6_rec_small.onnx",
     "ch_ppocr_mobile_v2.0_cls_infer.onnx",
 )
+LEGACY_RAPIDOCR_RECOGNITION_MODEL = "ch_PP-OCRv4_rec_infer.onnx"
 
 
 class ComplianceGate:
@@ -86,6 +87,7 @@ def normalized_text(path: Path) -> str:
 def validate_source(gate: ComplianceGate, root: Path = ROOT) -> dict[str, Any] | None:
     package_path = gate.require_file(root / "package.json", "SOURCE_PACKAGE_JSON")
     engine_project_path = gate.require_file(root / "engine" / "pyproject.toml", "SOURCE_ENGINE_PROJECT")
+    engine_lock_path = gate.require_file(root / "engine" / "requirements-lock.txt", "SOURCE_ENGINE_LOCK")
     license_path = gate.require_file(root / "LICENSE", "SOURCE_PROJECT_LICENSE")
     notices_path = gate.require_file(root / "THIRD_PARTY_NOTICES.md", "SOURCE_THIRD_PARTY_NOTICES")
     lock_path = gate.require_file(root / "scripts" / "native-dependencies.lock.json", "SOURCE_NATIVE_LOCK")
@@ -93,10 +95,12 @@ def validate_source(gate: ComplianceGate, root: Path = ROOT) -> dict[str, Any] |
     manifest_script_path = gate.require_file(root / "scripts" / "generate-manifest.py", "SOURCE_MANIFEST_GENERATOR")
     release_verify_path = gate.require_file(root / "scripts" / "verify-release-chain.ps1", "SOURCE_RELEASE_VERIFY")
     inventory_path = gate.require_file(root / "licenses" / "manifest.json", "SOURCE_LICENSE_INVENTORY")
+    engine_build_path = gate.require_file(root / "scripts" / "build-engine.ps1", "SOURCE_ENGINE_BUILD")
     approval_path = gate.require_file(APPROVAL_PATH, "SOURCE_PUBLIC_APPROVAL_RECORD")
     required = (
         package_path,
         engine_project_path,
+        engine_lock_path,
         license_path,
         notices_path,
         lock_path,
@@ -104,6 +108,7 @@ def validate_source(gate: ComplianceGate, root: Path = ROOT) -> dict[str, Any] |
         manifest_script_path,
         release_verify_path,
         inventory_path,
+        engine_build_path,
         approval_path,
     )
     if any(path is None for path in required):
@@ -111,6 +116,7 @@ def validate_source(gate: ComplianceGate, root: Path = ROOT) -> dict[str, Any] |
 
     package = load_json(package_path)
     engine_project = tomllib.loads(engine_project_path.read_text(encoding="utf-8"))
+    engine_lock = normalized_text(engine_lock_path)
     project_license = normalized_text(license_path)
     notices = normalized_text(notices_path)
     native_lock = load_json(lock_path)
@@ -118,6 +124,7 @@ def validate_source(gate: ComplianceGate, root: Path = ROOT) -> dict[str, Any] |
     manifest_script = normalized_text(manifest_script_path)
     release_verify = normalized_text(release_verify_path)
     inventory = load_json(inventory_path)
+    engine_build = normalized_text(engine_build_path)
     approval = load_json(approval_path)
 
     gate.record(package.get("license") == "MIT", "SOURCE_ROOT_LICENSE_DECLARATION", "root package declares MIT")
@@ -137,6 +144,8 @@ def validate_source(gate: ComplianceGate, root: Path = ROOT) -> dict[str, Any] |
         "GPL-2.0",
         "djvulibre-3.5.29.tar.gz",
         "RapidOCR",
+        "PP-OCRv6 small",
+        "OpenCC",
         "百度",
         "不构成法律意见",
         "licenses/Tesseract/LICENSE.txt",
@@ -148,6 +157,42 @@ def validate_source(gate: ComplianceGate, root: Path = ROOT) -> dict[str, Any] |
     )
 
     components = native_lock.get("components", {})
+    rapidocr_model = components.get("rapidocr_recognition_model", {})
+    rapidocr_asset = rapidocr_model.get("asset", {})
+    gate.record(
+        rapidocr_model.get("version") == "PP-OCRv6-small",
+        "SOURCE_RAPIDOCR_MODEL_VERSION",
+        "unified RapidOCR recognition model version is locked",
+    )
+    gate.record(
+        rapidocr_model.get("public_redistribution_review") == "required",
+        "SOURCE_RAPIDOCR_MODEL_REVIEW",
+        "unified OCR model public redistribution remains human-gated",
+    )
+    gate.record(
+        rapidocr_asset.get("file_name") == "PP-OCRv6_rec_small.onnx"
+        and rapidocr_asset.get("sha256") == "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884"
+        and rapidocr_asset.get("size_bytes") == 21234383,
+        "SOURCE_RAPIDOCR_MODEL_ASSET",
+        "unified OCR model file, SHA-256, and size are pinned",
+    )
+    gate.record(
+        str(rapidocr_asset.get("url", "")).startswith("https://www.modelscope.cn/models/RapidAI/RapidOCR/"),
+        "SOURCE_RAPIDOCR_MODEL_ORIGIN",
+        "unified OCR model uses the locked RapidOCR ModelScope origin",
+    )
+    gate.record(
+        "opencc==1.2.0" in engine_lock,
+        "SOURCE_OPENCC_LOCK",
+        "OpenCC runtime dependency is pinned to 1.2.0",
+    )
+    gate.record(
+        "--collect-all opencc" in engine_build
+        and '--add-data "$modelPath;archivelens_models"' in engine_build
+        and "ch_PP-OCRv4_rec_infer.onnx" in engine_build,
+        "SOURCE_ENGINE_MODEL_PACKAGING",
+        "engine build collects OpenCC, adds the locked model, and removes the legacy recognition model",
+    )
     djvu = components.get("djvulibre", {})
     gate.record(djvu.get("version") == "3.5.29+4.12", "SOURCE_DJVU_VERSION", "DjVuLibre version is locked")
     gate.record(djvu.get("license") == "GPL-2.0-only", "SOURCE_DJVU_LICENSE", "DjVuLibre license identifier is locked")
@@ -213,6 +258,12 @@ def validate_source(gate: ComplianceGate, root: Path = ROOT) -> dict[str, Any] |
         "license inventory reflects the current bundled runtime strategy",
     )
     gate.record(
+        inventory.get("bundled", {}).get("OpenCC", {}).get("version") == "1.2.0"
+        and inventory.get("bundled", {}).get("OpenCC", {}).get("license") == "Apache-2.0",
+        "SOURCE_OPENCC_INVENTORY",
+        "OpenCC version and Apache-2.0 license are recorded",
+    )
+    gate.record(
         approval.get("schema_version") == 1
         and approval.get("scope") == "public-distribution-license-review"
         and set(REQUIRED_APPROVAL_DECISIONS).issubset(set(approval.get("decisions", {}))),
@@ -226,6 +277,8 @@ def validate_source(gate: ComplianceGate, root: Path = ROOT) -> dict[str, Any] |
         "djvulibre_version": djvu.get("version"),
         "djvulibre_binary_sha256": djvu.get("installer", {}).get("sha256"),
         "djvulibre_source_sha256": djvu.get("source", {}).get("sha256"),
+        "rapidocr_recognition_model": rapidocr_model.get("version"),
+        "rapidocr_recognition_model_sha256": rapidocr_asset.get("sha256"),
     }
     gate.evidence["approval_record"] = {
         "path": str(approval_path),
@@ -303,17 +356,40 @@ def validate_packaged(
         matches = [path for path in engine_root.rglob(model_name) if path.is_file()]
         gate.record(len(matches) == 1, f"PACKAGED_MODEL_{model_name}", f"exactly one packaged RapidOCR model: {model_name}")
         if len(matches) == 1:
+            model_hash = sha256(matches[0])
+            if model_name == "PP-OCRv6_rec_small.onnx":
+                locked_asset = packaged_lock["components"]["rapidocr_recognition_model"]["asset"]
+                gate.record(
+                    model_hash == locked_asset["sha256"]
+                    and matches[0].stat().st_size == locked_asset["size_bytes"],
+                    "PACKAGED_UNIFIED_MODEL_LOCK_MATCH",
+                    "packaged unified OCR model matches locked SHA-256 and size",
+                )
             model_inventory.append(
                 {
                     "file": str(matches[0].relative_to(engine_root)).replace("\\", "/"),
                     "size": matches[0].stat().st_size,
-                    "sha256": sha256(matches[0]),
+                    "sha256": model_hash,
                 }
             )
+    legacy_recognition_models = [
+        path for path in engine_root.rglob(LEGACY_RAPIDOCR_RECOGNITION_MODEL) if path.is_file()
+    ]
+    gate.record(
+        not legacy_recognition_models,
+        "PACKAGED_LEGACY_RECOGNITION_MODEL_ABSENT",
+        "unused PP-OCRv4 recognition model is not packaged",
+    )
     onnx_license = [path for path in engine_root.rglob("LICENSE") if "onnxruntime" in str(path).lower()]
     onnx_notices = [path for path in engine_root.rglob("ThirdPartyNotices.txt") if "onnxruntime" in str(path).lower()]
+    opencc_license = [
+        path
+        for path in engine_root.rglob("LICENSE")
+        if "opencc" in str(path).lower()
+    ]
     gate.record(bool(onnx_license), "PACKAGED_ONNXRUNTIME_LICENSE", "ONNX Runtime license is bundled")
     gate.record(bool(onnx_notices), "PACKAGED_ONNXRUNTIME_NOTICES", "ONNX Runtime third-party notices are bundled")
+    gate.record(bool(opencc_license), "PACKAGED_OPENCC_LICENSE", "OpenCC Apache-2.0 license is bundled")
 
     if candidate_sha is not None:
         gate.record(bool(HEX_GIT_SHA.fullmatch(candidate_sha)), "PACKAGED_CANDIDATE_SHA_FORMAT", "candidate SHA is a full Git SHA")

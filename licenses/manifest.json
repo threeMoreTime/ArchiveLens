@@ -24,9 +24,15 @@
       "model_copyright_owner": "Baidu",
       "model_files": [
         "ch_PP-OCRv4_det_infer.onnx",
-        "ch_PP-OCRv4_rec_infer.onnx",
+        "PP-OCRv6_rec_small.onnx",
         "ch_ppocr_mobile_v2.0_cls_infer.onnx"
       ],
+      "recognition_model": {
+        "id": "PP-OCRv6-small",
+        "conversion_release": "RapidOCR-3.9.1",
+        "sha256": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884",
+        "charset_size": 18680
+      },
       "public_redistribution_review": "required"
     },
     "onnxruntime": {
@@ -38,6 +44,13 @@
         "onnxruntime/LICENSE",
         "onnxruntime/ThirdPartyNotices.txt"
       ]
+    },
+    "OpenCC": {
+      "version": "1.2.0",
+      "license": "Apache-2.0",
+      "source": "https://github.com/BYVoid/OpenCC",
+      "distribution": "bundled-in-engine",
+      "role": "简繁字形族、台湾和香港字形索引与同模型字形复核"
     },
     "Pillow": {
       "version": "12.1.1",

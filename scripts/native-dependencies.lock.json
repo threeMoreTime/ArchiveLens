@@ -57,6 +57,20 @@
         "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
       }
     },
+    "rapidocr_recognition_model": {
+      "version": "PP-OCRv6-small",
+      "conversion_release": "RapidOCR-3.9.1",
+      "copyright_owner": "Baidu",
+      "code_license": "Apache-2.0",
+      "public_redistribution_review": "required",
+      "charset_size": 18680,
+      "asset": {
+        "file_name": "PP-OCRv6_rec_small.onnx",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx",
+        "sha256": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884",
+        "size_bytes": 21234383
+      }
+    },
     "djvulibre": {
       "version": "3.5.29+4.12",
       "license": "GPL-2.0-only",

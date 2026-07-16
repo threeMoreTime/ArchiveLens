@@ -20,6 +20,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import DEFAULT_CONFIG, EngineConfig, SIMPLE_LANG_FILES, TRAD_LANG_FILES
+from .ocr_model import UNIFIED_OCR_MODEL_ID, UNIFIED_OCR_MODEL_SHA256
 
 CHECK_PASS = "PASS"
 CHECK_WARN = "WARN"
@@ -201,6 +202,30 @@ def detect_all(config: EngineConfig | None = None, workspace_dir: Path | None = 
             detail=onnx_ver or "onnxruntime 未安装",
             impact="RapidOCR 无法加载模型，扫描不可用。" if not onnx_ver else "",
             remedy="修复或重新安装 ArchiveLens Engine；开发环境请按锁定依赖重新安装 onnxruntime。" if not onnx_ver else "",
+        )
+    )
+    unified_model_available = cfg.has_unified_ocr_model
+    checks.append(
+        Check(
+            key="ocr_model",
+            label="统一简繁 OCR 模型",
+            status=CHECK_PASS if unified_model_available else CHECK_FAIL,
+            detail=(
+                f"{UNIFIED_OCR_MODEL_ID}（SHA-256 已验证）"
+                if unified_model_available
+                else "锁定模型缺失或 SHA-256 不匹配"
+            ),
+            impact="无法可靠执行简繁字形保留与 OCR 扫描。" if not unified_model_available else "",
+            remedy=_native_remedy(
+                cfg,
+                "运行 scripts/prepare-native-runtime.ps1 -OcrOnly，重新准备锁定的统一 OCR 模型。",
+            ) if not unified_model_available else "",
+            extra={
+                "path": str(cfg.ocr_rec_model_path or ""),
+                "model_id": UNIFIED_OCR_MODEL_ID,
+                "sha256": UNIFIED_OCR_MODEL_SHA256,
+                "source": cfg.native_source,
+            },
         )
     )
 

@@ -20,6 +20,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .ocr_model import UNIFIED_OCR_MODEL_SHA256, resolve_unified_ocr_model, sha256_file
+
 #: Alpha10 历史任务的默认检索目标；新任务改由任务级 ``search_terms`` 提供。
 #: 值为 ``(variant, unicode_codepoint)``，仅保留给 legacy 数据兼容。
 TARGET_CHARS: dict[str, tuple[str, str]] = {
@@ -64,6 +66,9 @@ class EngineConfig:
     native_source: str = field(
         default_factory=lambda: os.environ.get("AL_NATIVE_SOURCE", "configured")
     )
+    ocr_rec_model_path: Path | None = field(
+        default_factory=lambda: resolve_unified_ocr_model(required=False)
+    )
     render_dpi: int = 144
     target_chars: dict[str, tuple[str, str]] = field(
         default_factory=lambda: dict(TARGET_CHARS)
@@ -101,6 +106,15 @@ class EngineConfig:
     def has_traditional_lang(self) -> bool:
         files = self._traineddata_files()
         return any(name in files for name in TRAD_LANG_FILES)
+
+    @property
+    def has_unified_ocr_model(self) -> bool:
+        if not self.ocr_rec_model_path or not self.ocr_rec_model_path.is_file():
+            return False
+        try:
+            return sha256_file(self.ocr_rec_model_path) == UNIFIED_OCR_MODEL_SHA256
+        except OSError:
+            return False
 
 
 #: 开发期默认配置（Windows 标准安装位置回退）。

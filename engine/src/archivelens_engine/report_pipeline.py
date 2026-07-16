@@ -22,7 +22,6 @@ from urllib.parse import quote
 
 import pytesseract
 from PIL import Image
-from rapidocr_onnxruntime import RapidOCR
 
 from .config import DEFAULT_CONFIG, EngineConfig
 from .documents.formats import SUPPORTED_SOURCE_SUFFIXES, document_type
@@ -39,6 +38,7 @@ from .ocr_core import (
     split_line_bbox,
     union_bboxes,
 )
+from .ocr_engine import ArchiveLensOCR
 from .search_terms import LEGACY_SEARCH_TERMS, find_literal_matches, normalize_search_text, unicode_sequence
 
 
@@ -142,7 +142,7 @@ class ReportPipeline:
         self.db_path = self.run_dir / "report.db"
         self.json_path = self.run_dir / "report.json"
         self.started_at = datetime.now()
-        self.ocr_engine = ocr_engine or RapidOCR()
+        self.ocr_engine = ocr_engine or ArchiveLensOCR(self.config.ocr_rec_model_path)
         self._ensure_dirs()
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from archivelens_engine.diagnostics import CHECK_WARN, detect_all
+from archivelens_engine.diagnostics import CHECK_FAIL, CHECK_WARN, detect_all
 
 
 class DiagnosticsSeverityTests(unittest.TestCase):
@@ -22,6 +22,8 @@ class DiagnosticsSeverityTests(unittest.TestCase):
             native_source="configured",
             has_simplified_lang=False,
             has_traditional_lang=False,
+            has_unified_ocr_model=True,
+            ocr_rec_model_path=Path("unified.onnx"),
             _traineddata_files=lambda: set(),
         )
         fake_modules = {
@@ -50,6 +52,8 @@ class DiagnosticsSeverityTests(unittest.TestCase):
             native_source="bundled",
             has_simplified_lang=False,
             has_traditional_lang=False,
+            has_unified_ocr_model=True,
+            ocr_rec_model_path=Path("resources/engine/PP-OCRv6_rec_small.onnx"),
             _traineddata_files=lambda: set(),
         )
         fake_modules = {
@@ -76,6 +80,8 @@ class DiagnosticsSeverityTests(unittest.TestCase):
             native_source="bundled",
             has_simplified_lang=True,
             has_traditional_lang=True,
+            has_unified_ocr_model=True,
+            ocr_rec_model_path=Path("bundled/PP-OCRv6_rec_small.onnx"),
             _traineddata_files=lambda: {"chi_sim.traineddata", "chi_tra.traineddata"},
         )
         fake_modules = {
@@ -90,6 +96,35 @@ class DiagnosticsSeverityTests(unittest.TestCase):
         for key in ("tesseract", "djvulibre", "lang_simplified", "lang_traditional"):
             self.assertEqual(by_key[key]["status"], "PASS")
             self.assertEqual(by_key[key]["extra"]["source"], "bundled")
+        self.assertEqual(by_key["ocr_model"]["status"], "PASS")
+
+    def test_missing_unified_model_blocks_core_scanning(self) -> None:
+        config = SimpleNamespace(
+            has_tesseract=False,
+            tesseract_cmd=Path("missing-tesseract"),
+            has_djvu=False,
+            djvu_bin_dir=Path("missing-djvu"),
+            djvused_exe=Path("missing-djvu/djvused.exe"),
+            tessdata_dir=None,
+            native_source="configured",
+            has_simplified_lang=False,
+            has_traditional_lang=False,
+            has_unified_ocr_model=False,
+            ocr_rec_model_path=None,
+            _traineddata_files=lambda: set(),
+        )
+        fake_modules = {
+            "rapidocr_onnxruntime": SimpleNamespace(__version__="test"),
+            "onnxruntime": SimpleNamespace(__version__="test"),
+        }
+
+        with patch.dict(sys.modules, fake_modules):
+            result = detect_all(config=config)
+
+        by_key = {check["key"]: check for check in result["checks"]}
+        self.assertEqual(result["overall"], CHECK_FAIL)
+        self.assertEqual(by_key["ocr_model"]["status"], CHECK_FAIL)
+        self.assertIn("简繁字形保留", by_key["ocr_model"]["impact"])
 
 
 if __name__ == "__main__":

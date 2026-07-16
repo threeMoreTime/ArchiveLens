@@ -9,6 +9,7 @@ Pillow==12.1.1
 rapidocr-onnxruntime==1.4.4
 onnxruntime==1.24.4
 pytesseract==0.3.13
+opencc==1.2.0
 #
 # 打包/测试工具（开发依赖，不随应用运行时安装到用户机器）：
 pyinstaller==6.14.1
