@@ -112,5 +112,6 @@ Task 状态机 12 态（`draft/queued/starting/running/pausing/paused/stopping/c
 
 * Electron Main → `userData/logs/app.log`；
 * Python Sidecar stderr → `userData/logs/engine.log`；
+* 每个日志主文件上限为 5 MiB，达到上限后保留一个 `.1` 备份，避免长期运行导致磁盘无界增长；
 * stdout **只**承载 JSONL 协议流，不混入日志；
 * 全部 UTF-8；不记录文档 OCR 全文 / 密钥。

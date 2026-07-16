@@ -1,6 +1,23 @@
 import { app } from "electron";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+
+export const LOG_FILE_MAX_BYTES = 5 * 1024 * 1024;
+
+/** 主文件达到上限时保留一个 ``.1`` 备份；轮转失败时仍继续写当前日志。 */
+export function appendRotatingLog(filePath: string, line: string, maxBytes = LOG_FILE_MAX_BYTES): void {
+  try {
+    const currentSize = statSync(filePath).size;
+    if (currentSize > 0 && currentSize + Buffer.byteLength(line, "utf-8") > maxBytes) {
+      const backupPath = `${filePath}.1`;
+      rmSync(backupPath, { force: true });
+      renameSync(filePath, backupPath);
+    }
+  } catch {
+    // 文件尚不存在或轮转失败时，后续 append 仍有机会保留诊断信息。
+  }
+  appendFileSync(filePath, line, "utf-8");
+}
 
 /**
  * Electron Main 进程文件日志。
@@ -29,7 +46,7 @@ class Logger {
   private write(file: string, level: string, msg: string): void {
     const line = `[${new Date().toISOString()}] ${level.padEnd(5)} ${msg}\n`;
     try {
-      appendFileSync(join(this.logDir, file), line, "utf-8");
+      appendRotatingLog(join(this.logDir, file), line);
     } catch {
       // 日志失败不得影响主流程。
     }
@@ -53,7 +70,7 @@ class Logger {
     if (!trimmed) return;
     const line = `[${new Date().toISOString()}] ${trimmed}\n`;
     try {
-      appendFileSync(join(this.logDir, "engine.log"), line, "utf-8");
+      appendRotatingLog(join(this.logDir, "engine.log"), line);
     } catch {
       // 忽略
     }
