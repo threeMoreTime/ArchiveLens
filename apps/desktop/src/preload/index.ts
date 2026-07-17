@@ -65,6 +65,11 @@ const api: ArchiveLensApi = {
     review: (task_id) => ipcRenderer.invoke("export.review", { task_id }),
     html: (task_id) => ipcRenderer.invoke("export.html", { task_id }),
     list: (task_id, p) => ipcRenderer.invoke("exports.list", { task_id, ...(p ?? {}) }),
+    create: (p) => ipcRenderer.invoke("exports.create", p),
+    get: (export_id) => ipcRenderer.invoke("exports.get", { export_id }),
+    listJobs: (task_id) => ipcRenderer.invoke("exports.listJobs", { task_id }),
+    cancel: (export_id) => ipcRenderer.invoke("exports.cancel", { export_id }),
+    retry: (export_id) => ipcRenderer.invoke("exports.retry", { export_id }),
   },
   files: {
     openFolder: (path) => ipcRenderer.invoke("files.openFolder", { path }),

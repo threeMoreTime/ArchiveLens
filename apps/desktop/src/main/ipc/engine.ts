@@ -94,6 +94,11 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
     sidecar.call("export.html", params, HTML_EXPORT_TIMEOUT_MS),
   );
   ipcMain.handle("exports.list", async (_e, params) => sidecar.call("exports.list", params));
+  ipcMain.handle("exports.create", async (_e, params) => sidecar.call("exports.create", params));
+  ipcMain.handle("exports.get", async (_e, params) => sidecar.call("exports.get", params));
+  ipcMain.handle("exports.listJobs", async (_e, params) => sidecar.call("exports.listJobs", params));
+  ipcMain.handle("exports.cancel", async (_e, params) => sidecar.call("exports.cancel", params));
+  ipcMain.handle("exports.retry", async (_e, params) => sidecar.call("exports.retry", params));
 
   ipcMain.handle("files.openFolder", async (_e, params: { path: string }) => {
     const failure = await shell.openPath(params.path);

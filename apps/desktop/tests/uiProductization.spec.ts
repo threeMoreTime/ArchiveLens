@@ -171,8 +171,8 @@ describe("桌面端产品化 UI contract", () => {
   it("导出页读取任务全量结果，并使用受限的预加载导出 API", () => {
     expect(exportPage).toContain("window.archiveLens.tasks.get(taskId)");
     expect(exportPage).toContain("window.archiveLens.results.query");
-    expect(exportPage).toContain("window.archiveLens.export.json(taskId)");
-    expect(exportPage).toContain("window.archiveLens.export.html(taskId)");
+    expect(exportPage).toContain("window.archiveLens.export.create");
+    expect(exportPage).toContain("window.archiveLens.export.listJobs");
     expect(exportPage).toContain("window.archiveLens.export.list");
     expect(exportPage).toContain("awaitingConfirmation");
     expect(exportPage).not.toContain("window.confirm");
@@ -180,12 +180,12 @@ describe("桌面端产品化 UI contract", () => {
     expect(exportPage).toContain('selectedFormat === "html" || !summary.scan_complete || !summary.review_complete');
     expect(exportPage).toContain("报告包含大量页面图片，文件可能超过 300MB，打开、搜索和打印可能较慢");
     expect(exportPage).toContain("仍然导出 HTML");
-    expect(exportPage).toContain('event.event !== "export.progress"');
+    expect(exportPage).toContain('event.event === "export.progress"');
     expect(exportPage).toContain("正在处理页面图片");
   });
 
   it("切换导出任务时不会沿用上一任务的导出成功状态", () => {
-    expect(exportPage).toContain("setResult(null);");
+    expect(exportPage).toContain("setJobs([]);");
   });
 
   it("任务中心用可扩展菜单承载生命周期操作和安全删除", () => {

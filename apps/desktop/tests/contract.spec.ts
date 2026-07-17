@@ -21,6 +21,9 @@ import {
   ReviewPreparePageImageParamsSchema,
   PROTOCOL_VERSION,
   TaskCleanupTargetResultSchema,
+  ExportJobSchema,
+  ExportJobCreateResultSchema,
+  ExportJobsListResultSchema,
   OcrCorpusStatusResultSchema,
   OcrSearchExecuteParamsSchema,
   OcrSearchHitSchema,
@@ -396,6 +399,25 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(TaskCleanupTargetResultSchema.safeParse({ task_id: "task-1", path: "E:\\residual", extra: 1 }).success).toBe(true);
     // 闭合枚举：未知错误码被拒——证明 B1 未新增协议错误码、因此无需递增 PROTOCOL_VERSION
     expect(ErrorCodeSchema.safeParse("CLEANUP_FAILED_HYPOTHETICAL").success).toBe(false);
+    expect(PROTOCOL_VERSION).toBe(2);
+  });
+
+  it("B2 导出作业方法与 schema 保持协议 v2 兼容（仅附加方法/字段，未新增错误码）", () => {
+    for (const method of ["exports.create", "exports.get", "exports.listJobs", "exports.cancel", "exports.retry"]) {
+      expect(MethodNameSchema.safeParse(method).success, method).toBe(true);
+    }
+    const job = {
+      export_id: "exp-1", task_id: "task-1", format: "html", status: "rendering_images",
+      current_stage: "images", progress_completed: 3, progress_total: 10, output_path: "",
+      error_code: "", error_message: "", cancel_requested: false, retry_of: "", created_at: "2026-07-18T00:00:00Z",
+      started_at: "2026-07-18T00:00:01Z", finished_at: null,
+    };
+    expect(ExportJobSchema.safeParse(job).success).toBe(true);
+    expect(ExportJobSchema.safeParse({ ...job, status: "interrupted" }).success).toBe(true);
+    expect(ExportJobSchema.safeParse({ ...job, status: "bogus" }).success).toBe(false);
+    expect(ExportJobCreateResultSchema.safeParse({ export_id: "exp-2", task_id: "task-1", format: "json", status: "queued" }).success).toBe(true);
+    expect(ExportJobsListResultSchema.safeParse({ task_id: "task-1", items: [job] }).success).toBe(true);
+    // 未新增协议错误码、未递增版本（并发冲突复用 TASK_STATE_CONFLICT）
     expect(PROTOCOL_VERSION).toBe(2);
   });
 });

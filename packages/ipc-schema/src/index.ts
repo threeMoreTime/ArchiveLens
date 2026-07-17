@@ -295,6 +295,11 @@ export const MethodNameSchema = z.enum([
   "export.json",
   "export.review",
   "exports.list",
+  "exports.create",
+  "exports.get",
+  "exports.listJobs",
+  "exports.cancel",
+  "exports.retry",
   "files.openOriginal",
   "files.openFolder",
   "settings.get",
@@ -434,6 +439,53 @@ export const ExportRecordSchema = z.object({
   path: z.string().min(1),
   created_at: z.string().min(1),
 });
+
+export const ExportJobStatusSchema = z.enum([
+  "queued",
+  "preparing",
+  "rendering_images",
+  "building",
+  "writing",
+  "cancelling",
+  "cancelled",
+  "completed",
+  "failed",
+  "interrupted",
+]);
+export type ExportJobStatus = z.infer<typeof ExportJobStatusSchema>;
+
+/** 持久化导出作业（B2）：生命周期、进度、原子输出、可取消、重启恢复。 */
+export const ExportJobSchema = z.object({
+  export_id: z.string().min(1),
+  task_id: z.string().min(1),
+  format: z.string().min(1),
+  status: ExportJobStatusSchema,
+  current_stage: z.string().default(""),
+  progress_completed: z.number().int().nonnegative().default(0),
+  progress_total: z.number().int().nonnegative().default(0),
+  output_path: z.string().default(""),
+  error_code: z.string().default(""),
+  error_message: z.string().default(""),
+  cancel_requested: z.boolean().default(false),
+  retry_of: z.string().default(""),
+  created_at: z.string().min(1),
+  started_at: z.string().nullable().default(null),
+  finished_at: z.string().nullable().default(null),
+}).passthrough();
+export type ExportJob = z.infer<typeof ExportJobSchema>;
+
+export const ExportJobCreateResultSchema = z.object({
+  export_id: z.string().min(1),
+  task_id: z.string().min(1),
+  format: z.string().min(1),
+  status: z.string().min(1),
+  retry_of: z.string().optional().default(""),
+}).passthrough();
+
+export const ExportJobsListResultSchema = z.object({
+  task_id: z.string().min(1),
+  items: z.array(ExportJobSchema),
+}).passthrough();
 
 export const ExportsListResultSchema = z.object({
   task_id: z.string().min(1),
@@ -659,6 +711,11 @@ export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "tasks.get") return TaskSummarySchema.parse(value);
   if (method === "tasks.list") return TasksListResultSchema.parse(value);
   if (method === "exports.list") return ExportsListResultSchema.parse(value);
+  if (method === "exports.create") return ExportJobCreateResultSchema.parse(value);
+  if (method === "exports.get") return ExportJobSchema.parse(value);
+  if (method === "exports.listJobs") return ExportJobsListResultSchema.parse(value);
+  if (method === "exports.cancel") return ExportJobCreateResultSchema.parse(value);
+  if (method === "exports.retry") return ExportJobCreateResultSchema.parse(value);
   if (method === "results.query") return ResultsQueryResultSchema.parse(value);
   if (method === "search.corpusStatus") return OcrCorpusStatusResultSchema.parse(value);
   if (method === "search.execute") return OcrSearchSessionSchema.parse(value);

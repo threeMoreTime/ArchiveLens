@@ -129,6 +129,7 @@ class Server:
         self.ocr_search = OCRSearchService(self.store)
         self.store.reconcile_incomplete_tasks(reason="ENGINE_PROCESS_EXITED")
         self.reconcile_cleanup_jobs()
+        self.reconcile_export_jobs()
         self.build_info = load_build_info()
         self.page_evidence = PageEvidenceService(self.config)
 
@@ -136,6 +137,9 @@ class Server:
         self._stdout_lock = threading.Lock()
         self._scan_threads: dict[str, threading.Thread] = {}
         self._task_controls: dict[str, TaskControl] = {}
+        # 导出作业后台 worker：export_id → (thread, cancel_event)
+        self._export_threads: dict[str, threading.Thread] = {}
+        self._export_cancel_events: dict[str, threading.Event] = {}
         # SlowFake 测试模式（任务 §十二）：AL_SLOWFAKE_PAGES>0 时用慢速假处理器替代真实 OCR。
         self.slowfake_pages = int(os.environ.get("AL_SLOWFAKE_PAGES", "0") or "0")
         self.slowfake_page_delay_ms = int(os.environ.get("AL_SLOWFAKE_PAGE_DELAY_MS", "0") or "0")
@@ -266,6 +270,35 @@ class Server:
         except Exception:
             return
 
+    def reconcile_export_jobs(self) -> int:
+        """重启恢复：把上次仍运行中的导出作业标记 interrupted，清理专属临时目录。
+
+        第一阶段不做字节级断点续传。UI 可基于 interrupted 作业重新导出（新 export_id）。
+        单个作业异常不得阻塞应用启动；清理失败写可诊断 stderr。
+        """
+        reconciled = 0
+        try:
+            jobs = self.store.list_running_export_jobs_internal()
+        except Exception as exc:
+            self._cleanup_diag("*", "list_running_export_jobs", exc)
+            return 0
+        for job in jobs:
+            export_id = str(job["export_id"])
+            try:
+                self.store.update_export_job(
+                    export_id, status="interrupted", finished_at=now_iso()
+                )
+                reconciled += 1
+            except Exception as exc:
+                self._cleanup_diag(export_id, "mark_interrupted", exc)
+            try:
+                _cleanup_export_temp(self.workspace_root, export_id)
+            except CleanupError as exc:
+                self._cleanup_diag(export_id, f"cleanup_temp:{exc.code}", exc)
+            except Exception as exc:
+                self._cleanup_diag(export_id, "cleanup_temp", exc)
+        return reconciled
+
     # ---- 单行处理 ----
     def handle_line(self, line: str) -> None:
         message = safe_parse(line)
@@ -340,6 +373,11 @@ class Server:
                 "export.review": _h_export_review,
                 "export.html": _h_export_html,
                 "exports.list": _h_exports_list,
+                "exports.create": _h_exports_create,
+                "exports.get": _h_exports_get,
+                "exports.listJobs": _h_exports_list_jobs,
+                "exports.cancel": _h_exports_cancel,
+                "exports.retry": _h_exports_retry,
             }
         )
 
@@ -1271,6 +1309,87 @@ def _resolve_cleanup_target(workspace_root: Path, task_id: str) -> str | None:
     return None
 
 
+# --------------------------------------------------------------------------- #
+# 导出作业（B2）：持久化生命周期、原子输出、可取消、重启恢复
+# --------------------------------------------------------------------------- #
+class ExportCancelled(Exception):
+    """用户请求取消导出（在安全检查点抛出）。"""
+
+
+class ExportFailed(Exception):
+    """导出失败。``code`` 为闭合错误码字符串，``summary`` 为安全摘要。"""
+
+    def __init__(self, code: str, summary: str) -> None:
+        super().__init__(summary)
+        self.code = code
+        self.summary = summary
+
+
+#: 导出作业终态
+EXPORT_JOB_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
+#: 进度阶段 → 作业状态
+_EXPORT_STAGE_STATUS = {
+    "preparing": "preparing",
+    "images": "rendering_images",
+    "building": "building",
+    "writing": "writing",
+}
+
+
+def _validate_export_id_segment(export_id: str) -> None:
+    """export_id 必须是单一路径段（用于推导受信临时目录）。"""
+    if not isinstance(export_id, str) or not export_id:
+        raise ValueError("导出标识无效")
+    if "\x00" in export_id or "/" in export_id or "\\" in export_id:
+        raise ValueError("导出标识无效")
+    if export_id in {".", ".."} or Path(export_id).name != export_id:
+        raise ValueError("导出标识无效")
+
+
+def _safe_export_temp_dir(workspace_root: Path, export_id: str) -> Path:
+    """从受信 workspace_root + 已验证 export_id 推导专属临时目录；fail closed。"""
+    _validate_export_id_segment(export_id)
+    root = workspace_root.resolve()
+    candidate = root / ".export-jobs" / export_id
+    if candidate == root:
+        raise CleanupError("PERMISSION_DENIED", "导出临时目录与 workspace 根重合")
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise CleanupError("PERMISSION_DENIED", "导出临时目录越出 workspace 根") from exc
+    if _is_reparse_point(candidate):
+        raise CleanupError("PERMISSION_DENIED", "导出临时目录是 reparse point，已拒绝")
+    return candidate
+
+
+def _cleanup_export_temp(workspace_root: Path, export_id: str) -> None:
+    """安全清理单个 export_id 的专属临时目录；fail closed（绝不删除其他 job/任务/来源）。"""
+    candidate = _safe_export_temp_dir(workspace_root, export_id)
+    if _path_definitely_absent(candidate):
+        return
+    _assert_tree_has_no_reparse(candidate)
+    try:
+        shutil.rmtree(candidate)
+    except OSError as exc:
+        raise CleanupError(
+            _classify_oserror(exc),
+            f"清理导出临时目录失败：{exc.strerror or str(exc)}",
+        ) from exc
+
+
+def _export_final_path(workspace_root: Path, task_id: str, fmt: str) -> Path:
+    """正式输出路径（与历史命名兼容）。fmt ∈ html/json/review。"""
+    suffix = "report.html" if fmt == "html" else ("review.json" if fmt == "review" else "report.json")
+    return workspace_root / "tasks" / task_id / "exports" / f"{task_id}-{suffix}"
+
+
+def _require_format(fmt: str) -> str:
+    if fmt not in {"html", "json", "review"}:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "format 仅支持 html、json 或 review")
+    return fmt
+
+
+
 def _h_tasks_delete(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     _require_task_id_segment(task_id)
@@ -1283,6 +1402,14 @@ def _h_tasks_delete(server: Server, params: dict) -> dict:
             ErrorCode.TASK_STATE_CONFLICT,
             "任务仍可执行或恢复，必须先取消后才能删除",
             {"status": task["status"]},
+        )
+    # B2 串联：任务仍有运行中的导出作业时拒绝删除（不能边导出边删除目录）
+    active_exports = server.store.list_active_export_jobs(task_id=task_id)
+    if active_exports:
+        raise ProtocolError(
+            ErrorCode.TASK_STATE_CONFLICT,
+            "任务仍有导出正在运行，请先取消或等待完成后再删除",
+            {"task_id": task_id, "active_export_count": len(active_exports)},
         )
 
     # 1. 原子持久化 cleanup job（pending，attempt_count+1，清空旧错误）：任务保持可见
@@ -1726,15 +1853,6 @@ def _h_review_note(server: Server, params: dict) -> dict:
     return {"occurrence_id": occ_id, "note": note, "updated_at": updated}
 
 
-def _export_dir(server: Server, task_id: str) -> Path:
-    task = server.store.get_task(task_id)
-    if task is None:
-        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
-    exports_dir = server.workspace_root / "tasks" / task_id / "exports"
-    exports_dir.mkdir(parents=True, exist_ok=True)
-    return exports_dir
-
-
 def _export_integrity(server: Server, task: dict, total: int) -> dict[str, Any]:
     review_summary = server.store.get_occurrence_review_summary(task_id=task["task_id"])
     scan_complete = task["status"] == "completed" and int(task.get("failure_count", 0) or 0) == 0
@@ -1757,29 +1875,390 @@ def _export_integrity(server: Server, task: dict, total: int) -> dict[str, Any]:
 
 
 def _h_export_json(server: Server, params: dict) -> dict:
+    """同步兼容入口（阻塞当前线程）；UI 应使用 exports.create 走异步 job。"""
+    return _run_sync_export(server, params, "json")
+
+
+def _h_export_review(server: Server, params: dict) -> dict:
+    """同步兼容入口（阻塞当前线程）；UI 应使用 exports.create 走异步 job。"""
+    return _run_sync_export(server, params, "review")
+
+
+def _h_export_html(server: Server, params: dict) -> dict:
+    """同步兼容入口（阻塞当前线程）；UI 应使用 exports.create 走异步 job。"""
+    return _run_sync_export(server, params, "html")
+
+
+_EXPORT_ERROR_CODES = {
+    "PERMISSION_DENIED",
+    "UNKNOWN_ERROR",
+    "SOURCE_EVIDENCE_UNAVAILABLE",
+    "SOURCE_FILE_CHANGED",
+    "PAGE_RENDER_LIMIT_EXCEEDED",
+    "TASK_NOT_FOUND",
+    "DATABASE_ERROR",
+}
+
+
+def _export_error_code_to_protocol(code: str) -> str:
+    return code if code in _EXPORT_ERROR_CODES else ErrorCode.UNKNOWN_ERROR
+
+
+def _assert_no_active_export(server: Server, task_id: str, fmt: str) -> None:
+    """同任务+同格式已有运行中导出时拒绝，防止互相覆盖（不同任务彼此隔离）。"""
+    active = server.store.list_active_export_jobs(task_id=task_id)
+    if any(job["format"] == fmt for job in active):
+        raise ProtocolError(
+            ErrorCode.TASK_STATE_CONFLICT,
+            "该任务已有同格式的导出正在运行，请先取消或等待完成",
+            {"task_id": task_id, "format": fmt},
+        )
+
+
+def _render_html_export(
+    server: Server,
+    task: dict[str, Any],
+    temp_dir: Path,
+    final_path: Path,
+    progress: Callable[[str, int, int], None],
+) -> dict[str, Any]:
+    workspace_value = task.get("workspace_dir")
+    with server.store.occurrence_export_snapshot(task["task_id"]) as (total, page_count, items):
+        integrity = _export_integrity(server, task, total)
+        exported_at = integrity["exported_at"]
+        progress("preparing", 0, total)
+
+        def resolve_page_image(item: dict[str, Any]) -> dict[str, Any]:
+            if not workspace_value:
+                raise ExportFailed("SOURCE_EVIDENCE_UNAVAILABLE", "任务缺少扫描工作目录，请重新扫描")
+            try:
+                return server.page_evidence.prepare_for_export(
+                    scan_workspace=Path(str(workspace_value)),
+                    occurrence=item,
+                    is_demo=bool(task.get("is_demo")),
+                )
+            except PageEvidenceError as exc:
+                raise ExportFailed(_export_error_code_to_protocol(exc.code), exc.message) from exc
+
+        temp_output = temp_dir / "report.html"
+        try:
+            built = write_offline_review_report(
+                output_path=temp_output,
+                task=task,
+                items=items,
+                integrity=integrity,
+                workspace_dir=Path(workspace_value) if workspace_value else None,
+                exported_at=exported_at,
+                expected_page_count=page_count,
+                progress=progress,
+                page_image_resolver=resolve_page_image,
+            )
+        except (ExportCancelled, ExportFailed):
+            raise
+        except OSError as exc:
+            raise ExportFailed(_classify_oserror(exc), "生成 HTML 报告失败") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise ExportFailed("UNKNOWN_ERROR", "生成 HTML 报告失败") from exc
+    os.replace(temp_output, final_path)  # 原子替换到正式输出
+    return {
+        "path": str(final_path),
+        "occurrence_count": total,
+        "file_size_bytes": int(built["file_size_bytes"]),
+        "progress_completed": total,
+        "progress_total": total,
+    }
+
+
+def _render_json_export(
+    server: Server,
+    task: dict[str, Any],
+    temp_dir: Path,
+    final_path: Path,
+    progress: Callable[[str, int, int], None],
+) -> dict[str, Any]:
+    progress("preparing", 0, 0)
+    total, items = server.store.query_occurrences(task_id=task["task_id"], limit=10**9, offset=0)
+    integrity = _export_integrity(server, task, total)
+    payload = {"task": task, "occurrences": items, "integrity": integrity, "exported_at": integrity["exported_at"]}
+    progress("building", total, total)
+    temp_output = temp_dir / "report.json"
+    try:
+        temp_output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        size = temp_output.stat().st_size
+        progress("writing", total, total)
+        os.replace(temp_output, final_path)  # 原子替换
+    except OSError as exc:
+        raise ExportFailed(_classify_oserror(exc), "写入 JSON 导出失败") from exc
+    return {
+        "path": str(final_path),
+        "occurrence_count": total,
+        "file_size_bytes": size,
+        "progress_completed": total,
+        "progress_total": total,
+    }
+
+
+def _render_review_export(
+    server: Server,
+    task_id: str,
+    temp_dir: Path,
+    final_path: Path,
+    progress: Callable[[str, int, int], None],
+) -> dict[str, Any]:
+    progress("preparing", 0, 0)
+    reviews = server.store.list_reviews(task_id)
+    payload = {"task_id": task_id, "exported_at": now_iso(), "records": reviews}
+    progress("building", len(reviews), len(reviews))
+    temp_output = temp_dir / "review.json"
+    try:
+        temp_output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        size = temp_output.stat().st_size
+        progress("writing", len(reviews), len(reviews))
+        os.replace(temp_output, final_path)  # 原子替换
+    except OSError as exc:
+        raise ExportFailed(_classify_oserror(exc), "写入校对导出失败") from exc
+    return {
+        "path": str(final_path),
+        "record_count": len(reviews),
+        "file_size_bytes": size,
+        "progress_completed": len(reviews),
+        "progress_total": len(reviews),
+    }
+
+
+def _run_export_job_core(server: Server, export_id: str) -> dict[str, Any]:
+    """执行导出作业核心：专属临时目录写入 → 原子替换 → 成功历史。
+
+    成功返回 result 并把 job 标记 completed；取消抛 ExportCancelled；失败抛 ExportFailed。
+    只有原子输出成功后才写 exports 成功历史（失败/取消绝不覆盖已有成功文件）。
+    """
+    job = server.store.get_export_job_internal(export_id)
+    if job is None:
+        raise ExportFailed("UNKNOWN_ERROR", "导出作业不存在")
+    task_id = str(job["task_id"])
+    fmt = str(job["format"])
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ExportFailed("TASK_NOT_FOUND", "任务不存在")
+    # 防竞态：运行中任务进入 cleanup 生命周期则中止
+    _assert_not_cleaning(server, task_id)
+    cancel_event = server._export_cancel_events.get(export_id)
+
+    def progress(stage: str, completed: int, progress_total: int) -> None:
+        status = _EXPORT_STAGE_STATUS.get(stage, "preparing")
+        server.store.update_export_job(
+            export_id,
+            status=status,
+            current_stage=stage,
+            progress_completed=int(completed),
+            progress_total=int(progress_total),
+        )
+        server.emit_event(
+            "export.progress",
+            task_id,
+            {"export_id": export_id, "stage": stage, "completed": int(completed), "total": int(progress_total)},
+        )
+        if cancel_event is not None and cancel_event.is_set():
+            raise ExportCancelled()
+
+    server.store.update_export_job(export_id, status="preparing", started_at=now_iso())
+    temp_dir = _safe_export_temp_dir(server.workspace_root, export_id)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    server.store.update_export_job(export_id, temporary_path=str(temp_dir))
+    final_path = _export_final_path(server.workspace_root, task_id, fmt)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    server.store.update_export_job(export_id, output_path=str(final_path))
+
+    if fmt == "html":
+        result = _render_html_export(server, task, temp_dir, final_path, progress)
+    elif fmt == "json":
+        result = _render_json_export(server, task, temp_dir, final_path, progress)
+    else:
+        result = _render_review_export(server, task_id, temp_dir, final_path, progress)
+
+    # 仅原子输出成功后才登记成功历史 + 标记 completed
+    server.store.add_export(task_id=task_id, kind=fmt, path=str(final_path))
+    server.store.update_export_job(
+        export_id,
+        status="completed",
+        current_stage="completed",
+        progress_completed=int(result.get("progress_completed", 0)),
+        progress_total=int(result.get("progress_total", 0)),
+        finished_at=now_iso(),
+    )
+    server.emit_event(
+        "export.progress",
+        task_id,
+        {
+            "export_id": export_id,
+            "stage": "completed",
+            "completed": int(result.get("progress_completed", 0)),
+            "total": int(result.get("progress_total", 0)),
+        },
+    )
+    return result
+
+
+def start_export_thread(server: Server, export_id: str) -> None:
+    """为导出作业启动后台 worker，保持 sidecar 主循环对 cancel/list/get 的响应。"""
+    cancel_event = threading.Event()
+    server._export_cancel_events[export_id] = cancel_event
+    thread = threading.Thread(target=_run_export_worker, args=(server, export_id), daemon=True)
+    server._export_threads[export_id] = thread
+    thread.start()
+
+
+def _run_export_worker(server: Server, export_id: str) -> None:
+    job = server.store.get_export_job_internal(export_id)
+    task_id = str(job["task_id"]) if job else None
+    try:
+        _run_export_job_core(server, export_id)  # 成功时已标记 completed + 发 export.progress completed
+    except ExportCancelled:
+        if task_id:
+            server.emit_event("export.progress", task_id, {"export_id": export_id, "stage": "cancelled", "completed": 0, "total": 0})
+        server.store.update_export_job(
+            export_id, status="cancelled", current_stage="cancelled", finished_at=now_iso()
+        )
+    except ExportFailed as exc:
+        if task_id:
+            server.emit_event("export.progress", task_id, {"export_id": export_id, "stage": "failed", "error_code": exc.code, "completed": 0, "total": 0})
+        server.store.update_export_job(
+            export_id, status="failed", error_code=exc.code, error_message=exc.summary, finished_at=now_iso()
+        )
+    except Exception as exc:  # noqa: BLE001
+        if task_id:
+            server.emit_event("export.progress", task_id, {"export_id": export_id, "stage": "failed", "error_code": "UNKNOWN_ERROR", "completed": 0, "total": 0})
+        server.store.update_export_job(
+            export_id, status="failed", error_code="UNKNOWN_ERROR", error_message="导出失败", finished_at=now_iso()
+        )
+        sys.stderr.write(f"[export_worker] export_id={export_id} error={type(exc).__name__}\n")
+        sys.stderr.flush()
+    finally:
+        try:
+            _cleanup_export_temp(server.workspace_root, export_id)
+        except CleanupError as exc:
+            sys.stderr.write(f"[export_worker] export_id={export_id} cleanup_temp error={exc.code}\n")
+            sys.stderr.flush()
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write(f"[export_worker] export_id={export_id} cleanup_temp error={type(exc).__name__}\n")
+            sys.stderr.flush()
+        server._export_cancel_events.pop(export_id, None)
+        server._export_threads.pop(export_id, None)
+
+
+def _run_sync_export(server: Server, params: dict, fmt: str) -> dict:
+    """同步兼容入口共享核心：创建 job 并在当前线程跑完（无取消）；返回旧形状。"""
     task_id = _require(params, "task_id", str)
     task = server.store.get_task(task_id)
     if task is None:
         raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
     _assert_not_cleaning(server, task_id)
-    total, items = server.store.query_occurrences(task_id=task_id, limit=10**9, offset=0)
-    integrity = _export_integrity(server, task, total)
-    payload = {"task": task, "occurrences": items, "integrity": integrity, "exported_at": integrity["exported_at"]}
-    out = _export_dir(server, task_id) / f"{task_id}-report.json"
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    server.store.add_export(task_id=task_id, kind="json", path=str(out))
-    return {"path": str(out), "occurrence_count": total}
+    final_path = _export_final_path(server.workspace_root, task_id, fmt)
+    job = server.store.create_export_job(task_id=task_id, format=fmt, output_path=str(final_path))
+    export_id = job["export_id"]
+    server._export_cancel_events[export_id] = None  # 同步入口不支持取消
+    try:
+        result = _run_export_job_core(server, export_id)
+    except ExportCancelled:  # 同步入口不应触发，防御
+        server.store.update_export_job(export_id, status="cancelled", finished_at=now_iso())
+        raise ProtocolError(ErrorCode.TASK_STATE_CONFLICT, "导出已取消") from None
+    except ExportFailed as exc:
+        server.store.update_export_job(
+            export_id, status="failed", error_code=exc.code, error_message=exc.summary, finished_at=now_iso()
+        )
+        raise ProtocolError(_export_error_code_to_protocol(exc.code), exc.summary) from exc
+    finally:
+        server._export_cancel_events.pop(export_id, None)
+        try:
+            _cleanup_export_temp(server.workspace_root, export_id)
+        except CleanupError:
+            pass
+    if fmt == "review":
+        return {"path": result["path"], "record_count": int(result.get("record_count", 0))}
+    base = {"path": result["path"], "occurrence_count": int(result.get("occurrence_count", 0))}
+    if fmt == "html":
+        base["file_size_bytes"] = int(result.get("file_size_bytes", 0))
+    return base
 
 
-def _h_export_review(server: Server, params: dict) -> dict:
+def _h_exports_create(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
+    fmt = _require_format(_require(params, "format", str))
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
     _assert_not_cleaning(server, task_id)
-    reviews = server.store.list_reviews(task_id)
-    payload = {"task_id": task_id, "exported_at": now_iso(), "records": reviews}
-    out = _export_dir(server, task_id) / f"{task_id}-review.json"
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    server.store.add_export(task_id=task_id, kind="review", path=str(out))
-    return {"path": str(out), "record_count": len(reviews)}
+    _assert_no_active_export(server, task_id, fmt)
+    final_path = _export_final_path(server.workspace_root, task_id, fmt)
+    job = server.store.create_export_job(task_id=task_id, format=fmt, output_path=str(final_path))
+    start_export_thread(server, job["export_id"])
+    return {"export_id": job["export_id"], "task_id": task_id, "format": fmt, "status": "queued"}
+
+
+def _h_exports_get(server: Server, params: dict) -> dict:
+    export_id = _require(params, "export_id", str)
+    _validate_export_id_segment(export_id)
+    job = server.store.get_export_job(export_id)
+    if job is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"导出作业不存在: {export_id}")
+    return job
+
+
+def _h_exports_list_jobs(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    if server.store.get_task(task_id) is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    return {"task_id": task_id, "items": server.store.list_export_jobs(task_id)}
+
+
+def _h_exports_cancel(server: Server, params: dict) -> dict:
+    export_id = _require(params, "export_id", str)
+    _validate_export_id_segment(export_id)
+    job = server.store.get_export_job(export_id)
+    if job is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"导出作业不存在: {export_id}")
+    # 幂等：已终态（含 cancelled）→ 直接返回当前状态
+    if job["status"] in EXPORT_JOB_TERMINAL_STATUSES:
+        return {"export_id": export_id, "status": job["status"]}
+    # queued 且 worker 尚未进入 preparing → 可直接 cancelled
+    if job["status"] == "queued" and export_id not in server._export_threads:
+        server.store.update_export_job(
+            export_id, status="cancelled", current_stage="cancelled", cancel_requested=1, finished_at=now_iso()
+        )
+        try:
+            _cleanup_export_temp(server.workspace_root, export_id)
+        except CleanupError:
+            pass
+        if job["task_id"]:
+            server.emit_event("export.progress", job["task_id"], {"export_id": export_id, "stage": "cancelled", "completed": 0, "total": 0})
+        return {"export_id": export_id, "status": "cancelled"}
+    # 运行中：请求取消，worker 在下一个安全检查点（图片/组装/写入前后）响应
+    event = server._export_cancel_events.get(export_id)
+    if event is not None:
+        event.set()
+    server.store.update_export_job(export_id, cancel_requested=1, status="cancelling")
+    return {"export_id": export_id, "status": "cancelling"}
+
+
+def _h_exports_retry(server: Server, params: dict) -> dict:
+    export_id = _require(params, "export_id", str)
+    _validate_export_id_segment(export_id)
+    old = server.store.get_export_job(export_id)
+    if old is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"导出作业不存在: {export_id}")
+    task_id = old["task_id"]
+    fmt = old["format"]
+    if server.store.get_task(task_id) is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    _assert_not_cleaning(server, task_id)
+    _assert_no_active_export(server, task_id, fmt)
+    final_path = _export_final_path(server.workspace_root, task_id, fmt)
+    job = server.store.create_export_job(
+        task_id=task_id, format=fmt, output_path=str(final_path), retry_of=export_id
+    )
+    start_export_thread(server, job["export_id"])
+    return {"export_id": job["export_id"], "task_id": task_id, "format": fmt, "status": "queued", "retry_of": export_id}
+
 
 
 def _h_exports_list(server: Server, params: dict) -> dict:
@@ -1790,61 +2269,6 @@ def _h_exports_list(server: Server, params: dict) -> dict:
     offset = _validate_results_page_parameter(params, "offset", default=0, minimum=0)
     items = server.store.list_exports(task_id=task_id, limit=limit, offset=offset)
     return {"task_id": task_id, "items": items, "limit": limit, "offset": offset}
-
-
-def _h_export_html(server: Server, params: dict) -> dict:
-    task_id = _require(params, "task_id", str)
-    task = server.store.get_task(task_id)
-    if task is None:
-        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
-    _assert_not_cleaning(server, task_id)
-    out = _export_dir(server, task_id) / f"{task_id}-report.html"
-    try:
-        with server.store.occurrence_export_snapshot(task_id) as (total, page_count, items):
-            integrity = _export_integrity(server, task, total)
-            exported_at = integrity["exported_at"]
-            workspace_value = task.get("workspace_dir")
-            server.emit_event("export.progress", task_id, {"stage": "preparing", "completed": 0, "total": total})
-
-            def report_progress(stage: str, completed: int, progress_total: int) -> None:
-                server.emit_event(
-                    "export.progress",
-                    task_id,
-                    {"stage": stage, "completed": completed, "total": progress_total},
-                )
-
-            def resolve_page_image(item: dict[str, Any]) -> dict[str, Any]:
-                if not workspace_value:
-                    raise ProtocolError(
-                        ErrorCode.SOURCE_EVIDENCE_UNAVAILABLE,
-                        "任务缺少扫描工作目录，请重新扫描",
-                    )
-                try:
-                    return server.page_evidence.prepare_for_export(
-                        scan_workspace=Path(str(workspace_value)),
-                        occurrence=item,
-                        is_demo=bool(task.get("is_demo")),
-                    )
-                except PageEvidenceError as exc:
-                    raise ProtocolError(exc.code, exc.message, exc.details) from exc
-
-            result = write_offline_review_report(
-                output_path=out,
-                task=task,
-                items=items,
-                integrity=integrity,
-                workspace_dir=Path(workspace_value) if workspace_value else None,
-                exported_at=exported_at,
-                expected_page_count=page_count,
-                progress=report_progress,
-                page_image_resolver=resolve_page_image,
-            )
-    except Exception:
-        server.emit_event("export.progress", task_id, {"stage": "failed", "completed": 0, "total": 0})
-        raise
-    server.store.add_export(task_id=task_id, kind="html", path=str(out))
-    server.emit_event("export.progress", task_id, {"stage": "completed", "completed": total, "total": total})
-    return {"path": str(out), "occurrence_count": total, "file_size_bytes": result["file_size_bytes"]}
 
 
 def run_server(config: EngineConfig | None = None, workspace_root: str | Path | None = None) -> None:

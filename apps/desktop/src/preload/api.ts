@@ -90,6 +90,44 @@ export interface ExportRecord {
   created_at: string;
 }
 
+export type ExportJobStatus =
+  | "queued"
+  | "preparing"
+  | "rendering_images"
+  | "building"
+  | "writing"
+  | "cancelling"
+  | "cancelled"
+  | "completed"
+  | "failed"
+  | "interrupted";
+
+export interface ExportJob {
+  export_id: string;
+  task_id: string;
+  format: string;
+  status: ExportJobStatus;
+  current_stage: string;
+  progress_completed: number;
+  progress_total: number;
+  output_path: string;
+  error_code: string;
+  error_message: string;
+  cancel_requested: boolean;
+  retry_of: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface ExportJobCreateResult {
+  export_id: string;
+  task_id: string;
+  format: string;
+  status: string;
+  retry_of?: string;
+}
+
 export interface OccurrenceItem {
   occurrence_id: string;
   task_id: string;
@@ -252,6 +290,11 @@ export interface ArchiveLensApi {
     review(task_id: string): Promise<{ path: string; record_count: number }>;
     html(task_id: string): Promise<{ path: string; occurrence_count: number; file_size_bytes: number }>;
     list(task_id: string, p?: { limit?: number; offset?: number }): Promise<{ task_id: string; items: ExportRecord[]; limit: number; offset: number }>;
+    create(p: { task_id: string; format: "html" | "json" | "review" }): Promise<ExportJobCreateResult>;
+    get(export_id: string): Promise<ExportJob>;
+    listJobs(task_id: string): Promise<{ task_id: string; items: ExportJob[] }>;
+    cancel(export_id: string): Promise<{ export_id: string; status: string }>;
+    retry(export_id: string): Promise<ExportJobCreateResult>;
   };
   files: {
     openFolder(path: string): Promise<{ ok: boolean }>;

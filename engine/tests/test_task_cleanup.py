@@ -558,8 +558,8 @@ class TaskCleanupWindowsRealTests(unittest.TestCase):
 
 
 class TaskCleanupSchemaTests(unittest.TestCase):
-    def test_schema_version_is_v8(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 8)
+    def test_schema_version_is_v9(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 9)
 
     def test_migration_from_v7_creates_cleanup_jobs_table(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="archivelens-cleanup-migrate-"))
@@ -576,7 +576,7 @@ class TaskCleanupSchemaTests(unittest.TestCase):
             ).fetchone()
             self.assertIsNotNone(table)
             version = store2.conn.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual(version, 8)
+            self.assertEqual(version, 9)
             self.assertIsNone(store2.task_cleanup_status("task_none"))
             store2.close()
         finally:
