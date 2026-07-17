@@ -54,21 +54,27 @@ export const DEFAULT_REVIEW_PAGE_ORIENTATION: ReviewPageOrientation = "up";
 export const ReviewPageOrientationsSchema = z.record(z.string().min(1), ReviewPageOrientationSchema);
 export type ReviewPageOrientations = z.infer<typeof ReviewPageOrientationsSchema>;
 
+export const SearchScriptScopeSchema = z.enum(["simplified", "traditional", "both"]);
+export type SearchScriptScope = z.infer<typeof SearchScriptScopeSchema>;
+export const DEFAULT_SEARCH_SCRIPT_SCOPE: SearchScriptScope = "both";
+
 export const AppSettingsFileSchema = z.object({
-  version: z.union([z.literal(1), z.literal(2)]).default(2),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(3),
   appearance: z.object({
     review_highlight: ReviewHighlightStyleSchema.default(DEFAULT_REVIEW_HIGHLIGHT_STYLE),
     review_preferences: ReviewDisplayPreferencesSchema.default(DEFAULT_REVIEW_DISPLAY_PREFERENCES),
+    search_script_scope: SearchScriptScopeSchema.default(DEFAULT_SEARCH_SCRIPT_SCOPE),
   }).default({
     review_highlight: DEFAULT_REVIEW_HIGHLIGHT_STYLE,
     review_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+    search_script_scope: DEFAULT_SEARCH_SCRIPT_SCOPE,
   }),
   task_overrides: z.record(z.string().min(1), z.object({
     review_highlight: ReviewHighlightStyleSchema.optional(),
     review_preferences: ReviewDisplayPreferencesSchema.optional(),
     page_orientations: ReviewPageOrientationsSchema.optional(),
   })).default({}),
-}).transform((settings) => ({ ...settings, version: 2 as const }));
+}).transform((settings) => ({ ...settings, version: 3 as const }));
 export type AppSettingsFile = z.infer<typeof AppSettingsFileSchema>;
 
 export const ReviewHighlightSettingsResultSchema = z.object({
@@ -78,6 +84,7 @@ export const ReviewHighlightSettingsResultSchema = z.object({
   global_preferences: ReviewDisplayPreferencesSchema,
   task_preferences_override: ReviewDisplayPreferencesSchema.nullable(),
   effective_preferences: ReviewDisplayPreferencesSchema,
+  search_script_scope: SearchScriptScopeSchema,
   page_orientations: ReviewPageOrientationsSchema,
   scope: z.enum(["global", "task"]),
 });
@@ -102,6 +109,10 @@ export const ReviewHighlightSettingsUpdateParamsSchema = z.union([
     scope: z.literal("global"),
     preferences: ReviewDisplayPreferencesSchema,
     task_id: z.string().min(1).optional(),
+  }),
+  z.object({
+    scope: z.literal("global"),
+    search_script_scope: SearchScriptScopeSchema,
   }),
   z.object({
     scope: z.literal("task"),
@@ -187,6 +198,7 @@ export const ErrorCodeSchema = z.enum([
   "SOURCE_EVIDENCE_UNAVAILABLE",
   "SOURCE_FILE_CHANGED",
   "PAGE_RENDER_LIMIT_EXCEEDED",
+  "OCR_CORPUS_UNAVAILABLE",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -270,6 +282,11 @@ export const MethodNameSchema = z.enum([
   "tasks.get",
   "results.query",
   "results.getDetail",
+  "search.corpusStatus",
+  "search.execute",
+  "search.sessions",
+  "search.hits",
+  "search.preparePageImage",
   "review.preparePageImage",
   "review.updateDecision",
   "review.updateNote",
@@ -333,6 +350,14 @@ export const DiagnosticsResultSchema = z.object({
 export type DiagnosticsResult = z.infer<typeof DiagnosticsResultSchema>;
 
 export const SearchModeSchema = z.enum(["exact_literal", "legacy_fixed_pair"]);
+export const OcrCorpusStatusValueSchema = z.enum([
+  "not_built",
+  "building",
+  "ready",
+  "partial",
+  "failed",
+  "legacy_requires_reocr",
+]);
 
 export const TaskFailureSchema = z.object({
   failure_id: z.string().min(1).optional(),
@@ -360,6 +385,11 @@ export const TaskSummarySchema = z.object({
   source_label: z.string().optional(),
   source_files: z.array(z.string()).optional(),
   review_preferences: ReviewDisplayPreferencesSchema.optional(),
+  ocr_corpus_version: z.number().int().nonnegative().optional(),
+  ocr_index_status: OcrCorpusStatusValueSchema.optional(),
+  ocr_model_id: z.string().nullable().optional(),
+  ocr_model_sha256: z.string().nullable().optional(),
+  ocr_indexed_pages: z.number().int().nonnegative().optional(),
   failures: z.array(TaskFailureSchema).optional(),
 }).passthrough();
 
@@ -435,6 +465,157 @@ export const ResultsQueryResultSchema = z.object({
   items: z.array(z.record(z.string(), z.unknown())),
 });
 
+export const OcrCorpusStatusResultSchema = z.object({
+  task_id: z.string().min(1),
+  status: OcrCorpusStatusValueSchema,
+  corpus_version: z.number().int().nonnegative(),
+  model_id: z.string().nullable(),
+  model_sha256: z.string().nullable(),
+  indexed_pages: z.number().int().nonnegative(),
+  line_count: z.number().int().nonnegative(),
+  requires_reocr: z.boolean(),
+});
+export type OcrCorpusStatusResult = z.infer<typeof OcrCorpusStatusResultSchema>;
+
+const OcrSearchFormsSchema = z.object({
+  original: z.string(),
+  simplified: z.string(),
+  traditional: z.string(),
+  taiwan: z.string(),
+  hong_kong: z.string(),
+});
+
+export const OcrSearchQueryGraphSchema = z.object({
+  forms: OcrSearchFormsSchema,
+  semantic_status: z.enum(["opencc_phrase_confirmed", "glyph_only_unconfirmed"]),
+  semantic_label: z.string(),
+  opencc_phrase_evidence: z.record(z.string(), z.object({
+    phrase_form: z.string(),
+    character_form: z.string(),
+  })),
+  single_character_variants: z.array(z.object({
+    text: z.string().min(1),
+    simplified: z.string().min(1),
+    regions: z.array(z.string()),
+    semantic_status: z.literal("glyph_only_unconfirmed"),
+    semantic_label: z.string(),
+  })),
+});
+export type OcrSearchQueryGraph = z.infer<typeof OcrSearchQueryGraphSchema>;
+
+export const OcrSearchCountsSchema = z.object({
+  total: z.number().int().nonnegative(),
+  layers: z.record(z.string(), z.number().int().nonnegative()),
+  scripts: z.record(z.string(), z.number().int().nonnegative()),
+  verification: z.record(z.string(), z.number().int().nonnegative()),
+  candidate_pending_review: z.number().int().nonnegative(),
+  corpus_status: OcrCorpusStatusValueSchema,
+  corpus_incomplete: z.boolean(),
+});
+export type OcrSearchCounts = z.infer<typeof OcrSearchCountsSchema>;
+
+export const OcrSearchSessionSchema = z.object({
+  search_session_id: z.string().min(1),
+  task_id: z.string().min(1),
+  query_text: z.string().min(1),
+  normalized_query: z.string().min(1),
+  script_scope: SearchScriptScopeSchema,
+  status: z.literal("completed"),
+  corpus_version: z.number().int().positive(),
+  query_forms: OcrSearchQueryGraphSchema,
+  counts: OcrSearchCountsSchema,
+  created_at: z.string().min(1),
+  completed_at: z.string().nullable(),
+});
+export type OcrSearchSession = z.infer<typeof OcrSearchSessionSchema>;
+
+export const OcrSearchExecuteParamsSchema = z.object({
+  task_id: z.string().min(1),
+  query_text: SearchTextSchema,
+  script_scope: SearchScriptScopeSchema.default(DEFAULT_SEARCH_SCRIPT_SCOPE),
+});
+export type OcrSearchExecuteParams = z.infer<typeof OcrSearchExecuteParamsSchema>;
+
+export const OcrSearchSessionsParamsSchema = z.object({
+  task_id: z.string().min(1),
+  limit: z.number().int().min(1).max(200).optional(),
+});
+
+export const OcrSearchSessionsResultSchema = z.object({
+  task_id: z.string().min(1),
+  items: z.array(OcrSearchSessionSchema),
+});
+export type OcrSearchSessionsResult = z.infer<typeof OcrSearchSessionsResultSchema>;
+
+export const OcrSearchHitSchema = z.object({
+  search_hit_id: z.string().min(1),
+  search_session_id: z.string().min(1),
+  task_id: z.string().min(1),
+  ocr_line_id: z.string().min(1),
+  match_layer: z.enum(["raw_exact", "context_resolved", "variant_graph", "ocr_top_k"]),
+  layer_priority: z.number().int().min(1).max(4),
+  index_kind: z.string().min(1),
+  matched_text: z.string().min(1),
+  index_start: z.number().int().nonnegative(),
+  index_end: z.number().int().positive(),
+  source_start: z.number().int().nonnegative().nullable(),
+  source_end: z.number().int().positive().nullable(),
+  source_text: z.string(),
+  source_script: z.enum(["simplified", "traditional", "neutral", "mixed", "unknown"]),
+  verification_status: z.string().min(1),
+  confidence: z.number().min(0).max(1),
+  payload: z.record(z.string(), z.unknown()),
+  document_id: z.string().min(1),
+  source_id: z.string().min(1),
+  page_no: z.number().int().positive(),
+  page_index: z.number().int().nonnegative(),
+  line_index: z.number().int().nonnegative(),
+  raw_text: z.string(),
+  resolved_text: z.string(),
+  line_confidence: z.number().min(0).max(1),
+  bbox: z.array(z.array(z.number())),
+  word_boxes: z.array(z.unknown()),
+  isolated_top_k: z.array(z.record(z.string(), z.unknown())),
+  match_bbox: z.array(z.array(z.number())),
+  source_page_width: z.number().int().nonnegative(),
+  source_page_height: z.number().int().nonnegative(),
+  display_path: z.string(),
+  file_name: z.string(),
+  normalized_x0: z.number().min(0).max(1),
+  normalized_y0: z.number().min(0).max(1),
+  normalized_x1: z.number().min(0).max(1),
+  normalized_y1: z.number().min(0).max(1),
+}).passthrough();
+export type OcrSearchHit = z.infer<typeof OcrSearchHitSchema>;
+
+export const OcrSearchHitsParamsSchema = z.object({
+  task_id: z.string().min(1),
+  search_session_id: z.string().min(1),
+  limit: z.number().int().min(1).max(200).optional(),
+  offset: z.number().int().nonnegative().optional(),
+});
+
+export const OcrSearchHitsResultSchema = z.object({
+  search_session_id: z.string().min(1),
+  task_id: z.string().min(1),
+  session: OcrSearchSessionSchema,
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().min(1).max(200),
+  offset: z.number().int().nonnegative(),
+  has_more: z.boolean(),
+  items: z.array(OcrSearchHitSchema),
+});
+export type OcrSearchHitsResult = z.infer<typeof OcrSearchHitsResultSchema>;
+
+export const OcrSearchPreparePageImageParamsSchema = z.object({
+  task_id: z.string().min(1),
+  search_hit_id: z.string().min(1),
+  target_css_width: z.number().finite().positive(),
+  target_css_height: z.number().finite().positive(),
+  device_pixel_ratio: z.number().finite().min(0.5).max(4),
+});
+export type OcrSearchPreparePageImageParams = z.infer<typeof OcrSearchPreparePageImageParamsSchema>;
+
 export const ReviewPreparePageImageParamsSchema = z.object({
   task_id: z.string().min(1),
   occurrence_id: z.string().min(1),
@@ -470,6 +651,11 @@ export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "tasks.list") return TasksListResultSchema.parse(value);
   if (method === "exports.list") return ExportsListResultSchema.parse(value);
   if (method === "results.query") return ResultsQueryResultSchema.parse(value);
+  if (method === "search.corpusStatus") return OcrCorpusStatusResultSchema.parse(value);
+  if (method === "search.execute") return OcrSearchSessionSchema.parse(value);
+  if (method === "search.sessions") return OcrSearchSessionsResultSchema.parse(value);
+  if (method === "search.hits") return OcrSearchHitsResultSchema.parse(value);
+  if (method === "search.preparePageImage") return ReviewPageImageResultSchema.parse(value);
   if (method === "review.preparePageImage") return ReviewPageImageResultSchema.parse(value);
   return value;
 }

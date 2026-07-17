@@ -47,6 +47,13 @@ const api: ArchiveLensApi = {
     query: (p) => ipcRenderer.invoke("results.query", p),
     getDetail: (p) => ipcRenderer.invoke("results.getDetail", p),
   },
+  search: {
+    getCorpusStatus: (task_id) => ipcRenderer.invoke("search.corpusStatus", { task_id }),
+    execute: (p) => ipcRenderer.invoke("search.execute", p),
+    listSessions: (task_id, limit) => ipcRenderer.invoke("search.sessions", { task_id, ...(limit ? { limit } : {}) }),
+    queryHits: (p) => ipcRenderer.invoke("search.hits", p),
+    preparePageImage: (p) => ipcRenderer.invoke("search.preparePageImage", p),
+  },
   review: {
     preparePageImage: (p) => ipcRenderer.invoke("review.preparePageImage", p),
     updateDecision: (p) => ipcRenderer.invoke("review.updateDecision", p),

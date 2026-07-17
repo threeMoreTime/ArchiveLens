@@ -19,6 +19,14 @@ import {
   ReviewHighlightSettingsUpdateParamsSchema,
   ReviewPageImageResultSchema,
   ReviewPreparePageImageParamsSchema,
+  OcrCorpusStatusResultSchema,
+  OcrSearchExecuteParamsSchema,
+  OcrSearchHitSchema,
+  OcrSearchHitsParamsSchema,
+  OcrSearchHitsResultSchema,
+  OcrSearchPreparePageImageParamsSchema,
+  OcrSearchSessionSchema,
+  SearchScriptScopeSchema,
   MethodNameSchema,
   normalizeSearchText,
 } from "@shared/index";
@@ -143,6 +151,138 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     }
   });
 
+  it("任务内简繁检索方法、会话、命中和错误码保持强类型", () => {
+    for (const method of [
+      "search.corpusStatus",
+      "search.execute",
+      "search.sessions",
+      "search.hits",
+      "search.preparePageImage",
+    ]) {
+      expect(MethodNameSchema.safeParse(method).success, method).toBe(true);
+    }
+    expect(OcrSearchExecuteParamsSchema.parse({
+      task_id: "task-1",
+      query_text: "亏空",
+    })).toMatchObject({ script_scope: "both" });
+    expect(OcrSearchExecuteParamsSchema.safeParse({
+      task_id: "task-1",
+      query_text: "亏空",
+      script_scope: "mixed",
+    }).success).toBe(false);
+    expect(ErrorCodeSchema.safeParse("OCR_CORPUS_UNAVAILABLE").success).toBe(true);
+    expect(OcrCorpusStatusResultSchema.safeParse({
+      task_id: "task-1",
+      status: "legacy_requires_reocr",
+      corpus_version: 0,
+      model_id: null,
+      model_sha256: null,
+      indexed_pages: 0,
+      line_count: 0,
+      requires_reocr: true,
+    }).success).toBe(true);
+    const session = {
+      search_session_id: "search-1",
+      task_id: "task-1",
+      query_text: "亏空",
+      normalized_query: "亏空",
+      script_scope: "both",
+      status: "completed",
+      corpus_version: 1,
+      query_forms: {
+        forms: {
+          original: "亏空",
+          simplified: "亏空",
+          traditional: "虧空",
+          taiwan: "虧空",
+          hong_kong: "虧空",
+        },
+        semantic_status: "glyph_only_unconfirmed",
+        semantic_label: "仅字形关联，语义未确认",
+        opencc_phrase_evidence: {},
+        single_character_variants: [],
+      },
+      counts: {
+        total: 1,
+        layers: { variant_graph: 1 },
+        scripts: { traditional: 1 },
+        verification: { variant_related: 1 },
+        candidate_pending_review: 0,
+        corpus_status: "ready",
+        corpus_incomplete: false,
+      },
+      created_at: "2026-07-16T00:00:00Z",
+      completed_at: "2026-07-16T00:00:00Z",
+    };
+    expect(OcrSearchSessionSchema.safeParse(session).success).toBe(true);
+    const hit = {
+      search_hit_id: "hit-1",
+      search_session_id: "search-1",
+      task_id: "task-1",
+      ocr_line_id: "line-1",
+      match_layer: "variant_graph",
+      layer_priority: 3,
+      index_kind: "simplified",
+      matched_text: "亏空",
+      index_start: 0,
+      index_end: 2,
+      source_start: 0,
+      source_end: 2,
+      source_text: "虧空",
+      source_script: "traditional",
+      verification_status: "variant_related",
+      confidence: 0.95,
+      payload: {},
+      document_id: "doc-1",
+      source_id: "sample.pdf",
+      page_no: 1,
+      page_index: 0,
+      line_index: 0,
+      raw_text: "虧空",
+      resolved_text: "虧空",
+      line_confidence: 0.95,
+      bbox: [[0, 0], [100, 0], [100, 30], [0, 30]],
+      word_boxes: [],
+      isolated_top_k: [],
+      match_bbox: [[0, 0], [100, 0], [100, 30], [0, 30]],
+      source_page_width: 1000,
+      source_page_height: 1400,
+      display_path: "sample.pdf",
+      file_name: "sample.pdf",
+      normalized_x0: 0,
+      normalized_y0: 0,
+      normalized_x1: 0.1,
+      normalized_y1: 0.02,
+    };
+    expect(OcrSearchHitSchema.safeParse(hit).success).toBe(true);
+    expect(OcrSearchHitsParamsSchema.safeParse({
+      task_id: "task-1",
+      search_session_id: "search-1",
+      limit: 50,
+      offset: 0,
+    }).success).toBe(true);
+    expect(OcrSearchHitsParamsSchema.safeParse({
+      search_session_id: "search-1",
+    }).success).toBe(false);
+    expect(OcrSearchHitsResultSchema.safeParse({
+      search_session_id: "search-1",
+      task_id: "task-1",
+      session,
+      total: 1,
+      limit: 100,
+      offset: 0,
+      has_more: false,
+      items: [hit],
+    }).success).toBe(true);
+    expect(OcrSearchPreparePageImageParamsSchema.safeParse({
+      task_id: "task-1",
+      search_hit_id: "hit-1",
+      target_css_width: 960,
+      target_css_height: 1280,
+      device_pixel_ratio: 2,
+    }).success).toBe(true);
+  });
+
   it("校对高亮设置校验颜色、透明度与配置范围", () => {
     expect(ReviewHighlightStyleSchema.parse({ color: "#abcdef", opacity: 0.25 })).toEqual({ color: "#ABCDEF", opacity: 0.25 });
     expect(ReviewHighlightStyleSchema.safeParse({ color: "red", opacity: 0.25 }).success).toBe(false);
@@ -152,6 +292,9 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", task_id: "task-1", highlight: null }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", preferences: { page_quality: "maximum", context_direction: "ltr", context_radius: 15 } }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", task_id: "task-1", preferences: null }).success).toBe(true);
+    expect(SearchScriptScopeSchema.options).toEqual(["simplified", "traditional", "both"]);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", search_script_scope: "both" }).success).toBe(true);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", search_script_scope: "mixed" }).success).toBe(false);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "document", task_id: "task-1", document_id: "doc-1", orientation: "right" }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "document", task_id: "task-1", document_id: "doc-1", orientation: "diagonal" }).success).toBe(false);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", highlight: null }).success).toBe(false);

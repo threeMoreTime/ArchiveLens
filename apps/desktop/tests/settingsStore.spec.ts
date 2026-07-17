@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_REVIEW_DISPLAY_PREFERENCES, DEFAULT_REVIEW_HIGHLIGHT_STYLE } from "@shared/index";
+import {
+  DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+  DEFAULT_REVIEW_HIGHLIGHT_STYLE,
+  DEFAULT_SEARCH_SCRIPT_SCOPE,
+} from "@shared/index";
 import { SettingsStore } from "../src/main/settings/store";
 
 const temporaryDirectories: string[] = [];
@@ -28,6 +32,7 @@ describe("SettingsStore", () => {
       global_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
       task_preferences_override: null,
       effective_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      search_script_scope: DEFAULT_SEARCH_SCRIPT_SCOPE,
       page_orientations: {},
       scope: "global",
     });
@@ -96,7 +101,31 @@ describe("SettingsStore", () => {
       global: { color: "#278BC7", opacity: 0.32 },
       global_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
       effective_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      search_script_scope: DEFAULT_SEARCH_SCRIPT_SCOPE,
       page_orientations: {},
+    });
+  });
+
+  it("简繁检索范围默认全部并以版本 3 跨实例保存", async () => {
+    const { filePath, store } = await createStore();
+    await expect(store.get()).resolves.toMatchObject({
+      search_script_scope: "both",
+    });
+    await expect(store.update({
+      scope: "global",
+      search_script_scope: "traditional",
+    })).resolves.toMatchObject({
+      search_script_scope: "traditional",
+    });
+
+    const saved = JSON.parse(await readFile(filePath, "utf-8"));
+    expect(saved).toMatchObject({
+      version: 3,
+      appearance: { search_script_scope: "traditional" },
+    });
+    const restored = new SettingsStore(filePath);
+    await expect(restored.get()).resolves.toMatchObject({
+      search_script_scope: "traditional",
     });
   });
 

@@ -54,3 +54,14 @@
 
 检索会话与全部命中在一个 SQLite 事务中提交；任何命中写入失败都会连同会话整体
 rollback。
+
+## 桌面端操作与 IPC
+
+设置页保存全局默认 `search_script_scope`，初始为 `both`。任务内检索页可为每次
+检索临时切换范围，不反向修改全局默认。页面读取 `search.corpusStatus` 和
+`search.sessions`，执行 `search.execute`，通过 `search.hits` 分页，并用
+`search.preparePageImage` 依据 `search_hit_id` 打开经来源指纹验证的整页证据。
+
+人工核查详情始终并列显示 `raw_text`（不可变）、`resolved_text`、命中层、原图片
+字形类别、索引类别、置信度和语义标签。`ocr_top_k` 显示显著警告；该页面不提供
+校正写入，不会使用预留 correction 字段。旧任务只显示显式重新 OCR 入口。

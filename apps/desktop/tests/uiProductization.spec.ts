@@ -11,11 +11,13 @@ const app = source("App.tsx");
 const newScan = source("pages/NewScan.tsx");
 const taskPage = source("pages/TaskPage.tsx");
 const reviewPage = source("pages/ReviewPage.tsx");
+const searchPage = source("pages/SearchPage.tsx");
 const reviewHighlightSettings = source("components/ReviewHighlightSettings.tsx");
 const exportPage = source("pages/ExportPage.tsx");
 const taskCenter = source("pages/TaskCenter.tsx");
 const diagnosticsPage = source("pages/DiagnosticsPage.tsx");
 const settingsPage = source("pages/SettingsPage.tsx");
+const scriptSearchSettings = source("components/ScriptSearchSettings.tsx");
 const styles = source("styles.css");
 
 describe("桌面端产品化 UI contract", () => {
@@ -106,6 +108,26 @@ describe("桌面端产品化 UI contract", () => {
     expect(reviewHighlightSettings).toContain("出处页始终按源文件无损显示");
   });
 
+  it("任务内检索提供简繁范围、持久历史、分层证据和原图人工核查", () => {
+    expect(app).toContain('path="/search/:taskId"');
+    expect(app).toContain('to={`/search/${currentTaskId}`}');
+    expect(taskPage).toContain('nav(`/search/${taskId}`)');
+    expect(taskPage).toContain("legacy_requires_reocr");
+    expect(searchPage).toContain("window.archiveLens.search.execute");
+    expect(searchPage).toContain("window.archiveLens.search.listSessions");
+    expect(searchPage).toContain("window.archiveLens.search.queryHits");
+    expect(searchPage).toContain("window.archiveLens.search.preparePageImage");
+    expect(searchPage).toContain("只命中简体");
+    expect(searchPage).toContain("只命中繁体");
+    expect(searchPage).toContain("简体和繁体");
+    expect(searchPage).toContain("OCR 原文（不可变）");
+    expect(searchPage).toContain("OCR Top-K 候选");
+    expect(searchPage).toContain("不能静默迁移");
+    expect(searchPage).toContain("不修改 OCR 原文");
+    expect(styles).toContain(".al-search-highlight");
+    expect(styles).toContain(".al-search-layer-ocr-top-k");
+  });
+
   it("移除清晰度档位并保留可折叠、可联动的阅读方向档案样例", () => {
     expect(reviewHighlightSettings).not.toContain("qualityExpanded");
     expect(reviewHighlightSettings).toContain("directionExpanded");
@@ -131,6 +153,12 @@ describe("桌面端产品化 UI contract", () => {
     expect(app).toContain('path="/settings"');
     expect(app).not.toContain('to="/diagnostics"');
     expect(settingsPage).toContain("ReviewHighlightSettings");
+    expect(settingsPage).toContain("ScriptSearchSettings");
+    expect(scriptSearchSettings).toContain("只命中简体");
+    expect(scriptSearchSettings).toContain("只命中繁体");
+    expect(scriptSearchSettings).toContain("简体和繁体");
+    expect(scriptSearchSettings).toContain("search_script_scope");
+    expect(scriptSearchSettings).toContain("绝不会覆盖 OCR 原文");
     expect(settingsPage).toContain("loadAllTasks");
     expect(settingsPage).toContain("currentTaskId");
     expect(reviewHighlightSettings).toContain("全局默认");

@@ -3,6 +3,12 @@ import type { SidecarManager } from "../sidecar/manager";
 import { registerResourceRoot, unregisterResourceRoot } from "../security/protocol";
 import { getSettingsStore } from "./settings";
 import { logger } from "../logging/logger";
+import {
+  OcrSearchExecuteParamsSchema,
+  OcrSearchHitsParamsSchema,
+  OcrSearchPreparePageImageParamsSchema,
+  OcrSearchSessionsParamsSchema,
+} from "@shared/index";
 
 /**
  * 转发类 IPC：把 Renderer 请求经 Sidecar 投递到 Python Engine。
@@ -46,6 +52,22 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
 
   ipcMain.handle("results.query", async (_e, params) => sidecar.call("results.query", params));
   ipcMain.handle("results.getDetail", async (_e, params) => sidecar.call("results.getDetail", params));
+  ipcMain.handle("search.corpusStatus", async (_e, params: unknown) => {
+    const parsed = OcrSearchSessionsParamsSchema.pick({ task_id: true }).parse(params);
+    return sidecar.call("search.corpusStatus", parsed);
+  });
+  ipcMain.handle("search.execute", async (_e, params: unknown) =>
+    sidecar.call("search.execute", OcrSearchExecuteParamsSchema.parse(params)),
+  );
+  ipcMain.handle("search.sessions", async (_e, params: unknown) =>
+    sidecar.call("search.sessions", OcrSearchSessionsParamsSchema.parse(params)),
+  );
+  ipcMain.handle("search.hits", async (_e, params: unknown) =>
+    sidecar.call("search.hits", OcrSearchHitsParamsSchema.parse(params)),
+  );
+  ipcMain.handle("search.preparePageImage", async (_e, params: unknown) =>
+    sidecar.call("search.preparePageImage", OcrSearchPreparePageImageParamsSchema.parse(params)),
+  );
 
   ipcMain.handle("review.preparePageImage", async (_e, params) =>
     sidecar.call("review.preparePageImage", params),

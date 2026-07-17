@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { ClipboardTaskListLtrRegular, DocumentAddRegular, EditRegular, HomeRegular, SettingsRegular, ShareRegular } from "@fluentui/react-icons";
+import { ClipboardTaskListLtrRegular, DocumentAddRegular, EditRegular, HomeRegular, SearchRegular, SettingsRegular, ShareRegular } from "@fluentui/react-icons";
 import type { TaskSummary } from "../../preload/api";
 import ExportPage from "./pages/ExportPage";
 import Welcome from "./pages/Welcome";
 import NewScan from "./pages/NewScan";
 import TaskPage from "./pages/TaskPage";
 import ReviewPage from "./pages/ReviewPage";
+import SearchPage from "./pages/SearchPage";
 import TaskCenter from "./pages/TaskCenter";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -16,7 +17,7 @@ import brandIconUrl from "../../../resources/icon-64.png";
 const CURRENT_TASK_STORAGE_KEY = "archivelens.currentTaskId";
 
 function taskIdFromPath(pathname: string): string | null {
-  const match = /^\/(?:tasks|review|export)\/([^/]+)$/.exec(pathname);
+  const match = /^\/(?:tasks|review|search|export)\/([^/]+)$/.exec(pathname);
   if (!match?.[1]) return null;
   try {
     return decodeURIComponent(match[1]);
@@ -122,6 +123,7 @@ export default function App() {
           <NavLink to="/tasks" end className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ClipboardTaskListLtrRegular /> 任务中心</NavLink>
           {currentTaskId ? <NavLink to={`/tasks/${currentTaskId}`} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ClipboardTaskListLtrRegular /> 任务详情</NavLink> : <span className="al-navlink disabled" aria-disabled="true"><ClipboardTaskListLtrRegular /> 任务详情</span>}
           {currentTaskId ? <NavLink to={`/review/${currentTaskId}`} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><EditRegular /> 校对</NavLink> : <span className="al-navlink disabled" aria-disabled="true"><EditRegular /> 校对</span>}
+          {currentTaskId ? <NavLink to={`/search/${currentTaskId}`} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><SearchRegular /> 任务内检索</NavLink> : <span className="al-navlink disabled" aria-disabled="true"><SearchRegular /> 任务内检索</span>}
           <NavLink to={exportPath} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ShareRegular /> 导出</NavLink>
         </nav>
         {recoverable.length > 0 && (
@@ -137,13 +139,14 @@ export default function App() {
           <NavLink to="/settings" className={({ isActive }) => "al-navlink al-settings-navlink" + (isActive || location.pathname === "/diagnostics" ? " active" : "")}><SettingsRegular /> 设置</NavLink>
         </div>
       </aside>
-      <main ref={mainRef} className={"al-main" + (location.pathname.startsWith("/review/") ? " al-main-review" : "")}>
+      <main ref={mainRef} className={"al-main" + (location.pathname.startsWith("/review/") || location.pathname.startsWith("/search/") ? " al-main-review" : "")}>
         <Routes>
           <Route path="/" element={<Welcome />} />
           <Route path="/scan/new" element={<NewScan />} />
           <Route path="/tasks" element={<TaskCenter />} />
           <Route path="/tasks/:taskId" element={<TaskPage />} />
           <Route path="/review/:taskId" element={<ReviewPage />} />
+          <Route path="/search/:taskId" element={<SearchPage />} />
           <Route path="/export" element={<ExportPage />} />
           <Route path="/export/:taskId" element={<ExportPage />} />
           <Route path="/diagnostics" element={<DiagnosticsPage />} />

@@ -15,7 +15,7 @@ beforeAll(async () => {
 
 describe("Preload API 形状（任务 §五.3）", () => {
   it("暴露允许的命名空间", () => {
-    for (const k of ["app", "dialog", "subscribe", "tasks", "demo", "results", "review", "export", "files", "settings"]) {
+    for (const k of ["app", "dialog", "subscribe", "tasks", "demo", "results", "search", "review", "export", "files", "settings"]) {
       expect(exposed[k]).toBeDefined();
     }
   });

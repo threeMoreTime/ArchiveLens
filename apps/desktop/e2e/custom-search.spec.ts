@@ -136,6 +136,29 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     });
     expect(scanEvidence.occurrence.page_image_width).toBe(scanEvidence.occurrence.source_page_width);
 
+    await page.getByRole("button", { name: "任务内检索" }).click();
+    await expect(page).toHaveURL(new RegExp(`#\\/search\\/${taskId}$`));
+    const taskSearchInput = page.getByRole("textbox", { name: "任务内检索文字或词语" });
+    await expect(taskSearchInput).toHaveValue("档案");
+    await page.getByRole("button", { name: "检索", exact: true }).click();
+    await expect(page.locator(".al-search-result").first()).toBeVisible();
+    await expect(page.locator(".al-search-raw-evidence")).toContainText("档案");
+    await expect(page.locator('img[alt="检索结果出处页"]')).toBeVisible();
+    await expect(page.locator(".al-search-highlight")).toBeVisible();
+
+    await page.getByLabel("命中字形范围").selectOption("traditional");
+    await taskSearchInput.fill("档案");
+    await page.getByRole("button", { name: "检索", exact: true }).click();
+    await expect(page.getByText("没有符合当前字形范围的结果")).toBeVisible();
+
+    await page.getByLabel("命中字形范围").selectOption("both");
+    await taskSearchInput.fill("檔案");
+    await page.getByRole("button", { name: "检索", exact: true }).click();
+    await expect(page.locator(".al-search-result").first()).toBeVisible();
+    await expect(page.getByText("简繁字形索引命中").first()).toBeVisible();
+    await expect(page.locator(".al-search-history-scroll button")).toHaveCount(3);
+    await page.getByRole("link", { name: "任务详情" }).click();
+
     await page.getByRole("button", { name: "进入校对工作台" }).click();
     await expect(page.getByText("档案", { exact: true }).first()).toBeVisible();
     await expect(page.locator('img[alt="出处页"]')).toBeVisible();

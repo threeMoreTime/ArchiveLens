@@ -4,6 +4,7 @@ import {
   AppSettingsFileSchema,
   DEFAULT_REVIEW_DISPLAY_PREFERENCES,
   DEFAULT_REVIEW_HIGHLIGHT_STYLE,
+  DEFAULT_SEARCH_SCRIPT_SCOPE,
   ReviewHighlightSettingsGetParamsSchema,
   ReviewHighlightSettingsResultSchema,
   ReviewHighlightSettingsUpdateParamsSchema,
@@ -44,6 +45,8 @@ export class SettingsStore {
             [parsed.document_id]: parsed.orientation,
           },
         };
+      } else if ("search_script_scope" in parsed) {
+        settings.appearance.search_script_scope = parsed.search_script_scope;
       } else if ("highlight" in parsed) {
         if (parsed.scope === "global") {
           settings.appearance.review_highlight = parsed.highlight;
@@ -74,7 +77,7 @@ export class SettingsStore {
         };
       }
       await this.save(settings);
-      return this.resolve(settings, parsed.task_id);
+      return this.resolve(settings, "task_id" in parsed ? parsed.task_id : undefined);
     });
   }
 
@@ -120,6 +123,8 @@ export class SettingsStore {
       effective_preferences: taskPreferencesOverride
         ?? settings.appearance.review_preferences
         ?? DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+      search_script_scope: settings.appearance.search_script_scope
+        ?? DEFAULT_SEARCH_SCRIPT_SCOPE,
       page_orientations: override?.page_orientations ?? {},
       scope: taskOverride || taskPreferencesOverride ? "task" : "global",
     });

@@ -82,7 +82,25 @@ U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内
 | --- | --- | --- |
 | `app.info` | 引擎版本 / 协议版本 / python 路径 | ✅ |
 | `diagnostics.run` | 环境自检（Tesseract / DjVu / 语言包 / RapidOCR / onnx） | ✅ |
-| `tasks.*` / `results.*` / `review.*` / `export.*` / `exports.list` / `files.*` / `settings.*` | 见 `MethodNameSchema` | ✅ |
+| `tasks.*` / `results.*` / `search.*` / `review.*` / `export.*` / `exports.list` / `files.*` / `settings.*` | 见 `MethodNameSchema` | ✅ |
+
+### `search.*`
+
+任务内简繁字形检索使用五个 Python Sidecar 方法，全部只访问任务本地 SQLite 与经
+指纹验证的来源文件，不向外联网：
+
+| 方法 | 作用 |
+| --- | --- |
+| `search.corpusStatus` | 返回 `not_built / building / ready / partial / failed / legacy_requires_reocr`、模型身份和已索引页数 |
+| `search.execute` | 按 `query_text` 与 `simplified / traditional / both` 执行分层检索，并原子保存会话及全部命中 |
+| `search.sessions` | 返回同一任务最近的持久化检索历史 |
+| `search.hits` | 按 `task_id + search_session_id` 校验会话归属后，分页返回原文、解析文本、层级、字形、坐标和 Top-K 证据 |
+| `search.preparePageImage` | 根据 `search_hit_id` 准备经来源 SHA-256 验证的本地页面图像，不接收或返回绝对路径 |
+
+`search.execute` 仅接受已处于 `ready` 或 `partial` 的语料。旧任务返回
+`OCR_CORPUS_UNAVAILABLE` 和 `requires_reocr=true`，Renderer 必须引导用户显式
+重新 OCR，不得静默迁移。命中层级固定为 `raw_exact → context_resolved →
+variant_graph → ocr_top_k`；最后一层固定标记为候选待人工核查。
 
 ### `review.preparePageImage`
 
@@ -110,10 +128,12 @@ U+FEFF。匹配是区分大小写的精确连续子串，只在同一 OCR 行内
 ### 本地显示设置
 
 - `settings.get` 与 `settings.update` 是 Renderer 到 Electron Main 的本地 IPC，不经过 Python Sidecar。
+- 设置文件当前版本为 3；读取 v1/v2 时只补入默认的 `search_script_scope="both"`，不会改写 OCR 数据。
 - 校对高亮样式由 6 位十六进制 `color` 和 `0.1`～`0.6` 的 `opacity` 组成，保存在 `userData/settings.json`。
 - 旧 `page_quality` 字段继续兼容解析，但读取和保存时统一归一为 `maximum`，不再影响页面渲染。
 - `settings.update` 支持修改 `global` 全局默认，或按 `task_id` 保存/清除 `task` 覆盖；读取时返回全局值、任务覆盖和最终生效值。
-- `settings.update` 还支持 `{ scope: "document", task_id, document_id, orientation }`，其中 `orientation` 为 `up | right | down | left`。方向保存在任务覆盖项的 `page_orientations` 映射中，由同一 `document_id` 的全部命中共用；旧设置缺失该映射时按空映射读取，文件版本继续为 2。
+- `settings.update` 还支持 `{ scope: "global", search_script_scope }`，取值为 `simplified | traditional | both`，默认 `both`；它只决定新检索会话的默认范围。
+- `settings.update` 还支持 `{ scope: "document", task_id, document_id, orientation }`，其中 `orientation` 为 `up | right | down | left`。方向保存在任务覆盖项的 `page_orientations` 映射中，由同一 `document_id` 的全部命中共用；旧设置缺失该映射时按空映射读取。
 - 删除任务时会清理对应的任务高亮、扫描上下文和页面方向覆盖，但不会影响全局设置或其他任务。页面方向只影响校对工作台中央出处页，不进入 Python IPC、OCR 坐标或离线导出。
 
 ## 健壮性保证

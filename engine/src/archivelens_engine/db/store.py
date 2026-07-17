@@ -1843,8 +1843,10 @@ class TaskStore:
                     l.bbox_json,
                     l.word_boxes_json,
                     l.isolated_top_k_json,
-                    s.display_path,
-                    s.file_name
+                    l.source_page_width,
+                    l.source_page_height,
+                    COALESCE(s.display_path, l.source_id) AS display_path,
+                    COALESCE(s.file_name, l.source_id) AS file_name
                 FROM ocr_search_hits AS h
                 JOIN ocr_lines AS l ON l.ocr_line_id=h.ocr_line_id
                 LEFT JOIN task_sources AS s
@@ -1861,17 +1863,126 @@ class TaskStore:
                 """,
                 (search_session_id, limit, offset),
             ).fetchall()
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            item = dict(row)
-            item["payload"] = json.loads(item.pop("payload_json"))
-            item["bbox"] = json.loads(item.pop("bbox_json"))
-            item["word_boxes"] = json.loads(item.pop("word_boxes_json"))
-            item["isolated_top_k"] = json.loads(
-                item.pop("isolated_top_k_json")
-            )
-            result.append(item)
-        return total, result
+        return total, [self._decode_ocr_search_hit_row(row) for row in rows]
+
+    @staticmethod
+    def _box_points(value: Any) -> list[tuple[float, float]]:
+        if not isinstance(value, (list, tuple)):
+            return []
+        if (
+            len(value) == 4
+            and all(isinstance(item, (int, float)) for item in value)
+        ):
+            x0, y0, x1, y1 = (float(item) for item in value)
+            return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        points: list[tuple[float, float]] = []
+        for item in value:
+            if (
+                isinstance(item, (list, tuple))
+                and len(item) >= 2
+                and isinstance(item[0], (int, float))
+                and isinstance(item[1], (int, float))
+            ):
+                points.append((float(item[0]), float(item[1])))
+        return points
+
+    @classmethod
+    def _match_box(
+        cls,
+        *,
+        line_box: Any,
+        word_boxes: Any,
+        source_start: Any,
+        source_end: Any,
+    ) -> list[list[float]]:
+        points: list[tuple[float, float]] = []
+        if (
+            isinstance(source_start, int)
+            and isinstance(source_end, int)
+            and isinstance(word_boxes, list)
+            and 0 <= source_start < source_end <= len(word_boxes)
+        ):
+            for word_box in word_boxes[source_start:source_end]:
+                points.extend(cls._box_points(word_box))
+        if not points:
+            points = cls._box_points(line_box)
+        if not points:
+            return []
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+        return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+
+    @classmethod
+    def _decode_ocr_search_hit_row(
+        cls,
+        row: sqlite3.Row,
+    ) -> dict[str, Any]:
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json"))
+        line_box = json.loads(item.pop("bbox_json"))
+        word_boxes = json.loads(item.pop("word_boxes_json"))
+        item["isolated_top_k"] = json.loads(
+            item.pop("isolated_top_k_json")
+        )
+        item["bbox"] = line_box
+        item["word_boxes"] = word_boxes
+        match_box = cls._match_box(
+            line_box=line_box,
+            word_boxes=word_boxes,
+            source_start=item.get("source_start"),
+            source_end=item.get("source_end"),
+        )
+        item["match_bbox"] = match_box
+        width = float(item.get("source_page_width") or 0.0)
+        height = float(item.get("source_page_height") or 0.0)
+        if match_box and width > 0 and height > 0:
+            item["normalized_x0"] = max(0.0, min(1.0, match_box[0][0] / width))
+            item["normalized_y0"] = max(0.0, min(1.0, match_box[0][1] / height))
+            item["normalized_x1"] = max(0.0, min(1.0, match_box[2][0] / width))
+            item["normalized_y1"] = max(0.0, min(1.0, match_box[2][1] / height))
+        else:
+            item["normalized_x0"] = 0.0
+            item["normalized_y0"] = 0.0
+            item["normalized_x1"] = 1.0
+            item["normalized_y1"] = 1.0
+        return item
+
+    def get_ocr_search_hit_evidence(
+        self,
+        *,
+        task_id: str,
+        search_hit_id: str,
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT
+                    h.*,
+                    l.document_id,
+                    l.source_id,
+                    l.page_no,
+                    l.page_index,
+                    l.line_index,
+                    l.raw_text,
+                    l.resolved_text,
+                    l.line_confidence,
+                    l.bbox_json,
+                    l.word_boxes_json,
+                    l.isolated_top_k_json,
+                    l.source_page_width,
+                    l.source_page_height,
+                    COALESCE(s.display_path, l.source_id) AS display_path,
+                    COALESCE(s.file_name, l.source_id) AS file_name
+                FROM ocr_search_hits AS h
+                JOIN ocr_lines AS l ON l.ocr_line_id=h.ocr_line_id
+                LEFT JOIN task_sources AS s
+                    ON s.task_id=h.task_id AND s.source_id=l.source_id
+                WHERE h.task_id=? AND h.search_hit_id=?
+                """,
+                (task_id, search_hit_id),
+            ).fetchone()
+        return self._decode_ocr_search_hit_row(row) if row is not None else None
 
     def _validate_recovery_occurrence(self, occurrence: dict[str, Any], *, source_id: str, page_no: int) -> None:
         matched = occurrence.get("matched_text") or occurrence.get("matched_character")

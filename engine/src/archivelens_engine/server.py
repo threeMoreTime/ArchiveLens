@@ -35,6 +35,7 @@ from .documents.formats import (
 from .html_export import write_offline_review_report
 from .ocr_core import build_bbox_hash
 from .ocr_engine import ArchiveLensOCR
+from .ocr_search import OCRSearchService, OCRSearchUnavailable, SCRIPT_SCOPES
 from .page_evidence import PageEvidenceError, PageEvidenceService
 from .protocol import (
     ErrorCode,
@@ -124,6 +125,7 @@ class Server:
         self.workspace_root = Path(workspace_root)
         (self.workspace_root / "tasks").mkdir(parents=True, exist_ok=True)
         self.store = TaskStore(db_path or (self.workspace_root / "archivelens.db"))
+        self.ocr_search = OCRSearchService(self.store)
         self.store.reconcile_incomplete_tasks(reason="ENGINE_PROCESS_EXITED")
         self.build_info = load_build_info()
         self.page_evidence = PageEvidenceService(self.config)
@@ -249,6 +251,11 @@ class Server:
                 "demo.create": _h_demo_create,
                 "results.query": _h_results_query,
                 "results.getDetail": _h_results_detail,
+                "search.corpusStatus": _h_search_corpus_status,
+                "search.execute": _h_search_execute,
+                "search.sessions": _h_search_sessions,
+                "search.hits": _h_search_hits,
+                "search.preparePageImage": _h_search_prepare_page_image,
                 "review.preparePageImage": _h_review_prepare_page_image,
                 "review.updateDecision": _h_review_decision,
                 "review.updateNote": _h_review_note,
@@ -1186,6 +1193,167 @@ def _h_results_detail(server: Server, params: dict) -> dict:
     if detail is None:
         raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"结果不存在: {occ_id}")
     return detail
+
+
+def _h_search_corpus_status(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    if server.store.get_task(task_id) is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    return {
+        "task_id": task_id,
+        **server.store.get_ocr_corpus_status(task_id),
+    }
+
+
+def _h_search_execute(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    query_text = _require(params, "query_text", str)
+    script_scope = params.get("script_scope", "both")
+    if not isinstance(script_scope, str) or script_scope not in SCRIPT_SCOPES:
+        raise ProtocolError(
+            ErrorCode.VALIDATION_ERROR,
+            "简繁命中范围必须是 simplified、traditional 或 both",
+        )
+    try:
+        return server.ocr_search.search(
+            task_id=task_id,
+            query_text=query_text,
+            script_scope=script_scope,
+        )
+    except KeyError as exc:
+        raise ProtocolError(
+            ErrorCode.TASK_NOT_FOUND,
+            f"任务不存在: {task_id}",
+        ) from exc
+    except OCRSearchUnavailable as exc:
+        message = (
+            "旧任务没有可验证的 OCR 语料，请使用原来源重新创建扫描任务。"
+            if exc.requires_reocr
+            else "当前任务的 OCR 检索语料尚未可用，请等待扫描完成或重新扫描。"
+        )
+        raise ProtocolError(
+            ErrorCode.OCR_CORPUS_UNAVAILABLE,
+            message,
+            {
+                "status": exc.status,
+                "requires_reocr": exc.requires_reocr,
+            },
+        ) from exc
+    except ValueError as exc:
+        raise ProtocolError(
+            ErrorCode.VALIDATION_ERROR,
+            str(exc),
+        ) from exc
+
+
+def _h_search_sessions(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    if server.store.get_task(task_id) is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    limit = _validate_results_page_parameter(
+        params,
+        "limit",
+        default=50,
+        minimum=1,
+        maximum=200,
+    )
+    return {
+        "task_id": task_id,
+        "items": server.store.list_ocr_search_sessions(task_id, limit=limit),
+    }
+
+
+def _h_search_hits(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    search_session_id = _require(params, "search_session_id", str)
+    limit = _validate_results_page_parameter(
+        params,
+        "limit",
+        default=100,
+        minimum=1,
+        maximum=200,
+    )
+    offset = _validate_results_page_parameter(
+        params,
+        "offset",
+        default=0,
+        minimum=0,
+    )
+    try:
+        session = server.store.get_ocr_search_session(search_session_id)
+        if session["task_id"] != task_id:
+            raise KeyError(search_session_id)
+        total, items = server.store.query_ocr_search_hits(
+            search_session_id,
+            limit=limit,
+            offset=offset,
+        )
+    except KeyError as exc:
+        raise ProtocolError(
+            ErrorCode.TASK_NOT_FOUND,
+            f"检索会话不存在: {search_session_id}",
+        ) from exc
+    return {
+        "search_session_id": search_session_id,
+        "task_id": session["task_id"],
+        "session": session,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < total,
+        "items": items,
+    }
+
+
+def _h_search_prepare_page_image(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    search_hit_id = _require(params, "search_hit_id", str)
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    hit = server.store.get_ocr_search_hit_evidence(
+        task_id=task_id,
+        search_hit_id=search_hit_id,
+    )
+    if hit is None:
+        raise ProtocolError(
+            ErrorCode.TASK_NOT_FOUND,
+            f"检索结果不存在: {search_hit_id}",
+        )
+    workspace_value = task.get("workspace_dir")
+    if not workspace_value:
+        raise ProtocolError(
+            ErrorCode.SOURCE_EVIDENCE_UNAVAILABLE,
+            "任务缺少扫描工作目录，请重新扫描",
+        )
+    occurrence = {
+        "document_id": hit["document_id"],
+        "source_id": hit["source_id"],
+        "relative_path": hit["display_path"],
+        "page_number": hit["page_no"],
+        "source_page_width": hit["source_page_width"],
+        "source_page_height": hit["source_page_height"],
+    }
+    try:
+        return server.page_evidence.prepare(
+            scan_workspace=Path(str(workspace_value)),
+            occurrence=occurrence,
+            target_css_width=_require_finite_number(
+                params,
+                "target_css_width",
+            ),
+            target_css_height=_require_finite_number(
+                params,
+                "target_css_height",
+            ),
+            device_pixel_ratio=_require_finite_number(
+                params,
+                "device_pixel_ratio",
+            ),
+            is_demo=False,
+        )
+    except PageEvidenceError as exc:
+        raise ProtocolError(exc.code, exc.message, exc.details) from exc
 
 
 def _require_finite_number(params: dict, key: str) -> float:

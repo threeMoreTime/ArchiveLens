@@ -24,6 +24,14 @@ v6 → v7 只新增 OCR 语料和检索索引结构：
 `legacy_requires_reocr`，原 occurrence、校对、备注、checkpoint、事件和导出仍
 保留；要使用新简繁双向索引，必须由用户明确创建重新 OCR/索引任务。
 
+## 本地设置 v3
+
+`userData/settings.json` 的版本由 2 升为 3，只新增全局
+`appearance.search_script_scope`，允许 `simplified / traditional / both`，默认
+`both`。读取 v1/v2 时在内存中补默认值并在下次用户保存设置时原子写入 v3；不访问
+或改写任务数据库、OCR 原文、索引及用户源文件。回滚旧应用前可备份该 JSON；旧应用
+若不能识别 v3，应恢复备份，而不是手工修改任务数据。
+
 ## Schema v5 历史
 
 v4 → v5 是仅新增结构的迁移：任务表增加 `source_kind` 与 `source_label`，并新增 `task_sources` 表保存文件清单的顺序、展示名和稳定 source ID。旧任务默认标记为 `folder`，来源标签回填为原 `source_dir`；旧任务的 occurrence、校对、备注、checkpoint、事件与导出记录不会被删除或改写。

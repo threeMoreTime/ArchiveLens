@@ -7,6 +7,15 @@ import { formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from
 
 type TaskData = TaskSummary & { error_code?: string; current_file?: string | null; failures?: TaskFailure[] };
 
+const OCR_INDEX_LABELS: Record<NonNullable<TaskSummary["ocr_index_status"]>, string> = {
+  not_built: "尚未建立",
+  building: "正在建立",
+  ready: "完整可检索",
+  partial: "可检索但尚未完整",
+  failed: "建立失败",
+  legacy_requires_reocr: "旧任务需重新 OCR",
+};
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -21,6 +30,8 @@ export default function TaskPage() {
   const [action, setAction] = useState<"start" | "pause" | "resume" | "cancel" | "open-folder" | "open-logs" | null>(null);
   const loadSequenceRef = useRef(0);
   const legacyRequiresReview = task?.error_code === "LEGACY_TASK_REQUIRES_REVIEW";
+  const corpusSearchReady = task?.ocr_index_status === "ready" || task?.ocr_index_status === "partial";
+  const corpusRequiresReocr = task?.ocr_index_status === "legacy_requires_reocr";
   const startError = (location.state as { startError?: unknown } | null)?.startError;
 
   const load = useCallback(async () => {
@@ -130,6 +141,13 @@ export default function TaskPage() {
           </Card>
           <Card className="al-card al-task-status-card"><Text weight="semibold">状态说明</Text><Text className="al-muted">{statusDetail}</Text>{task.current_file && <Text className="al-task-current-file" title={task.current_file}>当前文件：{task.current_file}</Text>}{task.error_message && <InlineFeedback tone={task.failure_count > 0 ? "warning" : "error"}>{task.error_message}</InlineFeedback>}{legacyRequiresReview && <InlineFeedback tone="warning">该旧版本未完成任务缺少可信页进度。旧结果已保留，但不能自动恢复；请使用原目录创建新任务。</InlineFeedback>}</Card>
           <Card className="al-card"><Text weight="semibold">扫描进度</Text><div className="al-task-stat-grid"><span><strong>{task.processed_pages}</strong> 已处理页</span><span><strong>{knownTotal ? Math.max(0, task.total_pages - task.processed_pages) : "—"}</strong> {knownTotal ? "待处理页" : activeStatus ? "总页数统计中" : "总页数未记录"}</span><span><strong>{task.failure_count}</strong> 失败项</span><span><strong>{task.occurrence_count}</strong> OCR 命中</span></div></Card>
+          <Card className="al-card al-task-status-card">
+            <Text weight="semibold">任务内检索语料</Text>
+            <Text className="al-muted">状态：{task.ocr_index_status ? OCR_INDEX_LABELS[task.ocr_index_status] : "状态无法确认"} · 已索引 {task.ocr_indexed_pages ?? 0} 页</Text>
+            {task.ocr_model_id && <Text className="al-muted">统一 OCR 模型：{task.ocr_model_id}</Text>}
+            {task.ocr_index_status === "partial" && <InlineFeedback tone="warning">当前只能检索已持久化页面，扫描完成前结果仍可能增加；失败页可能造成漏检。</InlineFeedback>}
+            {corpusRequiresReocr && <InlineFeedback tone="warning">旧任务不能静默迁移为新语料。必须使用原来源显式重新 OCR，原有 OCR 结果不会被覆盖。</InlineFeedback>}
+          </Card>
 
           {task.failure_count > 0 && <Card className="al-card al-task-failures"><div className="al-card-heading-row"><Text weight="semibold">失败明细</Text><Button size="small" onClick={() => void openLogs()}>查看日志</Button></div>{failureDetails.length === 0 ? <InlineFeedback tone="warning">该任务来自旧版本，只记录了失败数量，未保存结构化明细。请查看日志定位原因。</InlineFeedback> : <><Text className="al-muted">以下项目可能造成漏检；修复环境或源文件后，建议使用原目录重新扫描。</Text><div className="al-failure-list">{failureDetails.map((failure, index) => <div key={failure.failure_id || `${failure.file_path}-${failure.page_number}-${index}`}><strong title={failure.file_path}>{failure.file_path || "任务级错误"}{failure.page_number ? ` · 第 ${failure.page_number} 页` : ""}</strong><span>{failure.error_type || failure.stage || "处理失败"}：{failure.error_message || "未提供错误详情"}</span><small>{failure.possible_missed_hits ? "可能存在漏检" : "未标记为漏检风险"}</small></div>)}</div>{task.failure_count > failureDetails.length && <Text className="al-muted">当前仅显示前 {failureDetails.length} 项；完整的 {task.failure_count} 项记录请在任务日志和报告中查看。</Text>}</>}</Card>}
         </section>
@@ -140,6 +158,7 @@ export default function TaskPage() {
               {task.status === "draft"
                 ? <Button appearance="primary" disabled={Boolean(action)} onClick={() => void runAction("start")}>{action === "start" ? "正在启动…" : "启动任务"}</Button>
                 : <Button appearance="primary" onClick={() => nav(`/review/${taskId}`)}>进入校对工作台</Button>}
+              <Button disabled={!corpusSearchReady} onClick={() => nav(`/search/${taskId}`)}>{corpusSearchReady ? "任务内检索" : corpusRequiresReocr ? "任务内检索（需重新 OCR）" : "任务内检索（语料未就绪）"}</Button>
               <Button onClick={() => nav(`/export/${taskId}`)}>导出结果</Button>
               {task.status === "running" && <Button disabled={Boolean(action)} onClick={() => void runAction("pause")}>{action === "pause" ? "正在请求暂停…" : "暂停任务"}</Button>}
               {!legacyRequiresReview && ["paused", "recoverable"].includes(task.status) && <Button disabled={Boolean(action)} onClick={() => void runAction("resume")}>{action === "resume" ? "正在恢复…" : "继续任务"}</Button>}

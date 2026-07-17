@@ -2,6 +2,12 @@ import type {
   AppInfoResult,
   DiagnosticsResult,
   Event,
+  OcrCorpusStatusResult,
+  OcrSearchExecuteParams,
+  OcrSearchHitsResult,
+  OcrSearchPreparePageImageParams,
+  OcrSearchSession,
+  OcrSearchSessionsResult,
   ReviewDisplayPreferences,
   ReviewHighlightSettingsResult,
   ReviewHighlightSettingsUpdateParams,
@@ -57,6 +63,11 @@ export interface TaskSummary {
   search_mode: "exact_literal" | "legacy_fixed_pair";
   failures?: TaskFailure[];
   review_preferences?: ReviewDisplayPreferences;
+  ocr_corpus_version?: number;
+  ocr_index_status?: "not_built" | "building" | "ready" | "partial" | "failed" | "legacy_requires_reocr";
+  ocr_model_id?: string | null;
+  ocr_model_sha256?: string | null;
+  ocr_indexed_pages?: number;
 }
 
 export interface TaskFailure {
@@ -207,6 +218,18 @@ export interface ArchiveLensApi {
       search?: string | null;
     }): Promise<ResultsPage>;
     getDetail(p: { task_id: string; occurrence_id: string }): Promise<OccurrenceItem>;
+  };
+  search: {
+    getCorpusStatus(task_id: string): Promise<OcrCorpusStatusResult>;
+    execute(p: OcrSearchExecuteParams): Promise<OcrSearchSession>;
+    listSessions(task_id: string, limit?: number): Promise<OcrSearchSessionsResult>;
+    queryHits(p: {
+      task_id: string;
+      search_session_id: string;
+      limit?: number;
+      offset?: number;
+    }): Promise<OcrSearchHitsResult>;
+    preparePageImage(p: OcrSearchPreparePageImageParams): Promise<ReviewPageImageResult>;
   };
   review: {
     preparePageImage(p: ReviewPreparePageImageParams): Promise<ReviewPageImageResult>;
