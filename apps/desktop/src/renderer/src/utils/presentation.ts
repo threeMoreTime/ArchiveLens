@@ -62,6 +62,19 @@ export function cleanupStatusView(
   return null;
 }
 
+/**
+ * 计算行的有效清理状态：已持久化的 cleanup_status 优先；否则当该行正在删除
+ * （deletingTaskId 命中）时作 optimistic pending，使请求在途立即显示“正在删除”
+ * 并隐藏校对/导出/控制/普通删除入口。
+ */
+export function effectiveCleanupStatus(
+  task: Pick<TaskSummary, "task_id" | "cleanup_status">,
+  deletingTaskId: string | null,
+): string | undefined {
+  if (task.cleanup_status) return task.cleanup_status;
+  return deletingTaskId === task.task_id ? "pending" : undefined;
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
   const parsed = new Date(value);

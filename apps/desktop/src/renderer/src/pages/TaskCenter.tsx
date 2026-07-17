@@ -21,7 +21,7 @@ import { DocumentAddRegular, SearchRegular } from "@fluentui/react-icons";
 import { useNavigate } from "react-router-dom";
 import type { TaskSummary } from "../../../preload/api";
 import { EmptyState, InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
-import { cleanupStatusView, formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from "../utils/presentation";
+import { cleanupStatusView, effectiveCleanupStatus, formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from "../utils/presentation";
 
 const PAGE_SIZE = 20;
 const DELETABLE_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -213,15 +213,17 @@ export default function TaskCenter() {
             <div className="al-task-table-head" role="row"><span>任务</span><span>状态</span><span>进度与结果</span><span>更新时间</span><span>操作</span></div>
             {items.map((task) => {
               const statusView = taskStatusView(task);
-              const cleanupView = cleanupStatusView(task.cleanup_status);
+              // 有效清理状态：已持久化优先；请求在途（deletingTaskId 命中）作 optimistic pending
+              const effectiveCleanup = effectiveCleanupStatus(task, deletingTaskId);
+              const cleanupView = cleanupStatusView(effectiveCleanup);
               const updatedAt = task.finished_at || task.started_at || task.created_at;
               const taskCanBeDeleted = DELETABLE_STATUSES.has(task.status);
               const taskCanBePaused = PAUSABLE_STATUSES.has(task.status);
               const taskCanBeCancelled = !taskCanBeDeleted && task.status !== "stopping";
               const actionInProgress = taskAction !== null;
               const actionIsForTask = taskAction?.taskId === task.task_id;
-              // 删除生命周期中只保留“详情”；校对/导出/控制/普通删除入口隐藏，避免注定失败或重复操作
-              const cleanupActive = Boolean(task.cleanup_status);
+              // 删除生命周期中（含请求在途）只保留“详情”；校对/导出/控制/普通删除入口隐藏
+              const cleanupActive = Boolean(effectiveCleanup);
               const actions: TaskAction[] = [
                 { id: "details", label: "详情", group: "view", visible: true, onSelect: () => nav(`/tasks/${task.task_id}`) },
                 { id: "review", label: "校对", group: "view", visible: !cleanupActive, onSelect: () => nav(`/review/${task.task_id}`) },
@@ -251,7 +253,7 @@ export default function TaskCenter() {
                   </span>
                   <span className="al-task-result-cell"><strong>{task.occurrence_count} 条命中</strong><small>{progress}</small></span>
                   <span title={updatedAt || undefined}>{formatDateTime(updatedAt)}</span>
-                  <span className="al-task-row-actions">{primaryAction && <Button size="small" appearance="primary" disabled={primaryAction.disabled} onClick={primaryAction.onSelect}>{primaryAction.label}</Button>}<Menu><MenuTrigger disableButtonEnhancement><Button size="small" aria-label={`${taskDisplayName(task)}更多操作`}>更多</Button></MenuTrigger><MenuPopover><MenuList>{TASK_ACTION_GROUPS.map((group, groupIndex) => { const groupActions = menuActions.filter((action) => action.group === group); if (groupActions.length === 0) return null; return <div key={group}>{groupIndex > 0 && menuActions.some((action) => TASK_ACTION_GROUPS.indexOf(action.group) < groupIndex) && <MenuDivider />}{groupActions.map((action) => <MenuItem key={action.id} disabled={action.disabled} className={action.danger ? "al-task-delete-menu-item" : undefined} onClick={action.onSelect}>{action.label}</MenuItem>)}</div>; })}</MenuList></MenuPopover></Menu>{task.cleanup_status === "cleanup_failed" && (<><Button size="small" disabled={deletingTaskId !== null} onClick={() => void retryCleanup(task.task_id)}>{deletingTaskId === task.task_id ? "正在重试…" : "重试清理"}</Button><Button size="small" onClick={() => void openCleanupDir(task.task_id)}>打开残留目录</Button></>)}</span>
+                  <span className="al-task-row-actions">{primaryAction && <Button size="small" appearance="primary" disabled={primaryAction.disabled} onClick={primaryAction.onSelect}>{primaryAction.label}</Button>}{menuActions.length > 0 && (<Menu><MenuTrigger disableButtonEnhancement><Button size="small" aria-label={`${taskDisplayName(task)}更多操作`}>更多</Button></MenuTrigger><MenuPopover><MenuList>{TASK_ACTION_GROUPS.map((group, groupIndex) => { const groupActions = menuActions.filter((action) => action.group === group); if (groupActions.length === 0) return null; return <div key={group}>{groupIndex > 0 && menuActions.some((action) => TASK_ACTION_GROUPS.indexOf(action.group) < groupIndex) && <MenuDivider />}{groupActions.map((action) => <MenuItem key={action.id} disabled={action.disabled} className={action.danger ? "al-task-delete-menu-item" : undefined} onClick={action.onSelect}>{action.label}</MenuItem>)}</div>; })}</MenuList></MenuPopover></Menu>)}{task.cleanup_status === "cleanup_failed" && (<><Button size="small" disabled={deletingTaskId !== null} onClick={() => void retryCleanup(task.task_id)}>{deletingTaskId === task.task_id ? "正在重试…" : "重试清理"}</Button><Button size="small" onClick={() => void openCleanupDir(task.task_id)}>打开残留目录</Button></>)}</span>
                 </div>
               );
             })}

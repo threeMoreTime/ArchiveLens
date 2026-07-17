@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { taskStatusView } from "../src/renderer/src/utils/presentation";
+import { cleanupStatusView, effectiveCleanupStatus, taskStatusView } from "../src/renderer/src/utils/presentation";
 
 describe("task status presentation", () => {
   it.each([
@@ -25,5 +25,28 @@ describe("task status presentation", () => {
       label: "部分完成（3 项失败）",
       tone: "WARN",
     });
+  });
+});
+
+describe("cleanup status presentation", () => {
+  it("maps persisted cleanup lifecycle to badge", () => {
+    expect(cleanupStatusView("pending")).toEqual({ label: "正在删除", tone: "WARN" });
+    expect(cleanupStatusView("cleanup_failed")).toEqual({ label: "清理失败", tone: "FAIL" });
+    expect(cleanupStatusView(undefined)).toBeNull();
+    expect(cleanupStatusView(null)).toBeNull();
+  });
+
+  it("treats an in-flight delete of this row as optimistic pending", () => {
+    const task = { task_id: "task-a", cleanup_status: undefined as string | undefined };
+    // 非本行删除：无 cleanup 状态
+    expect(effectiveCleanupStatus(task, "task-b")).toBeUndefined();
+    expect(effectiveCleanupStatus(task, null)).toBeUndefined();
+    // 本行正在删除：optimistic pending（请求在途立即显示“正在删除”并隐藏入口）
+    expect(effectiveCleanupStatus(task, "task-a")).toBe("pending");
+  });
+
+  it("prefers persisted cleanup_status over optimistic pending", () => {
+    expect(effectiveCleanupStatus({ task_id: "task-a", cleanup_status: "cleanup_failed" }, "task-a")).toBe("cleanup_failed");
+    expect(effectiveCleanupStatus({ task_id: "task-a", cleanup_status: "pending" }, null)).toBe("pending");
   });
 });

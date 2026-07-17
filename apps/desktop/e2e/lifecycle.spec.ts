@@ -1021,11 +1021,12 @@ test("Lifecycle: cleanup failure shows retry UI, hides normal actions, retry suc
     await expect(dialog).toContainText("不会删除原始文件");
     await dialog.getByRole("button", { name: "删除任务" }).click();
 
-    // 清理失败 UI：badge + 重试/打开按钮可见；普通“校对”入口已隐藏
+    // 清理失败 UI：badge + 重试/打开按钮可见；普通“校对”入口已隐藏；无空“更多”菜单
     await expect(win.getByText("清理失败").first()).toBeVisible({ timeout: 15_000 });
     await expect(win.getByRole("button", { name: "重试清理" })).toBeVisible();
     await expect(win.getByRole("button", { name: "打开残留目录" })).toBeVisible();
     await expect(win.getByRole("button", { name: "校对" })).toHaveCount(0);
+    await expect(win.getByRole("button", { name: /更多操作$/ })).toHaveCount(0);
     // fail closed：根外机密文件未被删除
     expect(await access(path.join(outsideDir, "secret.txt")).then(() => true, () => false)).toBe(true);
 

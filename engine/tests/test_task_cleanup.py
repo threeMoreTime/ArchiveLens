@@ -175,7 +175,8 @@ class TaskCleanupDeleteTests(unittest.TestCase):
         # 文件系统权限错误必须用 PERMISSION_DENIED，不得称为 DATABASE_ERROR
         self.assertEqual(ctx.exception.code, ErrorCode.PERMISSION_DENIED)
         self.assertEqual(ctx.exception.details["cleanup_status"], "cleanup_failed")
-        self.assertEqual(ctx.exception.details["last_error_code"], "PERMISSION_DENIED")
+        self.assertTrue(ctx.exception.details["cleanup_state_persisted"])
+        self.assertEqual(ctx.exception.details["underlying_cleanup_error_code"], "PERMISSION_DENIED")
         self.assertEqual(ctx.exception.details["attempt_count"], 1)
         self.assertIsNotNone(ctx.exception.details["last_attempt_at"])
         job = self.server.store.get_cleanup_job(tid)
@@ -186,6 +187,48 @@ class TaskCleanupDeleteTests(unittest.TestCase):
         # 任务与原始来源仍在
         self.assertIsNotNone(self.server.store.get_task(tid))
         self.assertTrue(original.exists())
+
+    def test_fs_cleanup_failure_when_mark_also_fails_reports_truthful_pending(self) -> None:
+        tid, task_dir, original = _seed_completed_task(self.server, self.tmp)
+        # 清理失败 + 标记失败态也失败 → 不得泄露原始 DB 异常、不得伪造 cleanup_failed
+        with patch("archivelens_engine.server._cleanup_task_dirs", side_effect=CleanupError("PERMISSION_DENIED", "注入：清理被拒绝")):
+            with patch.object(self.server.store, "mark_cleanup_failed", side_effect=sqlite3.OperationalError("disk I/O")):
+                with self.assertRaises(ProtocolError) as ctx:
+                    _h_tasks_delete(self.server, {"task_id": tid})
+        # 持久化失败占主导 → DATABASE_ERROR
+        self.assertEqual(ctx.exception.code, ErrorCode.DATABASE_ERROR)
+        # details 如实反映数据库实际状态（pending），不伪造 cleanup_failed
+        self.assertEqual(ctx.exception.details["cleanup_status"], "pending")
+        self.assertFalse(ctx.exception.details["cleanup_state_persisted"])
+        self.assertEqual(ctx.exception.details["underlying_cleanup_error_code"], "PERMISSION_DENIED")
+        # 用户可见消息不含原始 DB 异常文本
+        self.assertNotIn("disk I/O", ctx.exception.message)
+        self.assertNotIn("disk I/O", str(ctx.exception.details))
+        # 数据库真实 job.status=pending；任务/目录/原始来源仍在
+        self.assertEqual(self.server.store.get_cleanup_job(tid)["status"], "pending")
+        self.assertIsNotNone(self.server.store.get_task(tid))
+        self.assertTrue(task_dir.exists())
+        self.assertTrue(original.exists())
+
+    def test_db_delete_failure_when_mark_also_fails_reports_truthful_pending(self) -> None:
+        tid, task_dir, original = _seed_completed_task(self.server, self.tmp)
+        # 文件清理成功，DB 删除失败，标记失败态也失败
+        with patch.object(self.server.store, "delete_task", side_effect=sqlite3.OperationalError("disk full")):
+            with patch.object(self.server.store, "mark_cleanup_failed", side_effect=sqlite3.OperationalError("disk full")):
+                with self.assertRaises(ProtocolError) as ctx:
+                    _h_tasks_delete(self.server, {"task_id": tid})
+        self.assertEqual(ctx.exception.code, ErrorCode.DATABASE_ERROR)
+        # 如实反映数据库实际状态（pending），cleanup_state_persisted=false，无含义反向字段
+        self.assertEqual(ctx.exception.details["cleanup_status"], "pending")
+        self.assertFalse(ctx.exception.details["cleanup_state_persisted"])
+        self.assertNotIn("mark_failed", ctx.exception.details)
+        self.assertNotIn("disk full", ctx.exception.message)
+        # 文件已清理，任务仍可见（DB 未删），job 真实 pending
+        self.assertFalse(task_dir.exists())
+        self.assertIsNotNone(self.server.store.get_task(tid))
+        self.assertEqual(self.server.store.get_cleanup_job(tid)["status"], "pending")
+        self.assertTrue(original.exists())
+
 
     def test_cleanup_unknown_error_uses_unknown_error_code(self) -> None:
         tid, _task_dir, _original = _seed_completed_task(self.server, self.tmp)
@@ -408,6 +451,40 @@ class TaskCleanupRestartRecoveryTests(unittest.TestCase):
                 job = server2.store.get_cleanup_job(tid)
                 self.assertIsNotNone(job)
                 self.assertEqual(job["status"], "cleanup_failed")
+            finally:
+                server2.store.close()
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_restart_recovery_writes_locatable_diagnostic_on_db_failure(self) -> None:
+        import contextlib
+        import io
+
+        tmp = Path(tempfile.mkdtemp(prefix="archivelens-cleanup-restart-diag-"))
+        try:
+            server = _make_server(tmp)
+            tid, task_dir, _original = _seed_completed_task(server, tmp)
+            server.store.upsert_cleanup_job_pending(tid)
+            import shutil
+
+            shutil.rmtree(task_dir)
+            server.store.close()
+            buf = io.StringIO()
+            # delete_task 失败 → reconcile 写安全诊断（task_id + 阶段 + 异常类型）
+            with patch("archivelens_engine.db.store.TaskStore.delete_task", side_effect=sqlite3.OperationalError("disk full secret path C:\\private")):
+                with contextlib.redirect_stderr(buf):
+                    server2 = _make_server(tmp)
+            try:
+                diag = buf.getvalue()
+                self.assertIn(tid, diag)
+                self.assertIn("delete_task", diag)
+                self.assertIn("OperationalError", diag)
+                # 不输出异常消息/路径/私密内容
+                self.assertNotIn("disk full", diag)
+                self.assertNotIn("private", diag)
+                self.assertNotIn("C:\\", diag)
             finally:
                 server2.store.close()
         finally:

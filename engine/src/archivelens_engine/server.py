@@ -198,37 +198,71 @@ class Server:
         每个作业都是一次新的真实清理尝试（attempt_count+1、清空旧错误）。
         目录确凿不存在视为可安全完成；仍可清理则清理后硬删除；
         清理或 DB 失败则标记可诊断 cleanup_failed 等待 UI 重试。
-        单个作业异常不得阻塞应用启动。
+        单个作业异常不得阻塞应用启动；未持久化异常写安全可定位的 stderr 诊断。
         """
         completed = 0
-        for job in self.store.list_cleanup_jobs_for_recovery():
+        try:
+            jobs = self.store.list_cleanup_jobs_for_recovery()
+        except Exception as exc:
+            self._cleanup_diag("*", "list_cleanup_jobs", exc)
+            return 0
+        for job in jobs:
             task_id = str(job["task_id"])
             try:
-                if self.store.get_task(task_id) is None:
-                    self.store.delete_cleanup_job(task_id)
+                try:
+                    task_exists = self.store.get_task(task_id) is not None
+                except Exception as exc:
+                    self._cleanup_diag(task_id, "get_task", exc)
+                    continue
+                if not task_exists:
+                    try:
+                        self.store.delete_cleanup_job(task_id)
+                    except Exception as exc:
+                        self._cleanup_diag(task_id, "delete_cleanup_job", exc)
                     continue
                 # 开始一次新的重启恢复尝试
-                self.store.upsert_cleanup_job_pending(task_id)
+                try:
+                    self.store.upsert_cleanup_job_pending(task_id)
+                except Exception as exc:
+                    self._cleanup_diag(task_id, "upsert", exc)
+                    continue
                 try:
                     _cleanup_task_dirs(self.workspace_root, task_id)
                 except CleanupError as exc:
-                    self._mark_cleanup_failed_swallow(task_id, exc.code, exc.summary)
+                    self._safe_mark_failed(task_id, exc.code, exc.summary, "cleanup")
                     continue
                 try:
                     self.store.delete_task(task_id)
-                except Exception:
-                    self._mark_cleanup_failed_swallow(task_id, "DATABASE_ERROR", "重启恢复时记录删除失败，可重试")
+                except Exception as exc:
+                    self._cleanup_diag(task_id, "delete_task", exc)
+                    self._safe_mark_failed(
+                        task_id, "DATABASE_ERROR", "重启恢复时记录删除失败，可重试", "delete_task"
+                    )
                     continue
                 completed += 1
-            except Exception:
-                # 单个作业处理异常不得阻塞应用启动；保留 job 待下次重试
+            except Exception as exc:
+                # 兜底：单个作业处理异常不得阻塞应用启动
+                self._cleanup_diag(task_id, "reconcile_outer", exc)
                 continue
         return completed
 
-    def _mark_cleanup_failed_swallow(self, task_id: str, code: str, summary: str) -> None:
-        """标记 cleanup_failed，吞掉标记自身的异常（最坏情况下保留 job 待下次重试）。"""
+    def _safe_mark_failed(self, task_id: str, code: str, summary: str, stage: str) -> bool:
+        """尝试标记 cleanup_failed；失败时写 stderr 诊断。返回是否成功持久化。"""
         try:
             self.store.mark_cleanup_failed(task_id, code, summary)
+            return True
+        except Exception as exc:
+            self._cleanup_diag(task_id, f"mark_cleanup_failed:{stage}", exc)
+            return False
+
+    @staticmethod
+    def _cleanup_diag(task_id: str, stage: str, exc: BaseException) -> None:
+        """写安全、简短、可定位的诊断（仅 task_id + 阶段 + 异常类型；不含消息/路径/私密）。"""
+        try:
+            sys.stderr.write(
+                f"[reconcile_cleanup] task_id={task_id} stage={stage} error={type(exc).__name__}\n"
+            )
+            sys.stderr.flush()
         except Exception:
             return
 
@@ -1257,26 +1291,21 @@ def _h_tasks_delete(server: Server, params: dict) -> dict:
     try:
         _cleanup_task_dirs(server.workspace_root, task_id)
     except CleanupError as exc:
-        failed = server.store.mark_cleanup_failed(task_id, exc.code, exc.summary)
-        current = failed or job
-        raise ProtocolError(
-            _cleanup_error_code_to_protocol(exc.code),
-            f"任务记录清理失败，可重试：{exc.summary}",
-            {
-                "task_id": task_id,
-                "cleanup_status": "cleanup_failed",
-                "attempt_count": int(current.get("attempt_count") or 0),
-                "last_error_code": exc.code,
-                "last_error_summary": exc.summary,
-                "last_attempt_at": current.get("last_attempt_at"),
-            },
-        ) from exc
+        details, persisted = _record_cleanup_failure(server, task_id, exc.code, exc.summary, job)
+        if persisted:
+            # 失败态已落库：对外用底层清理原因码（PERMISSION_DENIED/UNKNOWN_ERROR）
+            code = _cleanup_error_code_to_protocol(exc.code)
+            message = f"任务记录清理失败，可重试：{exc.summary}"
+        else:
+            # 失败态无法持久化：清楚反映数据库持久化失败（占主导），仍保留底层原因诊断
+            code = ErrorCode.DATABASE_ERROR
+            message = "任务清理失败，且无法记录失败状态，请重试"
+        raise ProtocolError(code, message, details) from exc
     # 3. DB 事务硬删除：任务派生记录 + 任务 + cleanup job（文件系统清理不冒充 DB 事务）
     try:
         deleted = server.store.delete_task(task_id)
     except Exception as exc:
-        # 文件已清理但 DB 事务失败：安全摘要标记 cleanup_failed，不泄露内部异常，可重试
-        details = _mark_cleanup_failed_safe(
+        details, _persisted = _record_cleanup_failure(
             server, task_id, "DATABASE_ERROR", "任务文件已清理，但记录删除失败，可重试", job
         )
         raise ProtocolError(
@@ -1290,35 +1319,54 @@ def _h_tasks_delete(server: Server, params: dict) -> dict:
     return {"task_id": task_id, "deleted": True}
 
 
-def _mark_cleanup_failed_safe(
+def _record_cleanup_failure(
     server: Server,
     task_id: str,
-    error_code: str,
-    error_summary: str,
+    target_code: str,
+    target_summary: str,
     fallback_job: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """标记 cleanup_failed；若标记自身也失败，保留最安全的明确错误，绝不伪造成功。"""
+) -> tuple[dict[str, Any], bool]:
+    """如实记录清理失败，返回 (details, persisted)。
+
+    - mark 成功 → cleanup_status='cleanup_failed'，cleanup_state_persisted=true。
+    - mark 抛错或返回 None → 读取实际 job 状态（通常 pending），
+      cleanup_state_persisted=false，目标 code/summary 作为诊断字段。
+    绝不声称已持久化失败态，不泄露原始 DB 异常文本。
+    """
+    fallback = fallback_job or {}
+    actual_status = str(fallback.get("status") or "pending")
+    attempt_count = int(fallback.get("attempt_count") or 0)
+    last_attempt_at = fallback.get("last_attempt_at")
+    persisted = False
     try:
-        failed = server.store.mark_cleanup_failed(task_id, error_code, error_summary)
+        marked = server.store.mark_cleanup_failed(task_id, target_code, target_summary)
     except Exception:
-        return {
-            "task_id": task_id,
-            "cleanup_status": "cleanup_failed",
-            "attempt_count": int((fallback_job or {}).get("attempt_count") or 0),
-            "last_error_code": error_code,
-            "last_error_summary": error_summary,
-            "last_attempt_at": (fallback_job or {}).get("last_attempt_at"),
-            "mark_failed": True,
-        }
-    current = failed or fallback_job or {}
-    return {
+        marked = None
+    if marked is not None:
+        persisted = True
+        actual_status = str(marked.get("status") or "cleanup_failed")
+        attempt_count = int(marked.get("attempt_count") or attempt_count)
+        last_attempt_at = marked.get("last_attempt_at")
+    else:
+        # mark 未成功：读取实际 job 状态（若可），不得伪造 cleanup_failed
+        try:
+            actual_job = server.store.get_cleanup_job(task_id)
+        except Exception:
+            actual_job = None
+        if actual_job:
+            actual_status = str(actual_job.get("status") or actual_status)
+            attempt_count = int(actual_job.get("attempt_count") or attempt_count)
+            last_attempt_at = actual_job.get("last_attempt_at")
+    details = {
         "task_id": task_id,
-        "cleanup_status": "cleanup_failed",
-        "attempt_count": int(current.get("attempt_count") or 0),
-        "last_error_code": error_code,
-        "last_error_summary": error_summary,
-        "last_attempt_at": current.get("last_attempt_at"),
+        "cleanup_status": actual_status,
+        "cleanup_state_persisted": persisted,
+        "attempt_count": attempt_count,
+        "last_attempt_at": last_attempt_at,
+        "underlying_cleanup_error_code": target_code,
+        "underlying_cleanup_error_summary": target_summary,
     }
+    return details, persisted
 
 
 def _h_tasks_cleanup_target(server: Server, params: dict) -> dict:
