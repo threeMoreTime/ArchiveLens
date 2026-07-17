@@ -53,6 +53,15 @@ export function taskStatusView(
   return { label: (labels[task.status] ?? task.status) || "状态未知", tone };
 }
 
+/** 任务删除生命周期视图（独立于 OCR 运行 status）。无 cleanup 状态时返回 null。 */
+export function cleanupStatusView(
+  cleanup_status?: string | null,
+): { label: string; tone: BadgeTone } | null {
+  if (cleanup_status === "pending") return { label: "正在删除", tone: "WARN" };
+  if (cleanup_status === "cleanup_failed") return { label: "清理失败", tone: "FAIL" };
+  return null;
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
   const parsed = new Date(value);

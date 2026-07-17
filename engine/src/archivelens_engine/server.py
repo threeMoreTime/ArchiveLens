@@ -11,6 +11,7 @@ import json
 import math
 import os
 import shutil
+import errno
 import sys
 import tempfile
 import threading
@@ -127,6 +128,7 @@ class Server:
         self.store = TaskStore(db_path or (self.workspace_root / "archivelens.db"))
         self.ocr_search = OCRSearchService(self.store)
         self.store.reconcile_incomplete_tasks(reason="ENGINE_PROCESS_EXITED")
+        self.reconcile_cleanup_jobs()
         self.build_info = load_build_info()
         self.page_evidence = PageEvidenceService(self.config)
 
@@ -190,6 +192,27 @@ class Server:
         }
         self.emit(json.dumps(msg, ensure_ascii=False))
 
+    def reconcile_cleanup_jobs(self) -> int:
+        """重启恢复：对中断（pending）的清理作业安全收尾。
+
+        目录已不存在视为可安全完成；仍可清理则清理后硬删除；
+        清理失败则标记 cleanup_failed 等待 UI 重试。
+        """
+        completed = 0
+        for job in self.store.list_cleanup_jobs_for_recovery():
+            task_id = str(job["task_id"])
+            if self.store.get_task(task_id) is None:
+                self.store.delete_cleanup_job(task_id)
+                continue
+            try:
+                _cleanup_task_dirs(self.workspace_root, task_id)
+            except CleanupError as exc:
+                self.store.mark_cleanup_failed(task_id, exc.code, exc.summary)
+                continue
+            self.store.delete_task(task_id)
+            completed += 1
+        return completed
+
     # ---- 单行处理 ----
     def handle_line(self, line: str) -> None:
         message = safe_parse(line)
@@ -247,6 +270,7 @@ class Server:
                 "tasks.resume": _h_tasks_resume,
                 "tasks.cancel": _h_tasks_cancel,
                 "tasks.delete": _h_tasks_delete,
+                "tasks.cleanupTarget": _h_tasks_cleanup_target,
                 "tasks.inspectState": _h_tasks_inspect_state,
                 "demo.create": _h_demo_create,
                 "results.query": _h_results_query,
@@ -1026,20 +1050,123 @@ def _h_tasks_cancel(server: Server, params: dict) -> dict:
     return {"task_id": task_id, "status": "cancelled"}
 
 
-def _task_workspace_dirs_for_delete(server: Server, task_id: str) -> list[Path]:
-    """返回该任务可安全清理的应用自有目录，绝不从任务记录读取任意路径。"""
-    if not task_id or Path(task_id).name != task_id:
-        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "任务标识无效，无法清理本地数据")
-    workspace_root = server.workspace_root.resolve()
-    task_dirs = [workspace_root / "tasks" / task_id, workspace_root / task_id]
-    return [path for path in task_dirs if path.exists()]
+class CleanupError(Exception):
+    """安全清理失败（fail closed）。``code`` 为底层原因码，``summary`` 为安全摘要。"""
+
+    def __init__(self, code: str, summary: str) -> None:
+        super().__init__(summary)
+        self.code = code
+        self.summary = summary
+
+
+def _validate_task_id_segment(task_id: str) -> None:
+    """task_id 必须是单一路径段：非空、无分隔符/NUL、非 . 或 .. 。"""
+    if not isinstance(task_id, str) or not task_id:
+        raise ValueError("任务标识无效")
+    if "\x00" in task_id or "/" in task_id or "\\" in task_id:
+        raise ValueError("任务标识无效")
+    if task_id in {".", ".."} or Path(task_id).name != task_id:
+        raise ValueError("任务标识无效")
+
+
+def _is_reparse_point(path: Path) -> bool:
+    """判断路径自身是否为 symlink/junction 等 reparse point（不跟随）。"""
+    try:
+        info = path.lstat()
+    except (OSError, ValueError):
+        return False
+    import stat as _stat
+
+    if _stat.S_ISLNK(info.st_mode):
+        return True
+    # FILE_ATTRIBUTE_REPARSE_POINT = 0x400（覆盖 junction 等）
+    return bool(getattr(info, "st_file_attributes", 0) & 0x400)
+
+
+def _safe_task_derived_dirs(workspace_root: Path, task_id: str) -> list[Path]:
+    """从受信 workspace_root + 已验证 task_id 推导任务派生目录；fail closed。
+
+    绝不读取任务记录中的任意绝对路径；推导结果必须严格位于 workspace_root 之内，
+    且不得是盘根、workspace 根或 reparse point。
+    """
+    _validate_task_id_segment(task_id)
+    root = workspace_root.resolve()
+    root_drive = os.path.splitdrive(str(root))[0]
+    if str(root).rstrip("\\/") == root_drive:
+        raise CleanupError("PERMISSION_DENIED", "workspace 根不能是盘根")
+    candidates = [root / "tasks" / task_id, root / task_id]
+    safe: list[Path] = []
+    for candidate in candidates:
+        if candidate == root:
+            raise CleanupError("PERMISSION_DENIED", "任务目录与 workspace 根重合")
+        # 深度防御：词法 containment（task_id 已为单段，正常不会越界）
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise CleanupError("PERMISSION_DENIED", "任务目录越出 workspace 根") from exc
+        # 拒绝把 reparse point 当作清理目标（防止越界删除）
+        if _is_reparse_point(candidate):
+            raise CleanupError("PERMISSION_DENIED", "任务目录是 reparse point，已拒绝清理")
+        safe.append(candidate)
+    return safe
+
+
+def _assert_tree_has_no_reparse(root: Path) -> None:
+    """递归扫描目录树；发现任何 reparse point 即 fail closed，绝不跟随。"""
+    if not root.exists():
+        return
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    is_link = False
+                    try:
+                        is_link = entry.is_symlink()
+                        if not is_link:
+                            attributes = entry.stat(follow_symlinks=False).st_file_attributes
+                            is_link = bool(attributes & 0x400)
+                    except OSError:
+                        is_link = False
+                    if is_link:
+                        raise CleanupError("PERMISSION_DENIED", f"任务目录包含 reparse point，已拒绝清理：{entry.name}")
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+
+def _cleanup_task_dirs(workspace_root: Path, task_id: str) -> None:
+    """安全清理任务派生目录；目录缺失视为已清理；reparse/junction 越界 fail closed。"""
+    for candidate in _safe_task_derived_dirs(workspace_root, task_id):
+        if not candidate.exists():
+            continue
+        _assert_tree_has_no_reparse(candidate)
+        try:
+            shutil.rmtree(candidate)
+        except OSError as exc:
+            code = "PERMISSION_DENIED" if exc.errno in (errno.EACCES, errno.EPERM) else "UNKNOWN_ERROR"
+            raise CleanupError(code, f"清理任务目录失败：{exc.strerror or str(exc)}") from exc
+
+
+def _resolve_cleanup_target(workspace_root: Path, task_id: str) -> str | None:
+    """返回首个存在的受信派生目录（供 Main 受控打开）；不存在返回 None。"""
+    for candidate in _safe_task_derived_dirs(workspace_root, task_id):
+        if candidate.exists():
+            return str(candidate)
+    return None
 
 
 def _h_tasks_delete(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     task = server.store.get_task(task_id)
     if task is None:
-        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+        # 幂等：任务已不存在（含响应丢失后的重试）视为已删除
+        return {"task_id": task_id, "deleted": True}
     if task["status"] not in TERMINAL_TASK_STATUSES:
         raise ProtocolError(
             ErrorCode.TASK_STATE_CONFLICT,
@@ -1047,41 +1174,56 @@ def _h_tasks_delete(server: Server, params: dict) -> dict:
             {"status": task["status"]},
         )
 
-    staged_dirs: list[tuple[Path, Path]] = []
+    # 1. 原子持久化 cleanup job（pending）：任务保持可见，UI 显示 deleting
+    job = server.store.upsert_cleanup_job_pending(task_id)
+    # 2. 安全清理仅属于该任务的派生目录（绝不触碰原始来源）
     try:
-        for task_dir in _task_workspace_dirs_for_delete(server, task_id):
-            staged_dir = task_dir.with_name(f".deleting-{task_id}-{new_id()}")
-            task_dir.rename(staged_dir)
-            staged_dirs.append((task_dir, staged_dir))
-    except OSError as exc:
-        for original_dir, staged_dir in reversed(staged_dirs):
-            if staged_dir.exists():
-                staged_dir.rename(original_dir)
+        _cleanup_task_dirs(server.workspace_root, task_id)
+    except CleanupError as exc:
+        failed = server.store.mark_cleanup_failed(task_id, exc.code, exc.summary)
+        current = failed or job
         raise ProtocolError(
             ErrorCode.DATABASE_ERROR,
-            "无法准备清理任务生成数据，任务未删除",
-            {"task_id": task_id, "error": str(exc)},
-        )
-
-    try:
-        if not server.store.delete_task(task_id):
-            raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
-    except Exception:
-        for original_dir, staged_dir in reversed(staged_dirs):
-            if staged_dir.exists():
-                staged_dir.rename(original_dir)
-        raise
-
-    try:
-        for _original_dir, staged_dir in staged_dirs:
-            shutil.rmtree(staged_dir)
-    except OSError as exc:
-        raise ProtocolError(
-            ErrorCode.DATABASE_ERROR,
-            "任务记录已删除，但部分生成数据清理失败",
-            {"task_id": task_id, "error": str(exc)},
-        )
+            f"任务记录清理失败，可重试：{exc.summary}",
+            {
+                "task_id": task_id,
+                "cleanup_status": "cleanup_failed",
+                "attempt_count": int(current.get("attempt_count") or 0),
+                "last_error_code": exc.code,
+                "last_error_summary": exc.summary,
+                "last_attempt_at": current.get("last_attempt_at"),
+            },
+        ) from exc
+    # 3. DB 事务硬删除：任务派生记录 + 任务 + cleanup job（文件系统清理不冒充 DB 事务）
+    if not server.store.delete_task(task_id):
+        # 并发已删除：幂等成功
+        return {"task_id": task_id, "deleted": True}
     return {"task_id": task_id, "deleted": True}
+
+
+def _h_tasks_cleanup_target(server: Server, params: dict) -> dict:
+    """返回受信派生目录，供 Main 受控打开（renderer 不接触绝对路径）。"""
+    task_id = _require(params, "task_id", str)
+    if server.store.get_task(task_id) is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    try:
+        path = _resolve_cleanup_target(server.workspace_root, task_id)
+    except CleanupError as exc:
+        raise ProtocolError(ErrorCode.PERMISSION_DENIED, exc.summary, {"task_id": task_id}) from exc
+    except ValueError as exc:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, str(exc), {"task_id": task_id}) from exc
+    return {"task_id": task_id, "path": path}
+
+
+def _assert_not_cleaning(server: Server, task_id: str) -> None:
+    """删除生命周期中的任务拒绝产生会被静默丢弃的新状态（备注/导出/校对）。"""
+    status = server.store.task_cleanup_status(task_id)
+    if status is not None:
+        raise ProtocolError(
+            ErrorCode.TASK_STATE_CONFLICT,
+            "任务正在删除，无法修改校对或导出",
+            {"task_id": task_id, "cleanup_status": status},
+        )
 
 
 def _h_tasks_inspect_state(server: Server, params: dict) -> dict:
@@ -1401,6 +1543,7 @@ def _h_review_decision(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     occ_id = _require(params, "occurrence_id", str)
     decision = _validate_decision(_require(params, "decision", str))
+    _assert_not_cleaning(server, task_id)
     updated = server.store.upsert_review(
         task_id=task_id, occurrence_id=occ_id, decision=decision
     )
@@ -1411,6 +1554,7 @@ def _h_review_note(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     occ_id = _require(params, "occurrence_id", str)
     note = _require(params, "note", str)
+    _assert_not_cleaning(server, task_id)
     updated = server.store.upsert_review(task_id=task_id, occurrence_id=occ_id, note=note)
     return {"occurrence_id": occ_id, "note": note, "updated_at": updated}
 
@@ -1450,6 +1594,7 @@ def _h_export_json(server: Server, params: dict) -> dict:
     task = server.store.get_task(task_id)
     if task is None:
         raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    _assert_not_cleaning(server, task_id)
     total, items = server.store.query_occurrences(task_id=task_id, limit=10**9, offset=0)
     integrity = _export_integrity(server, task, total)
     payload = {"task": task, "occurrences": items, "integrity": integrity, "exported_at": integrity["exported_at"]}
@@ -1461,6 +1606,7 @@ def _h_export_json(server: Server, params: dict) -> dict:
 
 def _h_export_review(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
+    _assert_not_cleaning(server, task_id)
     reviews = server.store.list_reviews(task_id)
     payload = {"task_id": task_id, "exported_at": now_iso(), "records": reviews}
     out = _export_dir(server, task_id) / f"{task_id}-review.json"
@@ -1484,6 +1630,7 @@ def _h_export_html(server: Server, params: dict) -> dict:
     task = server.store.get_task(task_id)
     if task is None:
         raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    _assert_not_cleaning(server, task_id)
     out = _export_dir(server, task_id) / f"{task_id}-report.html"
     try:
         with server.store.occurrence_export_snapshot(task_id) as (total, page_count, items):

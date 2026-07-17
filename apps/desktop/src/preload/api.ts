@@ -68,6 +68,8 @@ export interface TaskSummary {
   ocr_model_id?: string | null;
   ocr_model_sha256?: string | null;
   ocr_indexed_pages?: number;
+  cleanup_status?: string;
+  cleanup_error_summary?: string | null;
 }
 
 export interface TaskFailure {
@@ -203,6 +205,7 @@ export interface ArchiveLensApi {
     resume(task_id: string): Promise<{ task_id: string; status: string }>;
     cancel(task_id: string): Promise<{ task_id: string; status: string }>;
     delete(task_id: string): Promise<{ task_id: string; deleted: true }>;
+    openCleanupDir(task_id: string): Promise<{ ok: boolean }>;
   };
   demo: {
     create(): Promise<DemoResult>;

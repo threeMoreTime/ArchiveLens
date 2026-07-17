@@ -35,7 +35,7 @@ from ..search_terms import (
     unicode_sequence,
 )
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 OCR_CORPUS_VERSION = 1
 OCR_INDEX_NOT_BUILT = "not_built"
 OCR_INDEX_BUILDING = "building"
@@ -302,6 +302,16 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS task_cleanup_jobs (
+    task_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error_code TEXT NOT NULL DEFAULT '',
+    last_error_summary TEXT NOT NULL DEFAULT '',
+    last_attempt_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -327,7 +337,12 @@ class TaskStore:
             self.conn.execute("PRAGMA journal_mode = WAL")
             self.conn.execute("PRAGMA busy_timeout = 5000")
             self.conn.execute("PRAGMA foreign_keys = ON")
-            self._init_schema()
+            try:
+                self._init_schema()
+            except Exception:
+                # schema 初始化失败（如 future schema 拒绝）时关闭连接，避免句柄/文件锁泄露
+                self.conn.close()
+                raise
 
     def _init_schema(self) -> None:
         current = int(self.conn.execute("PRAGMA user_version").fetchone()[0] or 0)
@@ -525,6 +540,21 @@ class TaskStore:
             )
         if current < 2:
             self._mark_untrusted_legacy_tasks_for_review()
+        if current < 8:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS task_cleanup_jobs (
+                    task_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_error_code TEXT NOT NULL DEFAULT '',
+                    last_error_summary TEXT NOT NULL DEFAULT '',
+                    last_attempt_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
 
     def _mark_untrusted_legacy_tasks_for_review(self) -> None:
         """Prevent v1 tasks from resuming without authoritative page progress."""
@@ -743,7 +773,8 @@ class TaskStore:
         with self._lock:
             row = self.conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             sources = self._list_task_sources_locked(task_id) if row else []
-        return self._task_for_api(dict(row), sources=sources) if row else None
+            cleanup = self._get_cleanup_job_locked(task_id) if row else None
+        return self._task_for_api(dict(row), sources=sources, **self._cleanup_view(cleanup)) if row else None
 
     def list_tasks(
         self,
@@ -761,7 +792,15 @@ class TaskStore:
             )
             rows = [dict(row) for row in cur.fetchall()]
             source_map = self._list_task_sources_for_tasks_locked([str(row["task_id"]) for row in rows])
-            return [self._task_for_api(row, sources=source_map.get(str(row["task_id"]), [])) for row in rows]
+            cleanup_map = self._cleanup_jobs_for_tasks_locked([str(row["task_id"]) for row in rows])
+            return [
+                self._task_for_api(
+                    row,
+                    sources=source_map.get(str(row["task_id"]), []),
+                    **self._cleanup_view(cleanup_map.get(str(row["task_id"]))),
+                )
+                for row in rows
+            ]
 
     def count_tasks(self, *, status: str | None = None, query: str | None = None) -> int:
         where_sql, params = self._task_list_filter(status=status, query=query)
@@ -811,7 +850,14 @@ class TaskStore:
         with self._lock:
             return self._list_task_sources_locked(task_id)
 
-    def _task_for_api(self, task: dict[str, Any], *, sources: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def _task_for_api(
+        self,
+        task: dict[str, Any],
+        *,
+        sources: list[dict[str, Any]] | None = None,
+        cleanup_status: str | None = None,
+        cleanup_error_summary: str | None = None,
+    ) -> dict[str, Any]:
         raw_terms = task.get("search_terms_json")
         try:
             search_terms = json.loads(raw_terms) if isinstance(raw_terms, str) else list(LEGACY_SEARCH_TERMS)
@@ -833,6 +879,12 @@ class TaskStore:
         }
         if task["source_kind"] == "files":
             task["source_files"] = [str(source["file_path"]) for source in (sources or [])]
+        # cleanup 字段仅在删除生命周期中存在时才下发；正常任务不带（与可选字段语义一致，
+        # 避免下发 null 破坏 TS 端 z.string().optional() 解析）。
+        if cleanup_status:
+            task["cleanup_status"] = cleanup_status
+        if cleanup_error_summary:
+            task["cleanup_error_summary"] = cleanup_error_summary
         return task
 
     def update_task(self, task_id: str, **fields: Any) -> None:
@@ -865,9 +917,115 @@ class TaskStore:
                     "exports",
                     "task_failures",
                     "task_sources",
+                    "task_cleanup_jobs",
                 ):
                     self.conn.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
                 cursor = self.conn.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
+        return cursor.rowcount == 1
+
+    # ---- task cleanup jobs（删除生命周期，独立于 OCR 运行 status）----
+    @staticmethod
+    def _cleanup_view(job: dict[str, Any] | None) -> dict[str, Any]:
+        """把 cleanup job 行映射为 TaskSummary 的可选字段。"""
+        if not job:
+            return {"cleanup_status": None, "cleanup_error_summary": None}
+        summary = job.get("last_error_summary")
+        return {
+            "cleanup_status": str(job.get("status") or ""),
+            "cleanup_error_summary": str(summary) if summary else None,
+        }
+
+    def _get_cleanup_job_locked(self, task_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM task_cleanup_jobs WHERE task_id=?",
+            (task_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def _cleanup_jobs_for_tasks_locked(self, task_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not task_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in task_ids)
+        rows = self.conn.execute(
+            f"SELECT task_id, status, last_error_summary FROM task_cleanup_jobs WHERE task_id IN ({placeholders})",
+            task_ids,
+        ).fetchall()
+        return {str(row["task_id"]): dict(row) for row in rows}
+
+    def upsert_cleanup_job_pending(self, task_id: str) -> dict[str, Any]:
+        """创建或重置 cleanup job 为 pending（任务保持可见）。每次重试 attempt_count +1。"""
+        now = now_iso()
+        with self._lock:
+            with self.conn:
+                existing = self.conn.execute(
+                    "SELECT task_id FROM task_cleanup_jobs WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()
+                if existing is None:
+                    self.conn.execute(
+                        """INSERT INTO task_cleanup_jobs
+                           (task_id, status, attempt_count, last_error_code, last_error_summary,
+                            last_attempt_at, created_at, updated_at)
+                           VALUES (?, 'pending', 1, '', '', NULL, ?, ?)""",
+                        (task_id, now, now),
+                    )
+                else:
+                    self.conn.execute(
+                        """UPDATE task_cleanup_jobs
+                           SET status='pending', attempt_count=attempt_count+1, updated_at=?
+                           WHERE task_id=?""",
+                        (now, task_id),
+                    )
+                return self._get_cleanup_job_locked(task_id)
+
+    def mark_cleanup_failed(
+        self,
+        task_id: str,
+        error_code: str,
+        error_summary: str,
+    ) -> dict[str, Any] | None:
+        """记录清理失败；任务与 job 保持可见，可由 UI 重试。"""
+        now = now_iso()
+        with self._lock:
+            with self.conn:
+                cursor = self.conn.execute(
+                    """UPDATE task_cleanup_jobs
+                       SET status='cleanup_failed', last_error_code=?, last_error_summary=?,
+                           last_attempt_at=?, updated_at=?
+                       WHERE task_id=?""",
+                    (error_code, error_summary, now, now, task_id),
+                )
+                if cursor.rowcount == 0:
+                    return None
+                return self._get_cleanup_job_locked(task_id)
+
+    def get_cleanup_job(self, task_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            return self._get_cleanup_job_locked(task_id)
+
+    def task_cleanup_status(self, task_id: str) -> str | None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT status FROM task_cleanup_jobs WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+        return str(row["status"]) if row else None
+
+    def list_cleanup_jobs_for_recovery(self) -> list[dict[str, Any]]:
+        """重启恢复用：返回所有中断（pending）的清理作业。"""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM task_cleanup_jobs WHERE status='pending'"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_cleanup_job(self, task_id: str) -> bool:
+        with self._lock:
+            cursor = self.conn.execute(
+                "DELETE FROM task_cleanup_jobs WHERE task_id=?",
+                (task_id,),
+            )
+            self.conn.commit()
         return cursor.rowcount == 1
 
     def allocate_worker_generation(self, task_id: str) -> int:

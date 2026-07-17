@@ -51,6 +51,15 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
     });
     return result;
   });
+  ipcMain.handle("tasks.openCleanupDir", async (_e, params: { task_id: string }) => {
+    // 受控打开残留目录：路径由 engine 从受信 workspace_root + task_id 推导并校验，
+    // renderer 不接触绝对路径，也无法传入任意路径。
+    const result = await sidecar.call<{ task_id: string; path: string | null }>("tasks.cleanupTarget", params);
+    if (!result.path) throw new Error("任务没有可打开的残留目录");
+    const failure = await shell.openPath(result.path);
+    if (failure) throw new Error(`无法打开文件夹：${failure}`);
+    return { ok: true };
+  });
 
   ipcMain.handle("results.query", async (_e, params) => sidecar.call("results.query", params));
   ipcMain.handle("results.getDetail", async (_e, params) => sidecar.call("results.getDetail", params));

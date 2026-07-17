@@ -278,6 +278,7 @@ export const MethodNameSchema = z.enum([
   "tasks.resume",
   "tasks.cancel",
   "tasks.delete",
+  "tasks.cleanupTarget",
   "tasks.list",
   "tasks.get",
   "results.query",
@@ -391,6 +392,8 @@ export const TaskSummarySchema = z.object({
   ocr_model_sha256: z.string().nullable().optional(),
   ocr_indexed_pages: z.number().int().nonnegative().optional(),
   failures: z.array(TaskFailureSchema).optional(),
+  cleanup_status: z.string().nullable().optional(),
+  cleanup_error_summary: z.string().nullable().optional(),
 }).passthrough();
 
 export const TaskCreateResultSchema = z.object({
@@ -410,6 +413,11 @@ export const TaskCreateResultSchema = z.object({
 export const TaskDeleteResultSchema = z.object({
   task_id: z.string().min(1),
   deleted: z.literal(true),
+}).passthrough();
+
+export const TaskCleanupTargetResultSchema = z.object({
+  task_id: z.string().min(1),
+  path: z.string().nullable(),
 }).passthrough();
 
 export const TasksListResultSchema = z.object({
@@ -647,6 +655,7 @@ export const TaskSearchEventPayloadSchema = z.object({
 export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "tasks.create") return TaskCreateResultSchema.parse(value);
   if (method === "tasks.delete") return TaskDeleteResultSchema.parse(value);
+  if (method === "tasks.cleanupTarget") return TaskCleanupTargetResultSchema.parse(value);
   if (method === "tasks.get") return TaskSummarySchema.parse(value);
   if (method === "tasks.list") return TasksListResultSchema.parse(value);
   if (method === "exports.list") return ExportsListResultSchema.parse(value);

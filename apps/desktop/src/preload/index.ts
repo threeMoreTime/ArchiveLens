@@ -39,6 +39,7 @@ const api: ArchiveLensApi = {
     resume: (task_id) => ipcRenderer.invoke("tasks.resume", { task_id }),
     cancel: (task_id) => ipcRenderer.invoke("tasks.cancel", { task_id }),
     delete: (task_id) => ipcRenderer.invoke("tasks.delete", { task_id }),
+    openCleanupDir: (task_id) => ipcRenderer.invoke("tasks.openCleanupDir", { task_id }),
   },
   demo: {
     create: () => ipcRenderer.invoke("demo.create"),

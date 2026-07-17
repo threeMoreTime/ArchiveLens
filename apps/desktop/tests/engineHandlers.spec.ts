@@ -5,12 +5,13 @@ const mocks = vi.hoisted(() => {
   return {
     handlers,
     handle: vi.fn((channel: string, handler: (...args: any[]) => unknown) => handlers.set(channel, handler)),
+    openPath: vi.fn(),
   };
 });
 
 vi.mock("electron", () => ({
   ipcMain: { handle: mocks.handle },
-  shell: { openPath: vi.fn() },
+  shell: { openPath: mocks.openPath },
 }));
 vi.mock("../src/main/ipc/settings", () => ({
   getSettingsStore: () => ({ removeTaskOverride: vi.fn() }),
@@ -33,5 +34,30 @@ describe("engine IPC timeouts", () => {
 
     expect(HTML_EXPORT_TIMEOUT_MS).toBe(30 * 60_000);
     expect(call).toHaveBeenCalledWith("export.html", params, HTML_EXPORT_TIMEOUT_MS);
+  });
+});
+
+describe("tasks.openCleanupDir 受控打开残留目录", () => {
+  it("经 engine tasks.cleanupTarget 推导路径，再用 shell.openPath 打开；renderer 仅传 task_id", async () => {
+    const call = vi.fn().mockResolvedValue({ task_id: "task-1", path: "E:\\residual" });
+    mocks.openPath.mockResolvedValue("");
+    registerEngineHandlers({ call } as any);
+    const handler = mocks.handlers.get("tasks.openCleanupDir");
+    expect(handler).toBeDefined();
+
+    const result = await handler?.({}, { task_id: "task-1" });
+
+    expect(call).toHaveBeenCalledWith("tasks.cleanupTarget", { task_id: "task-1" });
+    expect(mocks.openPath).toHaveBeenCalledWith("E:\\residual");
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("engine 返回 null 路径时拒绝打开", async () => {
+    mocks.openPath.mockClear();
+    const call = vi.fn().mockResolvedValue({ task_id: "task-1", path: null });
+    registerEngineHandlers({ call } as any);
+    const handler = mocks.handlers.get("tasks.openCleanupDir");
+    await expect(handler?.({}, { task_id: "task-1" })).rejects.toThrow();
+    expect(mocks.openPath).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,8 @@ import {
   ReviewHighlightSettingsUpdateParamsSchema,
   ReviewPageImageResultSchema,
   ReviewPreparePageImageParamsSchema,
+  PROTOCOL_VERSION,
+  TaskCleanupTargetResultSchema,
   OcrCorpusStatusResultSchema,
   OcrSearchExecuteParamsSchema,
   OcrSearchHitSchema,
@@ -352,8 +354,7 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(EngineReadyEventSchema.safeParse({ ...valid, payload: { protocol_version: 2.0, engine_version: "same-number" } }).success).toBe(true);
   });
 
-  it("task create/get/list 结果使用明确运行时 schema", () => {
-    const task = {
+  it("task create/get/list 结果使用明确运行时 schema", () => {    const task = {
       task_id: "task-1", status: "paused", search_text: "档案", search_terms: ["档案"],
       search_mode: "exact_literal", processed_pages: 3, total_pages: 10, occurrence_count: 2,
       worker_generation: 1, last_event_sequence: 5,
@@ -375,5 +376,25 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     };
     // RequestSchema 不校验 params 内部；此处仅校验 schema 接受外层。
     expect(RequestSchema.safeParse(bad).success).toBe(true);
+  });
+
+  it("任务删除 cleanup 可选字段与新方法保持协议 v2 兼容（不新增错误码、不递增版本）", () => {
+    const baseTask = {
+      task_id: "task-1", status: "completed", search_text: "档", search_terms: ["档"],
+      search_mode: "exact_literal", processed_pages: 1, total_pages: 1, occurrence_count: 1,
+      worker_generation: 1, last_event_sequence: 1,
+    };
+    // cleanup_status/cleanup_error_summary 为可选字段，不破坏既有 TaskSummary 解析
+    expect(TaskSummarySchema.safeParse(baseTask).success).toBe(true);
+    expect(TaskSummarySchema.safeParse({ ...baseTask, cleanup_status: "cleanup_failed", cleanup_error_summary: "清理被拒绝" }).success).toBe(true);
+    expect(TaskSummarySchema.safeParse({ ...baseTask, cleanup_status: undefined }).success).toBe(true);
+    // 新方法为附加项（旧客户端不会发送；新客户端对旧服务端收到 UNKNOWN_METHOD）
+    expect(MethodNameSchema.safeParse("tasks.cleanupTarget").success).toBe(true);
+    expect(TaskCleanupTargetResultSchema.safeParse({ task_id: "task-1", path: "E:\\residual" }).success).toBe(true);
+    expect(TaskCleanupTargetResultSchema.safeParse({ task_id: "task-1", path: null }).success).toBe(true);
+    expect(TaskCleanupTargetResultSchema.safeParse({ task_id: "task-1", path: "E:\\residual", extra: 1 }).success).toBe(true);
+    // 闭合枚举：未知错误码被拒——证明 B1 未新增协议错误码、因此无需递增 PROTOCOL_VERSION
+    expect(ErrorCodeSchema.safeParse("CLEANUP_FAILED_HYPOTHETICAL").success).toBe(false);
+    expect(PROTOCOL_VERSION).toBe(2);
   });
 });
