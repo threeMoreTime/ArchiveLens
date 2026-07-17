@@ -225,6 +225,7 @@ foreach ($name in @(
   "PYTHONUTF8",
   "PYTHONIOENCODING",
   "PYTHONPATH",
+  "AL_OCR_REC_MODEL",
   "ARCHIVELENS_TEST_RUN_ID",
   "ARCHIVELENS_E2E_PYTHON",
   "ARCHIVELENS_HTML_SMOKE_MODE"
@@ -319,6 +320,20 @@ try {
     "scripts/verify-license-compliance.py",
     "--mode", "source"
   )
+  $ocrBootstrapArguments = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", (Join-Path $repoRoot "scripts\prepare-native-runtime.ps1"),
+    "-OcrOnly"
+  )
+  if ($OfflineNative) {
+    $ocrBootstrapArguments += "-Offline"
+  }
+  Invoke-GateStep "locked OCR model preparation" $powershellExe $ocrBootstrapArguments
+  $env:AL_OCR_REC_MODEL = Join-Path $repoRoot "dist\native\win-x64\rapidocr\PP-OCRv6_rec_small.onnx"
+  if (-not (Test-Path -LiteralPath $env:AL_OCR_REC_MODEL -PathType Leaf)) {
+    throw "Locked OCR model preparation did not produce the required model: $env:AL_OCR_REC_MODEL"
+  }
   Invoke-GateStep "python engine test suite" $pythonExe @(
     "-m", "unittest", "discover",
     "-s", "engine/tests",

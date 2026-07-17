@@ -62,6 +62,7 @@ class ReleaseGateTests(unittest.TestCase):
 
         for required in (
             "frozen dependency install",
+            "locked OCR model preparation",
             "python engine test suite",
             "complete Playwright E2E suite",
             "Setup and Portable build",
@@ -75,8 +76,19 @@ class ReleaseGateTests(unittest.TestCase):
             '$ErrorActionPreference = "Continue"',
             "[Management.Automation.ErrorRecord]",
             "$script:Steps.ToArray()",
+            '"AL_OCR_REC_MODEL"',
+            '"-OcrOnly"',
         ):
             self.assertIn(required, text)
+
+        self.assertLess(
+            text.index("locked OCR model preparation"),
+            text.index("python engine test suite"),
+        )
+        self.assertLess(
+            text.index("python engine test suite"),
+            text.index("locked native runtime preparation"),
+        )
 
         self.assertNotIn("--allow-partial", text)
         for forbidden in ("git push", "gh release", "gh pr create", "npm publish", "pnpm publish"):

@@ -35,8 +35,9 @@ pnpm gate:release-local -- -OfflineNative
 1. 冻结完整 Git SHA、版本和工具链版本；
 2. `pnpm install --frozen-lockfile`；
 3. 源码许可证技术门禁；
-4. Python 全量测试、TypeScript 类型检查、Lint、工作区单元测试和源码构建；
-5. 按锁文件准备原生组件并重建 PyInstaller Engine；
+4. 先按锁文件准备并校验统一 OCR 模型，将其路径注入当前门禁进程，再运行 Python
+   全量测试、TypeScript 类型检查、Lint、工作区单元测试和源码构建；
+5. 复用已校验模型缓存，准备完整原生组件并重建 PyInstaller Engine；
 6. 从同一 SHA 构建 win-unpacked、Setup 和 Portable；
 7. 运行完整 Playwright E2E；
 8. 运行包内许可证、离线原生组件、八组 OCR、推理中退出和 HTML 导出 smoke；
