@@ -62,6 +62,7 @@ class ReleaseGateTests(unittest.TestCase):
 
         for required in (
             "frozen dependency install",
+            "serial Electron runtime preparation",
             "locked OCR model preparation",
             "python engine test suite",
             "complete Playwright E2E suite",
@@ -78,9 +79,18 @@ class ReleaseGateTests(unittest.TestCase):
             "$script:Steps.ToArray()",
             '"AL_OCR_REC_MODEL"',
             '"-OcrOnly"',
+            '"install-electron"',
         ):
             self.assertIn(required, text)
 
+        self.assertLess(
+            text.index("frozen dependency install"),
+            text.index("serial Electron runtime preparation"),
+        )
+        self.assertLess(
+            text.index("serial Electron runtime preparation"),
+            text.index("workspace unit tests"),
+        )
         self.assertLess(
             text.index("locked OCR model preparation"),
             text.index("python engine test suite"),

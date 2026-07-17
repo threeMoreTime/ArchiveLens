@@ -33,7 +33,8 @@ pnpm gate:release-local -- -OfflineNative
 ## 门禁步骤
 
 1. 冻结完整 Git SHA、版本和工具链版本；
-2. `pnpm install --frozen-lockfile`；
+2. `pnpm install --frozen-lockfile`，随后串行执行 Electron 运行时准备；不得让多个
+   测试进程在缺少 `electron/dist` 时同时触发首次安装；
 3. 源码许可证技术门禁；
 4. 先按锁文件准备并校验统一 OCR 模型，将其路径注入当前门禁进程，再运行 Python
    全量测试、TypeScript 类型检查、Lint、工作区单元测试和源码构建；

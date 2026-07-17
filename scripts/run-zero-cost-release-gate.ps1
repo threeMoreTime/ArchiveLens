@@ -316,6 +316,10 @@ try {
   $env:ARCHIVELENS_E2E_PYTHON = $pythonExe
 
   Invoke-GateStep "frozen dependency install" $pnpmExe @("install", "--frozen-lockfile")
+  Invoke-GateStep "serial Electron runtime preparation" $pnpmExe @(
+    "--filter", "@archivelens/desktop",
+    "exec", "install-electron"
+  )
   Invoke-GateStep "source license technical gate" $pythonExe @(
     "scripts/verify-license-compliance.py",
     "--mode", "source"
