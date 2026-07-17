@@ -195,23 +195,42 @@ class Server:
     def reconcile_cleanup_jobs(self) -> int:
         """重启恢复：对中断（pending）的清理作业安全收尾。
 
-        目录已不存在视为可安全完成；仍可清理则清理后硬删除；
-        清理失败则标记 cleanup_failed 等待 UI 重试。
+        每个作业都是一次新的真实清理尝试（attempt_count+1、清空旧错误）。
+        目录确凿不存在视为可安全完成；仍可清理则清理后硬删除；
+        清理或 DB 失败则标记可诊断 cleanup_failed 等待 UI 重试。
+        单个作业异常不得阻塞应用启动。
         """
         completed = 0
         for job in self.store.list_cleanup_jobs_for_recovery():
             task_id = str(job["task_id"])
-            if self.store.get_task(task_id) is None:
-                self.store.delete_cleanup_job(task_id)
-                continue
             try:
-                _cleanup_task_dirs(self.workspace_root, task_id)
-            except CleanupError as exc:
-                self.store.mark_cleanup_failed(task_id, exc.code, exc.summary)
+                if self.store.get_task(task_id) is None:
+                    self.store.delete_cleanup_job(task_id)
+                    continue
+                # 开始一次新的重启恢复尝试
+                self.store.upsert_cleanup_job_pending(task_id)
+                try:
+                    _cleanup_task_dirs(self.workspace_root, task_id)
+                except CleanupError as exc:
+                    self._mark_cleanup_failed_swallow(task_id, exc.code, exc.summary)
+                    continue
+                try:
+                    self.store.delete_task(task_id)
+                except Exception:
+                    self._mark_cleanup_failed_swallow(task_id, "DATABASE_ERROR", "重启恢复时记录删除失败，可重试")
+                    continue
+                completed += 1
+            except Exception:
+                # 单个作业处理异常不得阻塞应用启动；保留 job 待下次重试
                 continue
-            self.store.delete_task(task_id)
-            completed += 1
         return completed
+
+    def _mark_cleanup_failed_swallow(self, task_id: str, code: str, summary: str) -> None:
+        """标记 cleanup_failed，吞掉标记自身的异常（最坏情况下保留 job 待下次重试）。"""
+        try:
+            self.store.mark_cleanup_failed(task_id, code, summary)
+        except Exception:
+            return
 
     # ---- 单行处理 ----
     def handle_line(self, line: str) -> None:
@@ -1059,6 +1078,16 @@ class CleanupError(Exception):
         self.summary = summary
 
 
+def _classify_oserror(exc: OSError) -> str:
+    """把底层 OSError 映射为闭合错误码字符串（PERMISSION_DENIED/UNKNOWN_ERROR）。"""
+    return "PERMISSION_DENIED" if exc.errno in (errno.EACCES, errno.EPERM) else "UNKNOWN_ERROR"
+
+
+def _cleanup_error_code_to_protocol(code: str) -> str:
+    """cleanup 内部原因码 → 对外 ProtocolError 闭合错误码。"""
+    return ErrorCode.PERMISSION_DENIED if code == "PERMISSION_DENIED" else ErrorCode.UNKNOWN_ERROR
+
+
 def _validate_task_id_segment(task_id: str) -> None:
     """task_id 必须是单一路径段：非空、无分隔符/NUL、非 . 或 .. 。"""
     if not isinstance(task_id, str) or not task_id:
@@ -1069,17 +1098,49 @@ def _validate_task_id_segment(task_id: str) -> None:
         raise ValueError("任务标识无效")
 
 
+def _require_task_id_segment(task_id: str) -> None:
+    """handler 入口校验：非法 task_id 返回 VALIDATION_ERROR 而非幂等成功。"""
+    try:
+        _validate_task_id_segment(task_id)
+    except ValueError as exc:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, str(exc), {"task_id": task_id}) from exc
+
+
+def _path_definitely_absent(path: Path) -> bool:
+    """仅在确凿不存在（ENOENT/ENOTDIR）时返回 True；任何无法检查的情况 fail closed。
+
+    不得用 ``Path.exists()``，它会吞掉权限/IO 异常而误判目录已不存在。
+    """
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    except NotADirectoryError:
+        return True
+    except OSError as exc:
+        raise CleanupError(
+            _classify_oserror(exc),
+            f"无法检查任务目录状态，已拒绝清理：{exc.strerror or str(exc)}",
+        ) from exc
+    return False
+
+
 def _is_reparse_point(path: Path) -> bool:
-    """判断路径自身是否为 symlink/junction 等 reparse point（不跟随）。"""
+    """判断路径自身是否为 symlink/junction 等 reparse point（不跟随）。fail closed。"""
     try:
         info = path.lstat()
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return False
+    except OSError as exc:
+        raise CleanupError(
+            _classify_oserror(exc),
+            f"无法检查任务目录属性，已拒绝清理：{exc.strerror or str(exc)}",
+        ) from exc
     import stat as _stat
 
     if _stat.S_ISLNK(info.st_mode):
         return True
-    # FILE_ATTRIBUTE_REPARSE_POINT = 0x400（覆盖 junction 等）
+    # FILE_ATTRIBUTE_REPARSE_POINT = 0x400（覆盖 junction 等）；非 Windows 无该属性。
     return bool(getattr(info, "st_file_attributes", 0) & 0x400)
 
 
@@ -1112,60 +1173,76 @@ def _safe_task_derived_dirs(workspace_root: Path, task_id: str) -> list[Path]:
 
 
 def _assert_tree_has_no_reparse(root: Path) -> None:
-    """递归扫描目录树；发现任何 reparse point 即 fail closed，绝不跟随。"""
-    if not root.exists():
+    """递归扫描目录树；发现任何 reparse point 即 fail closed，绝不跟随。
+
+    scandir/stat/is_dir 的任何权限或 IO 异常都转换为 CleanupError（不得静默 continue）。
+    """
+    if _path_definitely_absent(root):
         return
     pending = [root]
     while pending:
         current = pending.pop()
         try:
             with os.scandir(current) as entries:
-                for entry in entries:
-                    is_link = False
-                    try:
-                        is_link = entry.is_symlink()
-                        if not is_link:
-                            attributes = entry.stat(follow_symlinks=False).st_file_attributes
-                            is_link = bool(attributes & 0x400)
-                    except OSError:
-                        is_link = False
-                    if is_link:
-                        raise CleanupError("PERMISSION_DENIED", f"任务目录包含 reparse point，已拒绝清理：{entry.name}")
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            pending.append(Path(entry.path))
-                    except OSError:
-                        continue
-        except OSError:
-            continue
+                child_entries = list(entries)
+        except OSError as exc:
+            raise CleanupError(
+                _classify_oserror(exc),
+                f"无法扫描任务目录，已拒绝清理：{exc.strerror or str(exc)}",
+            ) from exc
+        for entry in child_entries:
+            try:
+                is_link = entry.is_symlink()
+                if not is_link:
+                    attributes = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0)
+                    is_link = bool(attributes & 0x400)
+            except OSError as exc:
+                raise CleanupError(
+                    _classify_oserror(exc),
+                    f"无法检查任务目录项属性，已拒绝清理：{entry.name}",
+                ) from exc
+            if is_link:
+                raise CleanupError("PERMISSION_DENIED", f"任务目录包含 reparse point，已拒绝清理：{entry.name}")
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError as exc:
+                raise CleanupError(
+                    _classify_oserror(exc),
+                    f"无法检查任务目录项类型，已拒绝清理：{entry.name}",
+                ) from exc
+            if is_dir:
+                pending.append(Path(entry.path))
 
 
 def _cleanup_task_dirs(workspace_root: Path, task_id: str) -> None:
-    """安全清理任务派生目录；目录缺失视为已清理；reparse/junction 越界 fail closed。"""
+    """安全清理任务派生目录；确凿缺失视为已清理；reparse/junction/无法检查 fail closed。"""
     for candidate in _safe_task_derived_dirs(workspace_root, task_id):
-        if not candidate.exists():
+        if _path_definitely_absent(candidate):
             continue
         _assert_tree_has_no_reparse(candidate)
         try:
             shutil.rmtree(candidate)
         except OSError as exc:
-            code = "PERMISSION_DENIED" if exc.errno in (errno.EACCES, errno.EPERM) else "UNKNOWN_ERROR"
-            raise CleanupError(code, f"清理任务目录失败：{exc.strerror or str(exc)}") from exc
+            raise CleanupError(
+                _classify_oserror(exc),
+                f"清理任务目录失败：{exc.strerror or str(exc)}",
+            ) from exc
 
 
 def _resolve_cleanup_target(workspace_root: Path, task_id: str) -> str | None:
-    """返回首个存在的受信派生目录（供 Main 受控打开）；不存在返回 None。"""
+    """返回首个确凿存在的受信派生目录（供 Main 受控打开）；不存在返回 None。fail closed。"""
     for candidate in _safe_task_derived_dirs(workspace_root, task_id):
-        if candidate.exists():
+        if not _path_definitely_absent(candidate):
             return str(candidate)
     return None
 
 
 def _h_tasks_delete(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
+    _require_task_id_segment(task_id)
     task = server.store.get_task(task_id)
     if task is None:
-        # 幂等：任务已不存在（含响应丢失后的重试）视为已删除
+        # 幂等：合法但任务已不存在（含响应丢失后的重试）视为已删除
         return {"task_id": task_id, "deleted": True}
     if task["status"] not in TERMINAL_TASK_STATUSES:
         raise ProtocolError(
@@ -1174,7 +1251,7 @@ def _h_tasks_delete(server: Server, params: dict) -> dict:
             {"status": task["status"]},
         )
 
-    # 1. 原子持久化 cleanup job（pending）：任务保持可见，UI 显示 deleting
+    # 1. 原子持久化 cleanup job（pending，attempt_count+1，清空旧错误）：任务保持可见
     job = server.store.upsert_cleanup_job_pending(task_id)
     # 2. 安全清理仅属于该任务的派生目录（绝不触碰原始来源）
     try:
@@ -1183,7 +1260,7 @@ def _h_tasks_delete(server: Server, params: dict) -> dict:
         failed = server.store.mark_cleanup_failed(task_id, exc.code, exc.summary)
         current = failed or job
         raise ProtocolError(
-            ErrorCode.DATABASE_ERROR,
+            _cleanup_error_code_to_protocol(exc.code),
             f"任务记录清理失败，可重试：{exc.summary}",
             {
                 "task_id": task_id,
@@ -1195,23 +1272,65 @@ def _h_tasks_delete(server: Server, params: dict) -> dict:
             },
         ) from exc
     # 3. DB 事务硬删除：任务派生记录 + 任务 + cleanup job（文件系统清理不冒充 DB 事务）
-    if not server.store.delete_task(task_id):
+    try:
+        deleted = server.store.delete_task(task_id)
+    except Exception as exc:
+        # 文件已清理但 DB 事务失败：安全摘要标记 cleanup_failed，不泄露内部异常，可重试
+        details = _mark_cleanup_failed_safe(
+            server, task_id, "DATABASE_ERROR", "任务文件已清理，但记录删除失败，可重试", job
+        )
+        raise ProtocolError(
+            ErrorCode.DATABASE_ERROR,
+            "任务文件已清理，但记录删除失败，可重试",
+            details,
+        ) from exc
+    if not deleted:
         # 并发已删除：幂等成功
         return {"task_id": task_id, "deleted": True}
     return {"task_id": task_id, "deleted": True}
 
 
+def _mark_cleanup_failed_safe(
+    server: Server,
+    task_id: str,
+    error_code: str,
+    error_summary: str,
+    fallback_job: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """标记 cleanup_failed；若标记自身也失败，保留最安全的明确错误，绝不伪造成功。"""
+    try:
+        failed = server.store.mark_cleanup_failed(task_id, error_code, error_summary)
+    except Exception:
+        return {
+            "task_id": task_id,
+            "cleanup_status": "cleanup_failed",
+            "attempt_count": int((fallback_job or {}).get("attempt_count") or 0),
+            "last_error_code": error_code,
+            "last_error_summary": error_summary,
+            "last_attempt_at": (fallback_job or {}).get("last_attempt_at"),
+            "mark_failed": True,
+        }
+    current = failed or fallback_job or {}
+    return {
+        "task_id": task_id,
+        "cleanup_status": "cleanup_failed",
+        "attempt_count": int(current.get("attempt_count") or 0),
+        "last_error_code": error_code,
+        "last_error_summary": error_summary,
+        "last_attempt_at": current.get("last_attempt_at"),
+    }
+
+
 def _h_tasks_cleanup_target(server: Server, params: dict) -> dict:
     """返回受信派生目录，供 Main 受控打开（renderer 不接触绝对路径）。"""
     task_id = _require(params, "task_id", str)
+    _require_task_id_segment(task_id)
     if server.store.get_task(task_id) is None:
         raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
     try:
         path = _resolve_cleanup_target(server.workspace_root, task_id)
     except CleanupError as exc:
-        raise ProtocolError(ErrorCode.PERMISSION_DENIED, exc.summary, {"task_id": task_id}) from exc
-    except ValueError as exc:
-        raise ProtocolError(ErrorCode.VALIDATION_ERROR, str(exc), {"task_id": task_id}) from exc
+        raise ProtocolError(_cleanup_error_code_to_protocol(exc.code), exc.summary, {"task_id": task_id}) from exc
     return {"task_id": task_id, "path": path}
 
 

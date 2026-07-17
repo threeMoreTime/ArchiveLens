@@ -354,7 +354,8 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(EngineReadyEventSchema.safeParse({ ...valid, payload: { protocol_version: 2.0, engine_version: "same-number" } }).success).toBe(true);
   });
 
-  it("task create/get/list 结果使用明确运行时 schema", () => {    const task = {
+  it("task create/get/list 结果使用明确运行时 schema", () => {
+    const task = {
       task_id: "task-1", status: "paused", search_text: "档案", search_terms: ["档案"],
       search_mode: "exact_literal", processed_pages: 3, total_pages: 10, occurrence_count: 2,
       worker_generation: 1, last_event_sequence: 5,

@@ -473,6 +473,7 @@ kbd { display:inline-block; padding:1px 5px; border:1px solid #cdbfae; border-bo
 .al-task-result-cell { display:grid; gap:var(--al-space-1); }
 .al-task-result-cell small { color:var(--muted); }
 .al-task-row-actions { display:flex; flex-wrap:wrap; gap:var(--al-space-1); }
+.al-task-cleanup-error { color:var(--fail); font-size:12px; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:220px; }
 .al-task-center-pagination { display:flex; justify-content:flex-end; align-items:center; gap:var(--al-space-2); padding:var(--al-space-3) var(--al-space-4); border-top:1px solid var(--line); min-width:920px; }
 .al-task-delete-confirmation { display:grid; gap:var(--al-space-2); line-height:1.6; }
 button.al-task-delete-button { background:#bc2b22; color:#fff; border-color:#bc2b22; }

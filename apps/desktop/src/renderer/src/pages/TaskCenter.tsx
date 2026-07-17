@@ -62,6 +62,7 @@ export default function TaskCenter() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<TaskSummary | null>(null);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
   const [taskAction, setTaskAction] = useState<{ taskId: string; kind: TaskControlAction } | null>(null);
@@ -111,46 +112,46 @@ export default function TaskCenter() {
     if (!deleteTarget) return;
     const taskId = deleteTarget.task_id;
     setDeletingTaskId(taskId);
-    setError("");
+    setDeleteTarget(null);
+    setActionError("");
     try {
       await window.archiveLens.tasks.delete(taskId);
-      setDeleteTarget(null);
-      await load();
     } catch (nextError) {
-      setError(`删除任务失败：${errorMessage(nextError)}`);
+      setActionError(`删除任务失败：${errorMessage(nextError)}`);
     } finally {
+      await load();
       setDeletingTaskId(null);
     }
   };
   const retryCleanup = async (taskId: string) => {
     setDeletingTaskId(taskId);
-    setError("");
+    setActionError("");
     try {
       await window.archiveLens.tasks.delete(taskId);
       await load();
     } catch (nextError) {
-      setError(`重试清理失败：${errorMessage(nextError)}`);
+      setActionError(`重试清理失败：${errorMessage(nextError)}`);
     } finally {
       setDeletingTaskId(null);
     }
   };
   const openCleanupDir = async (taskId: string) => {
-    setError("");
+    setActionError("");
     try {
       await window.archiveLens.tasks.openCleanupDir(taskId);
     } catch (nextError) {
-      setError(`打开残留目录失败：${errorMessage(nextError)}`);
+      setActionError(`打开残留目录失败：${errorMessage(nextError)}`);
     }
   };
   const runTaskAction = async (taskId: string, kind: TaskControlAction) => {
     setTaskAction({ taskId, kind });
-    setError("");
+    setActionError("");
     try {
       await window.archiveLens.tasks[kind](taskId);
       await load();
     } catch (nextError) {
       const label = { start: "启动", pause: "暂停", resume: "继续", cancel: "取消" }[kind];
-      setError(`${label}任务失败：${errorMessage(nextError)}`);
+      setActionError(`${label}任务失败：${errorMessage(nextError)}`);
     } finally {
       setTaskAction(null);
     }
@@ -196,6 +197,7 @@ export default function TaskCenter() {
       </Card>
 
       {error && <InlineFeedback>任务列表加载失败：{error} <Button size="small" onClick={() => void load()}>重试</Button></InlineFeedback>}
+      {actionError && <InlineFeedback tone="error">{actionError}</InlineFeedback>}
       {loading && items.length === 0 && <LoadingState label="正在读取全部本地任务…" />}
       {!loading && !error && items.length === 0 && (
         <EmptyState
@@ -218,15 +220,17 @@ export default function TaskCenter() {
               const taskCanBeCancelled = !taskCanBeDeleted && task.status !== "stopping";
               const actionInProgress = taskAction !== null;
               const actionIsForTask = taskAction?.taskId === task.task_id;
+              // 删除生命周期中只保留“详情”；校对/导出/控制/普通删除入口隐藏，避免注定失败或重复操作
+              const cleanupActive = Boolean(task.cleanup_status);
               const actions: TaskAction[] = [
                 { id: "details", label: "详情", group: "view", visible: true, onSelect: () => nav(`/tasks/${task.task_id}`) },
-                { id: "review", label: "校对", group: "view", visible: true, onSelect: () => nav(`/review/${task.task_id}`) },
-                { id: "export", label: "导出", group: "view", visible: true, onSelect: () => nav(`/export/${task.task_id}`) },
-                { id: "start", label: actionIsForTask && taskAction?.kind === "start" ? "正在启动…" : "启动任务", group: "control", visible: task.status === "draft", disabled: actionInProgress || deletingTaskId !== null, onSelect: () => void runTaskAction(task.task_id, "start") },
-                { id: "pause", label: actionIsForTask && taskAction?.kind === "pause" ? "正在暂停…" : "暂停任务", group: "control", visible: taskCanBePaused, disabled: actionInProgress || deletingTaskId !== null, onSelect: () => void runTaskAction(task.task_id, "pause") },
-                { id: "resume", label: actionIsForTask && taskAction?.kind === "resume" ? "正在继续…" : "继续任务", group: "control", visible: ["paused", "recoverable"].includes(task.status), disabled: actionInProgress || deletingTaskId !== null, onSelect: () => void runTaskAction(task.task_id, "resume") },
-                { id: "cancel", label: actionIsForTask && taskAction?.kind === "cancel" ? "正在取消…" : "取消任务", group: "control", visible: taskCanBeCancelled, disabled: actionInProgress || deletingTaskId !== null, onSelect: () => void runTaskAction(task.task_id, "cancel") },
-                { id: "delete", label: "删除任务", group: "danger", visible: taskCanBeDeleted, disabled: deletingTaskId !== null || actionInProgress, danger: true, onSelect: () => setDeleteTarget(task) },
+                { id: "review", label: "校对", group: "view", visible: !cleanupActive, onSelect: () => nav(`/review/${task.task_id}`) },
+                { id: "export", label: "导出", group: "view", visible: !cleanupActive, onSelect: () => nav(`/export/${task.task_id}`) },
+                { id: "start", label: actionIsForTask && taskAction?.kind === "start" ? "正在启动…" : "启动任务", group: "control", visible: !cleanupActive && task.status === "draft", disabled: actionInProgress || deletingTaskId !== null, onSelect: () => void runTaskAction(task.task_id, "start") },
+                { id: "pause", label: actionIsForTask && taskAction?.kind === "pause" ? "正在暂停…" : "暂停任务", group: "control", visible: !cleanupActive && taskCanBePaused, disabled: actionInProgress || deletingTaskId !== null, onSelect: () => void runTaskAction(task.task_id, "pause") },
+                { id: "resume", label: actionIsForTask && taskAction?.kind === "resume" ? "正在继续…" : "继续任务", group: "control", visible: !cleanupActive && ["paused", "recoverable"].includes(task.status), disabled: actionInProgress || deletingTaskId !== null, onSelect: () => void runTaskAction(task.task_id, "resume") },
+                { id: "cancel", label: actionIsForTask && taskAction?.kind === "cancel" ? "正在取消…" : "取消任务", group: "control", visible: !cleanupActive && taskCanBeCancelled, disabled: actionInProgress || deletingTaskId !== null, onSelect: () => void runTaskAction(task.task_id, "cancel") },
+                { id: "delete", label: "删除任务", group: "danger", visible: !cleanupActive && taskCanBeDeleted, disabled: deletingTaskId !== null || actionInProgress, danger: true, onSelect: () => setDeleteTarget(task) },
               ];
               const visibleActions = actions.filter((action) => action.visible);
               const primaryAction = visibleActions.find((action) => action.id === primaryActionId(task.status)) ?? visibleActions[0];

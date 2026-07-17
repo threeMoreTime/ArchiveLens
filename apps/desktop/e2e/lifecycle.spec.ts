@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, readdir, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -989,5 +989,60 @@ test("Lifecycle: production mode does not expose the E2E bridge", async () => {
     } else {
       await app.close().catch(() => undefined);
     }
+  }
+});
+
+test("Lifecycle: cleanup failure shows retry UI, hides normal actions, retry succeeds", async () => {
+  const userDataDir = await makeOwnedTempDir("userData", "cleanup-ui");
+  const sourceDir = await makeOwnedTempDir("source", "cleanup-ui");
+  await writeFile(path.join(sourceDir, "source.txt"), "src", "utf8");
+  const app = await launchDesktop({ userDataDir });
+  try {
+    const win = await firstWindow(app);
+    const taskId = await createSlowFakeTask(win, sourceDir);
+    await waitForTaskCompletion(win, taskId);
+
+    // 在任务派生目录放入一个指向根外的 junction 子项，确定性诱导清理 fail-closed
+    // （reparse 检测拒绝跟随；机密文件不得被删）。比文件锁更稳定可复现。
+    const taskDir = path.join(userDataDir, "engine", "tasks", taskId);
+    await mkdir(taskDir, { recursive: true });
+    const outsideDir = path.join(userDataDir, "outside-secret");
+    await mkdir(outsideDir, { recursive: true });
+    await writeFile(path.join(outsideDir, "secret.txt"), "must-not-be-deleted", "utf8");
+    const junctionChild = path.join(taskDir, "evil-link");
+    await execFileAsync("cmd", ["/c", "mklink", "/J", junctionChild, outsideDir]);
+
+    await win.getByRole("link", { name: "任务中心" }).click();
+    // 删除前：completed 任务的主操作是“校对”
+    await expect(win.getByRole("button", { name: "校对" })).toBeVisible();
+    await win.getByRole("button", { name: /更多操作$/ }).first().click();
+    await win.getByRole("menuitem", { name: "删除任务" }).click();
+    const dialog = win.getByRole("dialog");
+    await expect(dialog).toContainText("不会删除原始文件");
+    await dialog.getByRole("button", { name: "删除任务" }).click();
+
+    // 清理失败 UI：badge + 重试/打开按钮可见；普通“校对”入口已隐藏
+    await expect(win.getByText("清理失败").first()).toBeVisible({ timeout: 15_000 });
+    await expect(win.getByRole("button", { name: "重试清理" })).toBeVisible();
+    await expect(win.getByRole("button", { name: "打开残留目录" })).toBeVisible();
+    await expect(win.getByRole("button", { name: "校对" })).toHaveCount(0);
+    // fail closed：根外机密文件未被删除
+    expect(await access(path.join(outsideDir, "secret.txt")).then(() => true, () => false)).toBe(true);
+
+    // 移除 junction 子项后重试清理 → 任务从列表消失
+    await execFileAsync("cmd", ["/c", "rmdir", junctionChild]);
+    await win.getByRole("button", { name: "重试清理" }).click();
+    await expect.poll(async () => {
+      try {
+        await win.evaluate(async (id) => { await (window as any).archiveLens.tasks.get(id); }, taskId);
+        return false;
+      } catch {
+        return true;
+      }
+    }, { timeout: 15_000 }).toBe(true);
+  } finally {
+    await app.close().catch(() => undefined);
+    await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined);
+    await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
   }
 });

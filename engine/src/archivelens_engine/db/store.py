@@ -953,7 +953,10 @@ class TaskStore:
         return {str(row["task_id"]): dict(row) for row in rows}
 
     def upsert_cleanup_job_pending(self, task_id: str) -> dict[str, Any]:
-        """创建或重置 cleanup job 为 pending（任务保持可见）。每次重试 attempt_count +1。"""
+        """开始一次新的清理尝试（pending）：attempt_count+1、last_attempt_at=now、清空旧错误。
+
+        attempt_count 定义为实际清理执行次数：首次请求=1，用户重试/重启恢复=下一次。
+        """
         now = now_iso()
         with self._lock:
             with self.conn:
@@ -966,15 +969,16 @@ class TaskStore:
                         """INSERT INTO task_cleanup_jobs
                            (task_id, status, attempt_count, last_error_code, last_error_summary,
                             last_attempt_at, created_at, updated_at)
-                           VALUES (?, 'pending', 1, '', '', NULL, ?, ?)""",
-                        (task_id, now, now),
+                           VALUES (?, 'pending', 1, '', '', ?, ?, ?)""",
+                        (task_id, now, now, now),
                     )
                 else:
                     self.conn.execute(
                         """UPDATE task_cleanup_jobs
-                           SET status='pending', attempt_count=attempt_count+1, updated_at=?
+                           SET status='pending', attempt_count=attempt_count+1,
+                               last_error_code='', last_error_summary='', last_attempt_at=?, updated_at=?
                            WHERE task_id=?""",
-                        (now, task_id),
+                        (now, now, task_id),
                     )
                 return self._get_cleanup_job_locked(task_id)
 
