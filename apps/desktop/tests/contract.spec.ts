@@ -372,6 +372,8 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(SearchScriptScopeSchema.options).toEqual(["simplified", "traditional", "both"]);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", search_script_scope: "both" }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", search_script_scope: "mixed" }).success).toBe(false);
+    expect(TaskCreateParamsSchema.parse({ source_dir: "C:/scan", search_text: "亏空" }).search_script_scope).toBe("both");
+    expect(TaskCreateParamsSchema.parse({ source_dir: "C:/scan", search_text: "亏空", search_script_scope: "traditional" }).search_script_scope).toBe("traditional");
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "document", task_id: "task-1", document_id: "doc-1", orientation: "right" }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "document", task_id: "task-1", document_id: "doc-1", orientation: "diagonal" }).success).toBe(false);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", highlight: null }).success).toBe(false);

@@ -1,20 +1,20 @@
 # 数据库迁移说明
 
-## 当前 Schema v10
+## 当前 Schema v11
 
-ArchiveLens 当前使用 SQLite schema v10。迁移在单个事务中执行；失败会
-rollback，未来高于 v10 的 schema 会 fail-closed 且不修改数据库。已是 v10 的
+ArchiveLens 当前使用 SQLite schema v11。迁移在单个事务中执行；失败会
+rollback，未来高于 v11 的 schema 会 fail-closed 且不修改数据库。已是 v11 的
 数据库重复打开不会执行回填或索引重建。
 
 ## 迁移前备份与失败恢复
 
-打开 `0 < user_version < 10` 的历史数据库时，Engine 会在执行任何 schema DDL 前使用
+打开 `0 < user_version < 11` 的历史数据库时，Engine 会在执行任何 schema DDL 前使用
 SQLite Online Backup API 建立一致性快照：
 
 ```text
 userData/engine/backups/
-├─ archivelens-schema-v<旧>-to-v10-<UTC>-<id>.sqlite3
-└─ archivelens-schema-v<旧>-to-v10-<UTC>-<id>.json
+├─ archivelens-schema-v<旧>-to-v11-<UTC>-<id>.sqlite3
+└─ archivelens-schema-v<旧>-to-v11-<UTC>-<id>.json
 ```
 
 备份必须与源 schema 一致、通过 `PRAGMA integrity_check`，并记录 SHA-256、字节数、
@@ -24,13 +24,20 @@ userData/engine/backups/
 
 若迁移事务失败，Engine 会 rollback、关闭连接、重新校验备份的路径、大小、SHA-256、
 schema 和完整性，然后原子恢复并重新抛出原始迁移错误。恢复本身无法验证时，Engine
-抛出 `MigrationRecoveryError` 并停止继续写入；不会假装启动成功。全新库、当前 v10 库
+抛出 `MigrationRecoveryError` 并停止继续写入；不会假装启动成功。全新库、当前 v11 库
 和未来 schema 均不创建迁移备份。备份注册表采用数据库外 JSON 元数据，避免为了备份
 能力再次修改待保护的数据库 schema。
 
 该备份只复制 schema 迁移会修改的 SQLite 数据库；来源档案、页面图片和导出不参与
 schema 迁移，因此不会被复制或删除。SQLite Online Backup 会包含已经 commit、但仍在
 WAL 中的内容。
+
+v10 → v11 在任务表增加不可变的 `search_script_scope`，取值为
+`simplified / traditional / both`。历史任务安全回填为 `both`；新任务在创建时固化
+设置页当时的默认范围。恢复历史未完成任务时，Engine 会从已经持久化的 OCR 原文与
+OpenCC 索引幂等补齐旧页命中，不重新 OCR、不修改 checkpoint，也不覆盖 OCR 原文。
+同一位置重复回填由稳定业务键去重；无法可靠映射回原文坐标的长度变化索引只保留在
+任务内检索页，不伪造校对结果坐标。
 
 v9 → v10 为持久化导出作业增加临时目录清理状态、结构化错误和重试次数，并建立
 格式、生命周期状态、清理状态及“同一任务同一格式最多一个活动作业”的数据库约束。

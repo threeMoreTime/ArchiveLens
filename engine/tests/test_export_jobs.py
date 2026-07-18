@@ -796,8 +796,8 @@ class ExportJobSafetyTests(unittest.TestCase):
 
 
 class ExportJobSchemaTests(unittest.TestCase):
-    def test_schema_version_is_v10(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 10)
+    def test_schema_version_is_v11(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 11)
 
     def test_migration_from_v8_creates_export_jobs_table(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="archivelens-export-migrate-"))
@@ -814,7 +814,7 @@ class ExportJobSchemaTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='export_jobs'"
             ).fetchone()
             self.assertIsNotNone(table)
-            self.assertEqual(store2.conn.execute("PRAGMA user_version").fetchone()[0], 10)
+            self.assertEqual(store2.conn.execute("PRAGMA user_version").fetchone()[0], 11)
             columns = {
                 row[1] for row in store2.conn.execute("PRAGMA table_info(export_jobs)").fetchall()
             }

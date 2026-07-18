@@ -90,6 +90,11 @@ class CustomSearchFixtureTests(unittest.TestCase):
                         self.assertEqual(task["search_mode"], "exact_literal")
                         self.assertEqual(task["failure_count"], 0)
                         self.assertEqual(task["occurrence_count"], case["expected_count"])
+                        if "expected_ocr_raw_lines" in case:
+                            self.assertEqual(
+                                [line["raw_text"] for line in server.store.list_ocr_lines(task_id)],
+                                case["expected_ocr_raw_lines"],
+                            )
 
                         total, items = server.store.query_occurrences(task_id=task_id, limit=100, offset=0)
                         self.assertEqual(total, case["expected_count"])

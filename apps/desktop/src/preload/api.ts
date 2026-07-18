@@ -13,6 +13,7 @@ import type {
   ReviewHighlightSettingsUpdateParams,
   ReviewPageImageResult,
   ReviewPreparePageImageParams,
+  SearchScriptScope,
   SourcePreflightJob,
   StorageCleanupResult,
 } from "@shared/index";
@@ -91,6 +92,7 @@ export interface TaskSummary {
   search_text: string;
   search_terms: string[];
   search_mode: "exact_literal" | "legacy_fixed_pair";
+  search_script_scope: SearchScriptScope;
   failures?: TaskFailure[];
   review_preferences?: ReviewDisplayPreferences;
   ocr_corpus_version?: number;
@@ -258,6 +260,7 @@ export interface ArchiveLensApi {
       source_files: string[];
     }) & {
       search_text: string;
+      search_script_scope?: SearchScriptScope;
       output_dir?: string;
       name?: string;
       parallel_workers?: 1;
@@ -273,6 +276,7 @@ export interface ArchiveLensApi {
       search_text: string;
       search_terms: string[];
       search_mode: "exact_literal";
+      search_script_scope: SearchScriptScope;
       review_preferences?: ReviewDisplayPreferences;
     }>;
     preflight(source_dir: string): Promise<SourcePreflightJob>;

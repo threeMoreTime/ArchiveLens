@@ -40,7 +40,7 @@ from ..search_terms import (
     unicode_sequence,
 )
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 OCR_CORPUS_VERSION = 1
 OCR_INDEX_NOT_BUILT = "not_built"
 OCR_INDEX_BUILDING = "building"
@@ -52,6 +52,8 @@ LEGACY_TASK_REQUIRES_REVIEW = "LEGACY_TASK_REQUIRES_REVIEW"
 DEFAULT_REVIEW_IMAGE_QUALITY = "maximum"
 DEFAULT_CONTEXT_DIRECTION = "ltr"
 DEFAULT_CONTEXT_RADIUS = 15
+DEFAULT_SEARCH_SCRIPT_SCOPE = "both"
+SEARCH_SCRIPT_SCOPES = {"simplified", "traditional", "both"}
 
 EXPORT_JOB_ACTIVE_STATUSES = (
     "queued",
@@ -128,6 +130,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     error_message TEXT,
     search_terms_json TEXT NOT NULL DEFAULT '["约","約"]',
     search_mode TEXT NOT NULL DEFAULT 'legacy_fixed_pair',
+    search_script_scope TEXT NOT NULL DEFAULT 'both',
     review_image_quality TEXT NOT NULL DEFAULT 'maximum',
     context_direction TEXT NOT NULL DEFAULT 'ltr',
     context_radius INTEGER NOT NULL DEFAULT 15,
@@ -526,6 +529,7 @@ class TaskStore:
         self._ensure_column("tasks", "worker_generation", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("tasks", "search_terms_json", "TEXT NOT NULL DEFAULT '[\"约\",\"約\"]'")
         self._ensure_column("tasks", "search_mode", "TEXT NOT NULL DEFAULT 'legacy_fixed_pair'")
+        self._ensure_column("tasks", "search_script_scope", "TEXT NOT NULL DEFAULT 'both'")
         # 旧任务的出处页由 144 DPI / WebP 70 生成，不能标记成新版本的“最清晰”。
         self._ensure_column("tasks", "review_image_quality", "TEXT NOT NULL DEFAULT 'standard'")
         self._ensure_column("tasks", "context_direction", "TEXT NOT NULL DEFAULT 'ltr'")
@@ -553,6 +557,11 @@ class TaskStore:
         self.conn.execute(
             "UPDATE tasks SET search_mode=? WHERE search_mode IS NULL OR TRIM(search_mode)=''",
             (LEGACY_SEARCH_MODE,),
+        )
+        self.conn.execute(
+            "UPDATE tasks SET search_script_scope=? "
+            "WHERE search_script_scope IS NULL OR search_script_scope NOT IN ('simplified','traditional','both')",
+            (DEFAULT_SEARCH_SCRIPT_SCOPE,),
         )
         self.conn.execute(
             "UPDATE tasks SET source_kind='folder' WHERE source_kind IS NULL OR TRIM(source_kind)=''",
@@ -825,6 +834,7 @@ class TaskStore:
         status: str = "draft",
         search_terms: Iterable[str] | None = None,
         search_mode: str = LEGACY_SEARCH_MODE,
+        search_script_scope: str = DEFAULT_SEARCH_SCRIPT_SCOPE,
         review_image_quality: str = DEFAULT_REVIEW_IMAGE_QUALITY,
         context_direction: str = DEFAULT_CONTEXT_DIRECTION,
         context_radius: int = DEFAULT_CONTEXT_RADIUS,
@@ -832,6 +842,7 @@ class TaskStore:
         task_id = new_id("task_")
         created = now_iso()
         normalized_terms = self._validate_task_search_terms(search_terms, search_mode)
+        normalized_scope = self._validate_search_script_scope(search_script_scope)
         with self._lock:
             with self.conn:
                 self._insert_task_locked(
@@ -849,6 +860,7 @@ class TaskStore:
                     status=status,
                     search_terms=normalized_terms,
                     search_mode=search_mode,
+                    search_script_scope=normalized_scope,
                     review_image_quality=review_image_quality,
                     context_direction=context_direction,
                     context_radius=context_radius,
@@ -874,6 +886,7 @@ class TaskStore:
         status: str = "draft",
         search_terms: Iterable[str] | None = None,
         search_mode: str = LEGACY_SEARCH_MODE,
+        search_script_scope: str = DEFAULT_SEARCH_SCRIPT_SCOPE,
         review_image_quality: str = DEFAULT_REVIEW_IMAGE_QUALITY,
         context_direction: str = DEFAULT_CONTEXT_DIRECTION,
         context_radius: int = DEFAULT_CONTEXT_RADIUS,
@@ -881,6 +894,7 @@ class TaskStore:
         task_id = new_id("task_")
         created = now_iso()
         normalized_terms = self._validate_task_search_terms(search_terms, search_mode)
+        normalized_scope = self._validate_search_script_scope(search_script_scope)
         with self._lock:
             try:
                 with self.conn:
@@ -899,6 +913,7 @@ class TaskStore:
                         status=status,
                         search_terms=normalized_terms,
                         search_mode=search_mode,
+                        search_script_scope=normalized_scope,
                         review_image_quality=review_image_quality,
                         context_direction=context_direction,
                         context_radius=context_radius,
@@ -926,6 +941,12 @@ class TaskStore:
             raise ValueError("exact_literal tasks require one search term")
         return normalized_terms
 
+    @staticmethod
+    def _validate_search_script_scope(search_script_scope: str) -> str:
+        if search_script_scope not in SEARCH_SCRIPT_SCOPES:
+            raise ValueError("search_script_scope must be simplified, traditional, or both")
+        return search_script_scope
+
     def _insert_task_locked(
         self,
         *,
@@ -943,6 +964,7 @@ class TaskStore:
         status: str,
         search_terms: list[str],
         search_mode: str,
+        search_script_scope: str,
         review_image_quality: str,
         context_direction: str,
         context_radius: int,
@@ -951,12 +973,12 @@ class TaskStore:
             """INSERT INTO tasks
                (task_id, name, source_dir, source_kind, source_label, output_dir, workspace_dir, status,
                 is_demo, file_count, total_pages, created_at, updated_at, search_terms_json, search_mode,
-                review_image_quality, context_direction, context_radius)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                search_script_scope, review_image_quality, context_direction, context_radius)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 task_id, name, source_dir, source_kind, source_label or source_dir, output_dir, workspace_dir, status,
                 1 if is_demo else 0, file_count, total_pages, created_at, created_at,
-                json.dumps(search_terms, ensure_ascii=False, separators=(",", ":")), search_mode,
+                json.dumps(search_terms, ensure_ascii=False, separators=(",", ":")), search_mode, search_script_scope,
                 review_image_quality, context_direction, context_radius,
             ),
         )
@@ -1079,6 +1101,9 @@ class TaskStore:
             search_terms = list(LEGACY_SEARCH_TERMS)
         task["search_terms"] = search_terms
         task["search_mode"] = task.get("search_mode") or LEGACY_SEARCH_MODE
+        task["search_script_scope"] = self._validate_search_script_scope(
+            str(task.get("search_script_scope") or DEFAULT_SEARCH_SCRIPT_SCOPE)
+        )
         task["search_text"] = search_terms[0] if len(search_terms) == 1 else " / ".join(search_terms)
         task["source_kind"] = task.get("source_kind") or "folder"
         task["source_label"] = task.get("source_label") or task.get("source_dir") or ""
@@ -1102,8 +1127,8 @@ class TaskStore:
     def update_task(self, task_id: str, **fields: Any) -> None:
         if not fields:
             return
-        if {"search_terms_json", "search_mode", "search_terms", "search_text"} & set(fields):
-            raise ValueError("task search terms are immutable")
+        if {"search_terms_json", "search_mode", "search_terms", "search_text", "search_script_scope"} & set(fields):
+            raise ValueError("task search contract is immutable")
         fields.setdefault("updated_at", now_iso())
         cols = ", ".join(f"{k}=?" for k in fields)
         vals = list(fields.values()) + [task_id]
@@ -2754,22 +2779,22 @@ class TaskStore:
             return changed
 
     def add_occurrences(self, task_id: str, items: Iterable[dict[str, Any]]) -> int:
-        count = 0
         with self._lock:
             try:
+                before = self._count_occurrences(task_id)
                 with self.conn:  # 显式事务
                     for occ in items:
                         self.add_occurrence(task_id, occ)
-                        count += 1
+                after = self._count_occurrences(task_id)
                 self.conn.execute(
                     "UPDATE tasks SET occurrence_count=?, updated_at=? WHERE task_id=?",
-                    (self._count_occurrences(task_id), now_iso(), task_id),
+                    (after, now_iso(), task_id),
                 )
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()
                 raise
-        return count
+        return after - before
 
     def _count_occurrences(self, task_id: str) -> int:
         # 调用方持锁；不再单独 with（RLock 可重入也行，但避免重复）

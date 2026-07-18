@@ -6,6 +6,7 @@ from collections import Counter
 from typing import Any
 
 from .db.store import (
+    OCR_INDEX_BUILDING,
     OCR_INDEX_PARTIAL,
     OCR_INDEX_READY,
     TaskStore,
@@ -152,6 +153,7 @@ class OCRSearchService:
             self._add_best_hit(
                 best_hits,
                 {
+                    "line": line,
                     "ocr_line_id": line["ocr_line_id"],
                     "match_layer": layer,
                     "layer_priority": LAYER_PRIORITY[layer],
@@ -206,6 +208,7 @@ class OCRSearchService:
             self._add_best_hit(
                 best_hits,
                 {
+                    "line": line,
                     "ocr_line_id": line["ocr_line_id"],
                     "match_layer": MATCH_LAYER_OCR_TOP_K,
                     "layer_priority": LAYER_PRIORITY[MATCH_LAYER_OCR_TOP_K],
@@ -232,21 +235,25 @@ class OCRSearchService:
                 },
             )
 
-    def search(
+    def collect_hits(
         self,
         *,
         task_id: str,
         query_text: str,
         script_scope: str = SCRIPT_SCOPE_BOTH,
+        allow_building: bool = False,
     ) -> dict[str, Any]:
         if script_scope not in SCRIPT_SCOPES:
             raise ValueError("script_scope must be simplified, traditional, or both")
         normalized_query = normalize_search_text(query_text)
         corpus_status = self.store.get_ocr_corpus_status(task_id)
-        if corpus_status["status"] not in {
+        searchable_statuses = {
             OCR_INDEX_READY,
             OCR_INDEX_PARTIAL,
-        }:
+        }
+        if allow_building:
+            searchable_statuses.add(OCR_INDEX_BUILDING)
+        if corpus_status["status"] not in searchable_statuses:
             raise OCRSearchUnavailable(
                 str(corpus_status["status"]),
                 requires_reocr=bool(corpus_status["requires_reocr"]),
@@ -371,14 +378,35 @@ class OCRSearchService:
             "corpus_status": corpus_status["status"],
             "corpus_incomplete": corpus_status["status"] == OCR_INDEX_PARTIAL,
         }
-        return self.store.save_ocr_search_results(
+        return {
+            "query_text": query_text,
+            "normalized_query": normalized_query,
+            "script_scope": script_scope,
+            "query_forms": query_graph,
+            "hits": hits,
+            "counts": counts,
+        }
+
+    def search(
+        self,
+        *,
+        task_id: str,
+        query_text: str,
+        script_scope: str = SCRIPT_SCOPE_BOTH,
+    ) -> dict[str, Any]:
+        collected = self.collect_hits(
             task_id=task_id,
             query_text=query_text,
-            normalized_query=normalized_query,
             script_scope=script_scope,
-            query_forms=query_graph,
-            hits=hits,
-            counts=counts,
+        )
+        return self.store.save_ocr_search_results(
+            task_id=task_id,
+            query_text=str(collected["query_text"]),
+            normalized_query=str(collected["normalized_query"]),
+            script_scope=script_scope,
+            query_forms=dict(collected["query_forms"]),
+            hits=list(collected["hits"]),
+            counts=dict(collected["counts"]),
         )
 
 

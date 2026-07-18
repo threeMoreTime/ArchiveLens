@@ -221,28 +221,14 @@
       "id": "legacy-pair-simplified",
       "file": "legacy-pair.pdf",
       "search_text": "约",
-      "expected_count": 1,
+      "expected_count": 2,
       "expected_matches": [
         {
-          "matched_text": "约",
+          "matched_text": "約",
           "page_number": 1,
           "match_start": 0,
           "match_end": 1
-        }
-      ],
-      "source_lines": [
-        [
-          "约 約"
-        ]
-      ],
-      "sha256": "aa561dd2c8253e33b5ee9e070f4f8372b81fe19b6bfbd3a028a0a595c5ccc2a2"
-    },
-    {
-      "id": "legacy-pair-traditional",
-      "file": "legacy-pair.pdf",
-      "search_text": "約",
-      "expected_count": 1,
-      "expected_matches": [
+        },
         {
           "matched_text": "約",
           "page_number": 1,
@@ -254,6 +240,38 @@
         [
           "约 約"
         ]
+      ],
+      "expected_ocr_raw_lines": [
+        "約約"
+      ],
+      "sha256": "aa561dd2c8253e33b5ee9e070f4f8372b81fe19b6bfbd3a028a0a595c5ccc2a2"
+    },
+    {
+      "id": "legacy-pair-traditional",
+      "file": "legacy-pair.pdf",
+      "search_text": "約",
+      "expected_count": 2,
+      "expected_matches": [
+        {
+          "matched_text": "約",
+          "page_number": 1,
+          "match_start": 0,
+          "match_end": 1
+        },
+        {
+          "matched_text": "約",
+          "page_number": 1,
+          "match_start": 1,
+          "match_end": 2
+        }
+      ],
+      "source_lines": [
+        [
+          "约 約"
+        ]
+      ],
+      "expected_ocr_raw_lines": [
+        "約約"
       ],
       "sha256": "aa561dd2c8253e33b5ee9e070f4f8372b81fe19b6bfbd3a028a0a595c5ccc2a2"
     }
