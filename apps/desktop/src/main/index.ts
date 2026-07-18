@@ -54,7 +54,7 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(async () => {
+  void app.whenReady().then(async () => {
     registerAssetProtocol();
     registerIpc(lifecycle);
 
@@ -75,6 +75,9 @@ if (!gotLock) {
 
     // 重启恢复：查询未完成/可恢复任务并通知 Renderer（不自动恢复、不自动删除）
     void reportRecoverableTasks();
+  }).catch((error: unknown) => {
+    logger.error(`应用启动失败：${error instanceof Error ? error.message : String(error)}`);
+    app.quit();
   });
 
   app.on("window-all-closed", () => {

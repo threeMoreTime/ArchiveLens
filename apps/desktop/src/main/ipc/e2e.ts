@@ -74,15 +74,15 @@ export function registerE2eHandlers(sidecar: SidecarManager, lifecycle: Lifecycl
     const { action } = z.object({ action: closeActionSchema }).parse(payload);
     return lifecycle.selectCloseAction(action);
   });
-  ipcMain.handle("test.lifecycle.getState", async () => lifecycle.getState());
+  ipcMain.handle("test.lifecycle.getState", () => lifecycle.getState());
 
-  ipcMain.handle("test.tray.getState", async () => getTrayState());
-  ipcMain.handle("test.tray.restoreWindow", async () => ({ restored: restoreTrayWindow() }));
+  ipcMain.handle("test.tray.getState", () => getTrayState());
+  ipcMain.handle("test.tray.restoreWindow", () => ({ restored: restoreTrayWindow() }));
 
-  ipcMain.handle("test.window.getState", async () => getMainWindowState());
+  ipcMain.handle("test.window.getState", () => getMainWindowState());
 
-  ipcMain.handle("test.engine.getPid", async () => ({ pid: sidecar.pid }));
-  ipcMain.handle("test.sidecar.simulateCrash", async () => ({ ok: sidecar.simulateCrash() }));
+  ipcMain.handle("test.engine.getPid", () => ({ pid: sidecar.pid }));
+  ipcMain.handle("test.sidecar.simulateCrash", () => ({ ok: sidecar.simulateCrash() }));
 
   ipcMain.handle("test.task.getState", async (_event, payload) => {
     const { task_id } = taskIdSchema.parse(payload);

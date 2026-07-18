@@ -7,12 +7,7 @@ import { formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from
 
 type ExportFormat = "json" | "html";
 
-const TERMINAL_JOB: ReadonlySet<ExportJobStatus> = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const ACTIVE_JOB: ReadonlySet<ExportJobStatus> = new Set(["queued", "preparing", "rendering_images", "building", "writing", "cancelling"]);
-
-function isTerminal(status: ExportJobStatus): boolean {
-  return TERMINAL_JOB.has(status);
-}
 
 function stageLabel(job: ExportJob): string {
   switch (job.current_stage || job.status) {

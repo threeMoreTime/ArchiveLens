@@ -6,6 +6,17 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.spec.ts"],
     globals: false,
+    coverage: {
+      provider: "v8",
+      all: true,
+      reportsDirectory: "../../coverage/desktop",
+      reporter: ["text-summary", "json-summary", "json"],
+      include: [
+        "src/main/**/*.ts",
+        "src/preload/**/*.ts",
+        "src/renderer/src/**/*.{ts,tsx}",
+      ],
+    },
   },
   resolve: {
     alias: {

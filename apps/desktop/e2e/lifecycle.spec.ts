@@ -256,11 +256,6 @@ async function waitForProcessedAtLeast(win: Page, taskId: string, pageNo: number
   return getProcessedPageIds(win, taskId);
 }
 
-async function waitForTaskStatus(win: Page, taskId: string, status: string): Promise<TaskState> {
-  await expect.poll(async () => (await getTaskState(win, taskId)).status).toBe(status);
-  return getTaskState(win, taskId);
-}
-
 async function waitForTaskCompletion(win: Page, taskId: string): Promise<TaskState> {
   await expect.poll(async () => (await getTaskState(win, taskId)).status).toBe("completed");
   await expect.poll(() => getProcessedPageIds(win, taskId)).toEqual(Array.from({ length: TOTAL_PAGES }, (_value, index) => index + 1));

@@ -41,10 +41,19 @@ jobs:
       - name: Compile engine sources
         run: python -m compileall -q engine/src
 
-      - name: Run engine unittest suite
-        env:
-          PYTHONPATH: engine/src;.
-        run: python -m unittest discover -s engine/tests -t engine -v
+      - name: Run engine tests with coverage budgets
+        run: python scripts/run-python-coverage.py
+
+      - name: Upload engine coverage summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-coverage
+          path: |
+            coverage/python/coverage.json
+            coverage/python/budget-summary.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Run source license compliance gate
         run: python scripts/verify-license-compliance.py --mode source
@@ -74,11 +83,29 @@ jobs:
       - name: Desktop typecheck
         run: pnpm --filter @archivelens/desktop typecheck
 
-      - name: Desktop vitest
-        run: pnpm --filter @archivelens/desktop test
+      - name: Workspace ESLint
+        run: pnpm lint
+
+      - name: Desktop Vitest with coverage budgets
+        run: pnpm test:coverage
 
       - name: Desktop build
         run: pnpm --filter @archivelens/desktop build
+
+      - name: Enforce bundle budgets
+        run: pnpm check:bundle
+
+      - name: Upload quality summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-quality
+          path: |
+            coverage/desktop/coverage-summary.json
+            coverage/desktop/budget-summary.json
+            coverage/bundle-budget.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload desktop build output
         if: success()

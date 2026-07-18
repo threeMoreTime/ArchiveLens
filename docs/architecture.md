@@ -136,3 +136,16 @@ Task 状态机 12 态（`draft/queued/starting/running/pausing/paused/stopping/c
 * 每个日志主文件上限为 5 MiB，达到上限后保留一个 `.1` 备份，避免长期运行导致磁盘无界增长；
 * stdout **只**承载 JSONL 协议流，不混入日志；
 * 全部 UTF-8；不记录文档 OCR 全文 / 密钥。
+
+## 工程质量门禁
+
+* `pnpm lint` 使用 ESLint 9 flat config，覆盖 TypeScript、React、Hooks、Promise、未使用变量、
+  空异常处理和 Renderer 的 Node/Electron 导入边界；warning 预算为 0，并继续执行双端类型检查；
+* `pnpm test:coverage` 用 Vitest/V8 运行桌面测试，并对总量及 Main、IPC、生命周期、路径安全、
+  设置和 Sidecar 等风险文件执行回退门槛；当前低全局覆盖率被如实保留，不能解释为充分覆盖；
+* `python scripts/run-python-coverage.py` 用 Coverage.py 分支覆盖运行完整 Engine 测试，对总量及
+  Store/迁移、Server 删除与导出、预检和 HTML 导出设置定向回退门槛；
+* `pnpm check:bundle` 在源码构建后计算 Renderer JS/CSS、Main 和 Preload 的原始字节与 gzip-9
+  字节；warning 与 failure 阈值统一记录在 `scripts/quality-budgets.json`；
+* GitHub Actions 与零成本本地候选门禁均调用这些同源脚本，生成摘要只写入 gitignored
+  `coverage/` 或 CI artifact，不进入正式应用包。

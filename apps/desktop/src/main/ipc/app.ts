@@ -79,7 +79,7 @@ export function registerAppHandlers(sidecar: SidecarManager): void {
       : undefined;
     if (e2eFiles) {
       try {
-        const values = JSON.parse(e2eFiles);
+        const values: unknown = JSON.parse(e2eFiles);
         if (Array.isArray(values) && values.every((value) => typeof value === "string")) {
           return multiple ? values : values.slice(0, 1);
         }

@@ -37,7 +37,8 @@ pnpm gate:release-local -- -OfflineNative
    测试进程在缺少 `electron/dist` 时同时触发首次安装；
 3. 源码许可证技术门禁；
 4. 先按锁文件准备并校验统一 OCR 模型，将其路径注入当前门禁进程，再运行 Python
-   全量测试、TypeScript 类型检查、Lint、工作区单元测试和源码构建；
+   全量测试及覆盖率预算、TypeScript 类型检查、真实 ESLint、Desktop Vitest 覆盖率预算、
+   源码构建和 Renderer/Main/Preload 体积预算；
 5. 复用已校验模型缓存，准备完整原生组件并重建 PyInstaller Engine；
 6. 从同一 SHA 构建 win-unpacked、Setup 和 Portable；
 7. 运行完整 Playwright E2E；
@@ -71,6 +72,9 @@ pnpm gate:release-local -- -OfflineNative
 - `portable-smoke-evidence.json`：便携版实际包内资源、启动和清理证据；
 - `verify-release-chain.json`：最终同 SHA 制品链校验结果；
 - `logs/`：每个实际执行步骤的独立日志。
+
+覆盖率与体积的机器可读摘要位于 gitignored 的 `coverage/`。预算源为
+`scripts/quality-budgets.json`；CI 与本地候选门禁调用同一检查脚本，避免两套阈值漂移。
 
 生成制品继续位于 `apps/desktop/release/`，并由 `.gitignore` 排除。证据和制品都
 不得作为用户真实文档提交到 Git。

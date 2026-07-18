@@ -55,7 +55,8 @@ pnpm --filter @archivelens/desktop dist
 
 - `pnpm gate:release-local` 是 Windows 10/11 x64 的零成本、本地、非发布候选门禁；
 - 门禁只接受 clean worktree，并冻结完整候选 SHA，重新安装锁定依赖、运行源码与
-  E2E 回归、重建 Engine / Setup / Portable、执行安装/便携版 smoke 和同 SHA 校验；
+  E2E 回归、真实 ESLint、TypeScript/Python 覆盖率预算、构建体积预算，重建
+  Engine / Setup / Portable、执行安装/便携版 smoke 和同 SHA 校验；
 - 已具备校验缓存时可运行 `pnpm gate:release-local -- -OfflineNative`，原生组件
   准备阶段完全离线且仍逐项验证 SHA-256；
 - `verify-license-compliance.py` 的源码与打包技术门禁必须通过；
@@ -80,7 +81,7 @@ SHA256SUMS.txt
 
 ## 发布前检查清单（任务 §三十四）
 
-- [ ] Python tests / Desktop tests / IPC contract
+- [ ] Python tests + coverage / Desktop tests + coverage / ESLint / bundle budget / IPC contract
 - [ ] Electron E2E / packaged smoke / installer + portable smoke
 - [ ] 包内无用户数据 / 开发机绝对路径 / `.venv` / `node_modules` / Git 历史
 - [ ] 许可证技术门禁 / 人工许可证审核 / 校验和（SHA-256）

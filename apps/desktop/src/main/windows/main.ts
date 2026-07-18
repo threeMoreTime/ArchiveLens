@@ -44,7 +44,9 @@ export async function createMainWindow(): Promise<BrowserWindow> {
   win.webContents.setWindowOpenHandler(({ url }) => {
     try {
       if (new URL(url).protocol === "https:") {
-        shell.openExternal(url);
+        void shell.openExternal(url).catch((error: unknown) => {
+          logger.warn(`打开外部链接失败：${error instanceof Error ? error.message : String(error)}`);
+        });
       }
     } catch {
       // 非法 URL 直接拒绝。
@@ -60,7 +62,9 @@ export async function createMainWindow(): Promise<BrowserWindow> {
     event.preventDefault();
     try {
       if (new URL(url).protocol === "https:") {
-        shell.openExternal(url);
+        void shell.openExternal(url).catch((error: unknown) => {
+          logger.warn(`打开外部链接失败：${error instanceof Error ? error.message : String(error)}`);
+        });
       }
     } catch {
       // 忽略

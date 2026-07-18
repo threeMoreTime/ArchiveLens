@@ -64,7 +64,9 @@ class ReleaseGateTests(unittest.TestCase):
             "frozen dependency install",
             "serial Electron runtime preparation",
             "locked OCR model preparation",
-            "python engine test suite",
+            "python engine tests and coverage budgets",
+            "desktop tests and coverage budgets",
+            "desktop bundle budgets",
             "complete Playwright E2E suite",
             "Setup and Portable build",
             "Setup install launch uninstall smoke",
@@ -89,15 +91,19 @@ class ReleaseGateTests(unittest.TestCase):
         )
         self.assertLess(
             text.index("serial Electron runtime preparation"),
-            text.index("workspace unit tests"),
+            text.index("desktop tests and coverage budgets"),
         )
         self.assertLess(
             text.index("locked OCR model preparation"),
-            text.index("python engine test suite"),
+            text.index("python engine tests and coverage budgets"),
         )
         self.assertLess(
-            text.index("python engine test suite"),
+            text.index("python engine tests and coverage budgets"),
             text.index("locked native runtime preparation"),
+        )
+        self.assertLess(
+            text.index("desktop source build"),
+            text.index("desktop bundle budgets"),
         )
 
         self.assertNotIn("--allow-partial", text)

@@ -39,8 +39,8 @@
 # Python Engine（开发期直接用解释器，无需打包）
 python -m pip install -r engine/requirements-lock.txt
 
-# 运行 Engine 测试
-PYTHONPATH="engine/src;engine" python -m unittest discover -s engine/tests -t engine
+# 运行 Engine 测试并执行覆盖率回退门禁
+python scripts/run-python-coverage.py
 
 # 桌面端
 pnpm install
@@ -68,13 +68,22 @@ Renderer (React)  ──window.archiveLens──▶  Preload (contextBridge)
 ## 测试
 
 ```bash
-# Engine（Python）
-PYTHONPATH="engine/src;engine" python -m unittest discover -s engine/tests -t engine
+# Engine（Python，全量测试 + 覆盖率预算）
+python scripts/run-python-coverage.py
 
-# Desktop（TS）
-pnpm --filter @archivelens/desktop exec tsc -p tsconfig.node.json --noEmit
-pnpm --filter @archivelens/desktop exec tsc -p tsconfig.web.json --noEmit
+# Desktop / IPC（真实 ESLint + 类型检查）
+pnpm lint
+
+# Desktop Vitest（全量测试 + 覆盖率预算）
+pnpm test:coverage
+
+# 构建后检查 Renderer/Main/Preload 原始与 gzip 体积预算
+pnpm build
+pnpm check:bundle
 ```
+
+门槛基于当前真实基线，集中记录在 `scripts/quality-budgets.json`。覆盖率和体积摘要写入
+gitignored 的 `coverage/`；门禁用于发现回退，不代表全仓测试已经充分。
 
 ## 打包
 

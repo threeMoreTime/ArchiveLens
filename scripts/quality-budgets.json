@@ -1,0 +1,33 @@
+{
+  "desktopCoverage": {
+    "total": {
+      "lines": 19.5,
+      "statements": 19.5,
+      "functions": 37,
+      "branches": 71
+    },
+    "files": {
+      "apps/desktop/src/main/localData.ts": { "lines": 85, "branches": 80 },
+      "apps/desktop/src/main/ipc/engine.ts": { "lines": 60, "branches": 80 },
+      "apps/desktop/src/main/lifecycle/controller.ts": { "lines": 75, "branches": 55 },
+      "apps/desktop/src/main/security/paths.ts": { "lines": 85, "branches": 95 },
+      "apps/desktop/src/main/settings/store.ts": { "lines": 93, "branches": 83 },
+      "apps/desktop/src/main/sidecar/manager.ts": { "lines": 50, "branches": 58 }
+    }
+  },
+  "pythonCoverage": {
+    "total": { "lines": 80, "branches": 70 },
+    "files": {
+      "engine/src/archivelens_engine/db/store.py": { "lines": 87, "branches": 75 },
+      "engine/src/archivelens_engine/server.py": { "lines": 74, "branches": 66 },
+      "engine/src/archivelens_engine/source_preflight.py": { "lines": 77, "branches": 70 },
+      "engine/src/archivelens_engine/html_export.py": { "lines": 91, "branches": 81 }
+    }
+  },
+  "bundles": {
+    "rendererJs": { "warningRaw": 1300000, "failureRaw": 1330000, "warningGzip": 270000, "failureGzip": 280000 },
+    "rendererCss": { "warningRaw": 52000, "failureRaw": 55000, "warningGzip": 9800, "failureGzip": 10500 },
+    "mainJs": { "warningRaw": 100000, "failureRaw": 110000, "warningGzip": 22000, "failureGzip": 25000 },
+    "preloadJs": { "warningRaw": 8000, "failureRaw": 10000, "warningGzip": 3000, "failureGzip": 4000 }
+  }
+}

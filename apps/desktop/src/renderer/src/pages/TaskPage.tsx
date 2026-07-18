@@ -51,7 +51,7 @@ export default function TaskPage() {
     setTask(null);
     setLoadError(null);
     void load();
-    const off = window.archiveLens.subscribe.onEvent((event: { task_id?: string }) => {
+    const off = window.archiveLens.subscribe.onEvent((event: { task_id?: string | null }) => {
       if (event?.task_id === taskId) void load();
     });
     const timer = setInterval(() => void load(), 2500);

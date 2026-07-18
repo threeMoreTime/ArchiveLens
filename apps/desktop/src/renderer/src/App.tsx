@@ -26,6 +26,11 @@ function taskIdFromPath(pathname: string): string | null {
   }
 }
 
+function isRecoverableTask(task: unknown): task is { task_id: string } {
+  if (typeof task !== "object" || task === null || !("task_id" in task)) return false;
+  return typeof task.task_id === "string";
+}
+
 export default function App() {
   const nav = useNavigate();
   const location = useLocation();
@@ -61,9 +66,7 @@ export default function App() {
     return () => { active = false; if (refreshTimer !== null) window.clearTimeout(refreshTimer); off(); };
   }, []);
 
-  const firstRecoverableTask = recoverable.find(
-    (task) => typeof task === "object" && task !== null && "task_id" in task && typeof (task as any).task_id === "string",
-  ) as { task_id: string } | undefined;
+  const firstRecoverableTask = recoverable.find(isRecoverableTask);
   const firstRecoverableTaskId = firstRecoverableTask?.task_id ?? null;
   const routeTaskId = useMemo(() => taskIdFromPath(location.pathname), [location.pathname]);
 

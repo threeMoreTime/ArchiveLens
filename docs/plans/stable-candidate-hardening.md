@@ -335,9 +335,20 @@ B1 删除清理作业；B2 Export Job；B3 来源预检；B4 本地数据/隐私
 - B4 验证：`pnpm typecheck`、25 个 Vitest 文件/154 项、完整 Python 357 项通过/1 项环境跳过；随后新增的清理失败态回归连同 B4 清理定向共 3 项通过；生产构建和隔离 Electron `E2E-03` 均通过。E2E 仅触发并取消二次确认，未执行真实用户数据清理。
 
 ### B5（真实 ESLint/覆盖率/bundle/CI）
-- 引入真实静态规则门禁（ESLint flat config 或 Biome），首批零告警基线。
-- 覆盖率预算与 bundle 预算（对照 §1.6 JS raw 1,239,376 B / gzip 258,064 B）。
-- CI 增对应 job；**HR-06 已授权，不再列为未授权**。
+- 已引入 ESLint 9 flat config；覆盖 TypeScript、React、Hooks、Promise、未使用变量、空 catch、
+  `any` 与 Renderer 禁止 Node/Electron 导入，warning 预算为 0；`pnpm lint` 同时继续执行类型检查。
+- 严格 Preload 类型替换 Renderer 全局 `any` 后，修复了未经验证的 JSON、IPC `any` 参数、未处理
+  启动/外链 Promise、Hooks cleanup ref 和无效类型断言；未用大范围 disable 或格式化制造通过。
+- Vitest/V8 基线：25 文件 / 154 项通过；全量 lines/statements 19.99%、functions 37.56%、
+  branches 71.81%。低全局 lines 覆盖率被如实保留；对 localData、IPC handler、生命周期、路径安全、
+  设置和 Sidecar 另设定向回退门槛。
+- Coverage.py 基线：358 项通过、1 项因本机无 `pwsh` 跳过；总 lines 80.68%、branches 70.55%；
+  Store/迁移、Server 删除与导出、Preflight、HTML 导出均有更高定向门槛。
+- 当前构建体积：Renderer JS 1,288,461 B raw / 265,348 B gzip-9，CSS 50,883 / 9,203 B，
+  Main 92,268 / 21,492 B，Preload 6,141 / 1,195 B；warning/failure 双阈值集中在
+  `scripts/quality-budgets.json`。
+- GitHub Actions 与 `run-zero-cost-release-gate.ps1` 已接入真实 lint、覆盖率摘要和 bundle 门禁；
+  CI 配置只完成本地审查，未 push，故不宣称远程 CI 通过。**HR-06 已授权，不再列为未授权**。
 
 ### B6（备份）
 - `sqlite3` Online Backup API；备份后 `integrity_check` 通过并记 SHA-256。

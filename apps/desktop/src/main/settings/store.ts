@@ -93,7 +93,7 @@ export class SettingsStore {
   private async load(): Promise<AppSettingsFile> {
     if (this.settings) return this.settings;
     try {
-      const raw = JSON.parse(await readFile(this.filePath, "utf-8"));
+      const raw: unknown = JSON.parse(await readFile(this.filePath, "utf-8"));
       const parsed = AppSettingsFileSchema.safeParse(raw);
       if (!parsed.success) {
         this.onWarning(`设置文件格式无效，已使用默认设置：${parsed.error.message}`);

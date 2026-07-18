@@ -338,16 +338,14 @@ try {
   if (-not (Test-Path -LiteralPath $env:AL_OCR_REC_MODEL -PathType Leaf)) {
     throw "Locked OCR model preparation did not produce the required model: $env:AL_OCR_REC_MODEL"
   }
-  Invoke-GateStep "python engine test suite" $pythonExe @(
-    "-m", "unittest", "discover",
-    "-s", "engine/tests",
-    "-t", "engine",
-    "-v"
+  Invoke-GateStep "python engine tests and coverage budgets" $pythonExe @(
+    "scripts/run-python-coverage.py"
   )
   Invoke-GateStep "workspace typecheck" $pnpmExe @("typecheck")
   Invoke-GateStep "workspace lint" $pnpmExe @("lint")
-  Invoke-GateStep "workspace unit tests" $pnpmExe @("test")
+  Invoke-GateStep "desktop tests and coverage budgets" $pnpmExe @("test:coverage")
   Invoke-GateStep "desktop source build" $pnpmExe @("build")
+  Invoke-GateStep "desktop bundle budgets" $pnpmExe @("check:bundle")
 
   $nativeArguments = @(
     "-NoProfile",

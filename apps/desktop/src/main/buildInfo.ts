@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { BuildMetadata } from "@shared/index";
+import { BuildMetadataSchema, type BuildMetadata } from "@shared/index";
 
 export function loadDesktopBuildInfo(): BuildMetadata | null {
   const explicit = process.env["ARCHIVELENS_APP_INFO_PATH"];
@@ -13,10 +13,8 @@ export function loadDesktopBuildInfo(): BuildMetadata | null {
   ].filter((value): value is string => Boolean(value));
   for (const candidatePath of candidatePaths) {
     try {
-      const payload = JSON.parse(readFileSync(candidatePath, "utf-8"));
-      if (payload && typeof payload === "object") {
-        return payload as BuildMetadata;
-      }
+      const payload: unknown = JSON.parse(readFileSync(candidatePath, "utf-8"));
+      return BuildMetadataSchema.parse(payload);
     } catch {
       continue;
     }

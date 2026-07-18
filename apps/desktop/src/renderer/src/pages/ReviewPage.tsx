@@ -437,6 +437,7 @@ export default function ReviewPage() {
   }, [persistNote]);
 
   useEffect(() => {
+    const savedNotes = savedNotesRef.current;
     const occurrenceId = selected?.occurrence_id ?? null;
     selectedRef.current = occurrenceId ? { taskId, id: occurrenceId } : null;
     if (!occurrenceId) {
@@ -447,15 +448,15 @@ export default function ReviewPage() {
     }
     const draftKey = noteDraftKey(taskId, occurrenceId);
     const persisted = selected?.review_note ?? "";
-    if (!savedNotesRef.current.has(draftKey)) savedNotesRef.current.set(draftKey, persisted);
+    if (!savedNotes.has(draftKey)) savedNotes.set(draftKey, persisted);
     const draft = noteDraftsRef.current.get(draftKey) ?? readStoredDraft(draftKey) ?? persisted;
     noteDraftsRef.current.set(draftKey, draft);
     noteSnapshotRef.current = { taskId, id: occurrenceId, value: draft };
     setNote(draft);
-    setSaveState(savedNotesRef.current.get(draftKey) === draft ? "idle" : "saving");
+    setSaveState(savedNotes.get(draftKey) === draft ? "idle" : "saving");
     return () => {
       const snapshot = noteSnapshotRef.current;
-      if (snapshot.taskId === taskId && snapshot.id === occurrenceId && savedNotesRef.current.get(draftKey) !== snapshot.value) {
+      if (snapshot.taskId === taskId && snapshot.id === occurrenceId && savedNotes.get(draftKey) !== snapshot.value) {
         void persistNote(taskId, occurrenceId, snapshot.value);
       }
     };
@@ -831,7 +832,7 @@ export default function ReviewPage() {
                 </div>
               </div>
               <div className="al-review-note-panel">
-                <Textarea ref={noteRef as any} value={note} onChange={(_, data) => updateNoteDraft(data.value)} placeholder="输入备注（停顿后自动保存）" aria-label="校对备注" className="al-note" />
+                <Textarea ref={noteRef} value={note} onChange={(_, data) => updateNoteDraft(data.value)} placeholder="输入备注（停顿后自动保存）" aria-label="校对备注" className="al-note" />
                 <div className="al-note-actions">
                   <span className="al-save-state" role="status">{saveState === "saving" ? "自动保存中…" : saveState === "saved" ? "已自动保存" : saveState === "error" ? "保存失败，草稿已保留" : note !== (selectedId ? savedNotesRef.current.get(noteDraftKey(taskId, selectedId)) ?? "" : "") ? "等待自动保存…" : ""}</span>
                   <Button onClick={() => void saveNote()}>立即保存 (Ctrl+Enter)</Button>

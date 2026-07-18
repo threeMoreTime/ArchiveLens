@@ -1,9 +1,8 @@
 export {};
 
-// Preload 注入；精确类型见 preload/api.ts。renderer 侧暂用宽类型以解耦构建边界。
+// Preload 注入；只允许使用受审计的 ArchiveLensApi，不把任意 ipcRenderer/Node 能力带入 Renderer。
 declare global {
   interface Window {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    archiveLens: any;
+    archiveLens: import("../../preload/api").ArchiveLensApi;
   }
 }

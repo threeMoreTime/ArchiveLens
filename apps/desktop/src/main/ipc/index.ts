@@ -1,5 +1,5 @@
 import { BrowserWindow } from "electron";
-import { SidecarManager } from "../sidecar/manager";
+import { SidecarManager, type SidecarExitInfo } from "../sidecar/manager";
 import { registerAppHandlers } from "./app";
 import { registerE2eHandlers } from "./e2e";
 import { registerEngineHandlers } from "./engine";
@@ -31,7 +31,7 @@ export function registerIpc(lifecycle?: LifecycleController): void {
       }
     }
   });
-  sidecar.on("exit", (info) => {
+  sidecar.on("exit", (info: SidecarExitInfo) => {
     if (!info.expected) {
       logger.error(`Sidecar 非预期退出，广播给 Renderer：code=${info.code} kind=${info.kind}`);
     }

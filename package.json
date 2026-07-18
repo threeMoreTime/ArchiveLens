@@ -16,11 +16,22 @@
     "test": "pnpm -r test",
     "test:contract": "pnpm --filter @archivelens/desktop run test:contract",
     "lint": "pnpm -r lint",
+    "test:coverage": "pnpm --filter @archivelens/desktop test:coverage",
+    "coverage:python": "python scripts/run-python-coverage.py",
+    "coverage": "pnpm test:coverage && pnpm coverage:python",
+    "check:bundle": "node scripts/check-bundle-budget.mjs",
     "check:licenses": "python scripts/verify-license-compliance.py --mode source",
     "gate:release-local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-zero-cost-release-gate.ps1",
     "prepare:native": "powershell -ExecutionPolicy Bypass -File scripts/prepare-native-runtime.ps1",
     "build:engine": "powershell -ExecutionPolicy Bypass -File scripts/build-engine.ps1",
     "build:installer": "pnpm run prepare:native && pnpm run build:engine && pnpm --filter @archivelens/desktop dist:prepared",
     "smoke:unpacked": "powershell -ExecutionPolicy Bypass -File scripts/smoke-unpacked.ps1"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "typescript-eslint": "8.64.0"
   }
 }
