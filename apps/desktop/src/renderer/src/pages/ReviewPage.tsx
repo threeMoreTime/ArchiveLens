@@ -8,8 +8,6 @@ import {
   ArrowRightRegular,
   ArrowUpRegular,
   FullScreenMaximizeRegular,
-  PanelRightContractRegular,
-  PanelRightExpandRegular,
   ZoomInRegular,
   ZoomOutRegular,
 } from "@fluentui/react-icons";
@@ -22,14 +20,13 @@ import {
   type ReviewPageOrientation,
   type ReviewPageOrientations,
 } from "@shared/index";
-import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
+import { InlineFeedback, LoadingState } from "../components/feedback";
 import { highlightBackground } from "../components/ReviewHighlightSettings";
 import { getReviewShortcutAction } from "../utils/reviewShortcuts";
 
 const DEFAULT_PAGE_SIZE = 100;
 const PAGE_SIZES = [50, 100, 200] as const;
 const NOTE_DRAFT_PREFIX = "archivelens.reviewDraft.";
-const REVIEW_SUMMARY_COLLAPSED_KEY = "archivelens.reviewSummaryCollapsed";
 const PAGE_ORIENTATION_DEGREES: Record<ReviewPageOrientation, number> = {
   up: 0,
   right: 90,
@@ -49,6 +46,7 @@ const PAGE_ORIENTATION_OPTIONS: Array<{
 
 interface Occurrence {
   occurrence_id: string;
+  global_sequence: number;
   document_id: string;
   file_path: string;
   file_name: string;
@@ -120,6 +118,10 @@ function decisionLabel(decision: string | null) {
   return decision ? labels[decision] ?? "未知结论" : "未校对";
 }
 
+function sequenceLabel(sequence: number) {
+  return `#${String(sequence).padStart(4, "0")}`;
+}
+
 function noteDraftKey(taskId: string, occurrenceId: string) {
   return `${NOTE_DRAFT_PREFIX}${taskId}:${occurrenceId}`;
 }
@@ -151,9 +153,6 @@ export default function ReviewPage() {
   const [readyTaskId, setReadyTaskId] = useState("");
   const [search, setSearch] = useState("");
   const [reviewSummary, setReviewSummary] = useState<ReviewSummary>(EMPTY_SUMMARY);
-  const [taskStatus, setTaskStatus] = useState("");
-  const [scanComplete, setScanComplete] = useState(false);
-  const [reviewComplete, setReviewComplete] = useState(false);
   const [loading, setLoading] = useState(false);
   const [queryError, setQueryError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -167,9 +166,6 @@ export default function ReviewPage() {
   const [pageImageError, setPageImageError] = useState("");
   const [pageOrientations, setPageOrientations] = useState<ReviewPageOrientations>({});
   const [orientationSaving, setOrientationSaving] = useState(false);
-  const [summaryCollapsed, setSummaryCollapsed] = useState(() => {
-    try { return localStorage.getItem(REVIEW_SUMMARY_COLLAPSED_KEY) === "true"; } catch { return false; }
-  });
   const [highlightStyle, setHighlightStyle] = useState<ReviewHighlightStyle>(DEFAULT_REVIEW_HIGHLIGHT_STYLE);
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const pageWrapRef = useRef<HTMLDivElement | null>(null);
@@ -221,10 +217,6 @@ export default function ReviewPage() {
   }, [resetPageViewportScroll, visualSize.height, visualSize.width]);
 
   useEffect(() => {
-    try { localStorage.setItem(REVIEW_SUMMARY_COLLAPSED_KEY, String(summaryCollapsed)); } catch { /* Preference remains active for this session. */ }
-  }, [summaryCollapsed]);
-
-  useEffect(() => {
     const viewport = pageWrapRef.current;
     if (!viewport) return;
     const updateSize = () => setViewportSize({ width: viewport.clientWidth, height: viewport.clientHeight });
@@ -232,7 +224,7 @@ export default function ReviewPage() {
     const observer = new ResizeObserver(updateSize);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [selectedId, summaryCollapsed]);
+  }, [selectedId]);
 
   const loadPage = useCallback(async (targetPage: number) => {
     const sequence = ++requestSequenceRef.current;
@@ -258,9 +250,6 @@ export default function ReviewPage() {
       setTotal(q.total);
       setLoadedPageIndex(targetPage);
       setReviewSummary(q.review_summary);
-      setTaskStatus(q.task_status);
-      setScanComplete(q.scan_complete);
-      setReviewComplete(q.review_complete);
       setSelectedId((previous) => {
         const requested = requestedSelectedId.current;
         requestedSelectedId.current = null;
@@ -291,9 +280,6 @@ export default function ReviewPage() {
     setLoadedPageIndex(0);
     setSelectedId(null);
     setReviewSummary(EMPTY_SUMMARY);
-    setTaskStatus("");
-    setScanComplete(false);
-    setReviewComplete(false);
     setReadyTaskId("");
     setLoading(true);
     setQueryError("");
@@ -676,43 +662,104 @@ export default function ReviewPage() {
       className="al-review"
       style={{ "--al-review-highlight": highlightBackground(highlightStyle) } as CSSProperties}
     >
-      <div className="al-review-title"><PageHeader title="校对工作台" description="逐条确认 OCR 命中结果，所有校对与备注均保存到本地任务。" /></div>
-      <div className="al-review-toolbar">
-        <select value={statusFilter} aria-label="校对状态筛选" onChange={(event) => void resetToFirstPage(() => setStatusFilter(event.target.value))}>
-          <option value="">全部校对状态</option>
-          <option value="unreviewed">未校对</option>
-          <option value="confirmed">已确认</option>
-          <option value="needs_review">待复核</option>
-          <option value="rejected">已拒绝</option>
-        </select>
-        {searchMode === "legacy_fixed_pair" && (
-          <select value={variantFilter} aria-label="历史字符筛选" onChange={(event) => void resetToFirstPage(() => setVariantFilter(event.target.value))}>
-            <option value="">全部</option>
-            <option value="simplified">约</option>
-            <option value="traditional">約</option>
-          </select>
-        )}
-        <Input aria-label="搜索结果上下文" placeholder="搜索上下文" value={search} onChange={(_, data) => void resetToFirstPage(() => setSearch(data.value))} />
-        <select value={pageSize} aria-label="每页结果数" onChange={(event) => void resetToFirstPage(() => setPageSize(Number(event.target.value)))}>
-          {PAGE_SIZES.map((size) => <option key={size} value={size}>每页 {size} 条</option>)}
-        </select>
-        <Text className="al-muted">{total === 0 ? "无结果" : `第 ${pageStart}–${pageEnd} 条，共 ${total} 条`}</Text>
-        <div className="al-spacer" />
-        <Button appearance="primary" onClick={() => void goToExport()}>前往导出中心</Button>
-      </div>
-
-      <div className="al-review-summary" role="status">
-        <span>{scanComplete ? "扫描已完成" : `扫描未完成（${taskStatus || "状态未知"}），当前结果仍可能增加`}</span>
-        <span>已校对 {reviewSummary.reviewed_count} · 未校对 {reviewSummary.unreviewed_count}</span>
-        <span>已确认 {reviewSummary.confirmed_count} · 待复核 {reviewSummary.needs_review_count} · 已拒绝 {reviewSummary.rejected_count}</span>
-        <strong>{reviewComplete ? "校对已完成" : "校对未完成"}</strong>
-      </div>
       {queryError && <InlineFeedback>{`查询失败：${queryError}`}</InlineFeedback>}
       {actionError && <InlineFeedback>{actionError}</InlineFeedback>}
 
       <div className="al-review-body">
-        <div className="al-result-list" role="listbox" aria-label="校对结果" aria-busy={loading}>
-          <div className="al-result-scroll">
+        <section className="al-review-image-pane" aria-label="原文件页面">
+          {!selected ? <div className="al-review-pane-empty al-muted">选择中间结果查看原文件页面</div> : (
+            <div className="al-viewer">
+              <div ref={pageWrapRef} className="al-page-wrap" onScroll={resetPageViewportScroll} onWheel={onPageWheel} onMouseDown={onPageDown} onMouseMove={onPageMove} onMouseUp={onPageUp} onMouseLeave={onPageUp}>
+                <div className="al-viewer-overlays" onMouseDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>
+                  <div className="al-viewer-toolbar" aria-label="页面缩放工具">
+                    <Button appearance="subtle" size="small" icon={<ZoomOutRegular />} aria-label="缩小页面" title="缩小页面" onClick={() => zoomBy(0.8)} />
+                    <span className="al-zoom-value" aria-live="polite">{zoomPercent}%</span>
+                    <Button appearance="subtle" size="small" icon={<ZoomInRegular />} aria-label="放大页面" title="放大页面" onClick={() => zoomBy(1.25)} />
+                    <Button appearance="subtle" size="small" onClick={() => { fitWhenReadyRef.current = false; setZoom(1); setOffset({ x: 0, y: 0 }); }}>100%</Button>
+                    <Button appearance="subtle" size="small" icon={<FullScreenMaximizeRegular />} onClick={fitPage}>适应窗口</Button>
+                    <Button appearance="subtle" size="small" icon={<ArrowResetRegular />} onClick={recenterPage}>重新居中</Button>
+                  </div>
+                  <div className="al-page-orientation-toolbar" role="group" aria-label="页面展示方向">
+                    {PAGE_ORIENTATION_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        appearance={pageOrientation === option.value ? "primary" : "subtle"}
+                        size="small"
+                        icon={option.icon}
+                        aria-label={option.label}
+                        title={option.label}
+                        aria-pressed={pageOrientation === option.value}
+                        disabled={orientationSaving}
+                        onClick={() => void changePageOrientation(option.value)}
+                      />
+                    ))}
+                  </div>
+                  {pageImageLoading && <div className="al-page-fidelity-status" role="status">正在加载原始清晰度…</div>}
+                  {pageImage?.overscale_warning && (pageImage.source_kind === "demo" || zoom > 1) && (
+                    <div className="al-page-fidelity-warning" role="status">{pageImage.overscale_warning}</div>
+                  )}
+                </div>
+                {pageImageError && <div className="al-page-fidelity-error" role="alert">{pageImageError}</div>}
+                {pageImage && (
+                  <div
+                    className="al-page-positioner"
+                    style={{
+                      width: `${visualSize.width}px`,
+                      height: `${visualSize.height}px`,
+                      transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px))`,
+                    }}
+                  >
+                    <div
+                      className="al-page-canvas"
+                      data-orientation={pageOrientation}
+                      style={{
+                        width: `${displayedSize.width}px`,
+                        height: `${displayedSize.height}px`,
+                        transform: `translate(-50%, -50%) rotate(${PAGE_ORIENTATION_DEGREES[pageOrientation]}deg)`,
+                      }}
+                    >
+                      <img
+                        src={assetUrl(taskId, pageImage.asset_relpath, pageImage.asset_version)}
+                        alt="出处页"
+                        draggable={false}
+                      />
+                      <div className="al-highlight" style={{ left: `${selected.normalized_x0 * 100}%`, top: `${selected.normalized_y0 * 100}%`, width: `${(selected.normalized_x1 - selected.normalized_x0) * 100}%`, height: `${(selected.normalized_y1 - selected.normalized_y0) * 100}%` }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <div className="al-result-list" aria-busy={loading}>
+          <div className="al-result-filters">
+            <Input className="al-review-search" aria-label="搜索结果上下文" placeholder="搜索上下文" value={search} onChange={(_, data) => void resetToFirstPage(() => setSearch(data.value))} />
+            <div className="al-review-filter-row">
+              <select value={statusFilter} aria-label="校对状态筛选" onChange={(event) => void resetToFirstPage(() => setStatusFilter(event.target.value))}>
+                <option value="">全部状态</option>
+                <option value="unreviewed">未校对</option>
+                <option value="confirmed">已确认</option>
+                <option value="needs_review">待复核</option>
+                <option value="rejected">已拒绝</option>
+              </select>
+              {searchMode === "legacy_fixed_pair" && (
+                <select value={variantFilter} aria-label="历史字符筛选" onChange={(event) => void resetToFirstPage(() => setVariantFilter(event.target.value))}>
+                  <option value="">全部字形</option>
+                  <option value="simplified">约</option>
+                  <option value="traditional">約</option>
+                </select>
+              )}
+              <select value={pageSize} aria-label="每页结果数" onChange={(event) => void resetToFirstPage(() => setPageSize(Number(event.target.value)))}>
+                {PAGE_SIZES.map((size) => <option key={size} value={size}>每页 {size}</option>)}
+              </select>
+            </div>
+            <div className="al-review-list-meta">
+              <Text className="al-muted">{total === 0 ? "无结果" : `${pageStart}–${pageEnd} / ${total}`}</Text>
+              <Button size="small" appearance="primary" onClick={() => void goToExport()}>导出中心</Button>
+            </div>
+          </div>
+          <div className="al-result-scroll" role="listbox" aria-label="校对结果">
             {loading && items.length === 0 && <div className="al-list-message"><LoadingState label="正在加载校对结果…" /></div>}
             {!loading && items.length === 0 && <div className="al-list-message"><Text weight="semibold">当前筛选没有结果</Text><Text className="al-muted">调整筛选条件，或返回任务查看扫描状态。</Text></div>}
             {items.map((item) => (
@@ -726,6 +773,7 @@ export default function ReviewPage() {
                 onClick={() => void selectOccurrence(item.occurrence_id)}
               >
                 <div className="al-result-item-content">
+                  <span className="al-sequence-badge">{sequenceLabel(item.global_sequence)}</span>
                   <div className="al-result-thumbnail">
                     {assetUrl(taskId, item.page_image_relpath) ? (
                       <div className="al-result-thumbnail-canvas">
@@ -755,70 +803,20 @@ export default function ReviewPage() {
         </div>
 
         <div className="al-detail">
-          {!selected ? <div className="al-muted">选择左侧结果查看证据</div> : (
+          {!selected ? <div className="al-review-pane-empty al-muted">选择中间结果进行校对</div> : (
             <>
-              <div className="al-viewer">
-                <div ref={pageWrapRef} className="al-page-wrap" onScroll={resetPageViewportScroll} onWheel={onPageWheel} onMouseDown={onPageDown} onMouseMove={onPageMove} onMouseUp={onPageUp} onMouseLeave={onPageUp}>
-                  <div className="al-viewer-overlays" onMouseDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>
-                    <div className="al-viewer-toolbar" aria-label="页面缩放工具">
-                      <Button appearance="subtle" size="small" icon={<ZoomOutRegular />} aria-label="缩小页面" title="缩小页面" onClick={() => zoomBy(0.8)} />
-                      <span className="al-zoom-value" aria-live="polite">{zoomPercent}%</span>
-                      <Button appearance="subtle" size="small" icon={<ZoomInRegular />} aria-label="放大页面" title="放大页面" onClick={() => zoomBy(1.25)} />
-                      <Button appearance="subtle" size="small" onClick={() => { fitWhenReadyRef.current = false; setZoom(1); setOffset({ x: 0, y: 0 }); }}>100%</Button>
-                      <Button appearance="subtle" size="small" icon={<FullScreenMaximizeRegular />} onClick={fitPage}>适应窗口</Button>
-                      <Button appearance="subtle" size="small" icon={<ArrowResetRegular />} onClick={recenterPage}>重新居中</Button>
-                    </div>
-                    <div className="al-page-orientation-toolbar" role="group" aria-label="页面展示方向">
-                      {PAGE_ORIENTATION_OPTIONS.map((option) => (
-                        <Button
-                          key={option.value}
-                          appearance={pageOrientation === option.value ? "primary" : "subtle"}
-                          size="small"
-                          icon={option.icon}
-                          aria-label={option.label}
-                          title={option.label}
-                          aria-pressed={pageOrientation === option.value}
-                          disabled={orientationSaving}
-                          onClick={() => void changePageOrientation(option.value)}
-                        />
-                      ))}
-                    </div>
-                    {pageImageLoading && <div className="al-page-fidelity-status" role="status">正在加载原始清晰度…</div>}
-                    {pageImage?.overscale_warning && (pageImage.source_kind === "demo" || zoom > 1) && (
-                      <div className="al-page-fidelity-warning" role="status">{pageImage.overscale_warning}</div>
-                    )}
-                  </div>
-                  {pageImageError && <div className="al-page-fidelity-error" role="alert">{pageImageError}</div>}
-                  {pageImage && (
-                    <div
-                      className="al-page-positioner"
-                      style={{
-                        width: `${visualSize.width}px`,
-                        height: `${visualSize.height}px`,
-                        transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px))`,
-                      }}
-                    >
-                      <div
-                        className="al-page-canvas"
-                        data-orientation={pageOrientation}
-                        style={{
-                          width: `${displayedSize.width}px`,
-                          height: `${displayedSize.height}px`,
-                          transform: `translate(-50%, -50%) rotate(${PAGE_ORIENTATION_DEGREES[pageOrientation]}deg)`,
-                        }}
-                      >
-                        <img
-                          src={assetUrl(taskId, pageImage.asset_relpath, pageImage.asset_version)}
-                          alt="出处页"
-                          draggable={false}
-                        />
-                        <div className="al-highlight" style={{ left: `${selected.normalized_x0 * 100}%`, top: `${selected.normalized_y0 * 100}%`, width: `${(selected.normalized_x1 - selected.normalized_x0) * 100}%`, height: `${(selected.normalized_y1 - selected.normalized_y0) * 100}%` }} />
-                      </div>
-                    </div>
-                  )}
+              <div className="al-detail-meta">
+                <div className="al-context-block">
+                  <span>完整 OCR 上下文</span>
+                  <p>{selected.context_full || "未提供上下文"}</p>
+                </div>
+                <div className="al-review-facts">
+                  <div><span>永久序号</span><strong>{sequenceLabel(selected.global_sequence)}</strong></div>
+                  <div><span>OCR 置信度</span><strong>{confidenceLabel(selected.ocr_confidence)}</strong></div>
+                  <div><span>系统判断</span><strong>{verificationLabel(selected.verification_status)}</strong></div>
+                  <div><span>人工结论</span><strong>{decisionLabel(selected.review_decision)}</strong></div>
                 </div>
               </div>
-              <div className="al-detail-meta"><div>上下文：{selected.context_full}</div><div className="al-muted">OCR 置信度：{confidenceLabel(selected.ocr_confidence)}</div><div>系统判断：<strong>{verificationLabel(selected.verification_status)}</strong></div><div>人工结论：<strong>{decisionLabel(selected.review_decision)}</strong></div></div>
               <div className="al-review-command-bar">
                 <div className="al-decision-actions" aria-label="校对判断">
                   <Button appearance={selected.review_decision === "confirmed" ? "primary" : "secondary"} aria-pressed={selected.review_decision === "confirmed"} onClick={() => void applyDecision("confirmed")}>确认命中 (A)</Button>
@@ -841,29 +839,12 @@ export default function ReviewPage() {
             </>
           )}
         </div>
-        <aside className={summaryCollapsed ? "al-review-aside collapsed" : "al-review-aside"} aria-label="校对摘要与快捷键">
-          <Button
-            className="al-review-aside-toggle"
-            appearance="subtle"
-            icon={summaryCollapsed ? <PanelRightExpandRegular /> : <PanelRightContractRegular />}
-            aria-label={summaryCollapsed ? "展开校对摘要" : "收起校对摘要"}
-            title={summaryCollapsed ? "展开校对摘要" : "收起校对摘要"}
-            onClick={() => setSummaryCollapsed((value) => !value)}
-          />
-          {summaryCollapsed ? (
-            <div className="al-review-aside-collapsed-summary" aria-label={`已校对 ${reviewSummary.reviewed_count}，共 ${total} 条`}>
-              <strong>{reviewSummary.unreviewed_count}</strong>
-              <span>待处理</span>
-              <div className="al-review-aside-progress"><span style={{ height: `${total ? reviewSummary.reviewed_count / total * 100 : 0}%` }} /></div>
-            </div>
-          ) : (
-            <div className="al-review-aside-content">
-              <section className="al-review-aside-card"><Text weight="semibold">校对摘要</Text><dl><div><dt>全部结果</dt><dd>{total}</dd></div><div><dt>已校对</dt><dd>{reviewSummary.reviewed_count}</dd></div><div><dt>未校对</dt><dd>{reviewSummary.unreviewed_count}</dd></div></dl><div className="al-review-mini-progress"><span style={{ width: `${total ? reviewSummary.reviewed_count / total * 100 : 0}%` }} /></div><Text className="al-muted">已确认 {reviewSummary.confirmed_count} · 待复核 {reviewSummary.needs_review_count} · 已拒绝 {reviewSummary.rejected_count}</Text></section>
-              <section className="al-review-aside-card"><Text weight="semibold">当前状态</Text><Text>{scanComplete ? "扫描已完成" : `扫描仍在进行（${taskStatus || "状态未知"}）`}</Text><Text>{reviewComplete ? "全部结果已校对" : "仍有结果等待人工处理"}</Text></section>
-              <section className="al-review-aside-card"><Text weight="semibold">快捷键</Text><div className="al-shortcut-list"><span><kbd>A</kbd> 确认命中</span><span><kbd>S</kbd> 需要复核</span><span><kbd>D</kbd> 拒绝命中</span><span><kbd>J</kbd>/<kbd>K</kbd> 下一条/上一条</span><span><kbd>N</kbd> 下一条未校对</span><span><kbd>F</kbd> 页面重新居中</span><span><kbd>Ctrl</kbd> + <kbd>Enter</kbd> 保存备注</span></div></section>
-              <section className="al-review-aside-card al-review-local-note"><Text weight="semibold">本地处理</Text><Text className="al-muted">校对决定与备注将保存到当前任务数据库。</Text></section>
-            </div>
-          )}
+        <aside className="al-review-aside" aria-label={`已校对 ${reviewSummary.reviewed_count}，共 ${total} 条`}>
+          <div className="al-review-aside-collapsed-summary" role="status">
+            <strong>{reviewSummary.unreviewed_count}</strong>
+            <span>待处理</span>
+            <div className="al-review-aside-progress" aria-hidden="true"><span style={{ height: `${total ? reviewSummary.reviewed_count / total * 100 : 0}%` }} /></div>
+          </div>
         </aside>
       </div>
     </div>

@@ -36,6 +36,20 @@ describe("桌面端产品化 UI contract", () => {
     expect(app).toContain("<NavLink to={exportPath}");
   });
 
+  it("全局菜单可折叠并记忆状态，同时移除任务提示卡片", () => {
+    expect(app).toContain("SIDEBAR_COLLAPSED_STORAGE_KEY");
+    expect(app).toContain("archivelens.sidebarCollapsed");
+    expect(app).toContain('sidebarCollapsed ? " collapsed" : ""');
+    expect(app).toContain('aria-label={sidebarCollapsed ? "展开菜单" : "收起菜单"}');
+    expect(app).toContain("aria-expanded={!sidebarCollapsed}");
+    expect(app).toContain("PanelLeftExpandRegular");
+    expect(app).toContain("PanelLeftContractRegular");
+    expect(app).toContain('title={sidebarCollapsed ? "首页" : undefined}');
+    expect(app).not.toContain("al-recoverable");
+    expect(app).not.toContain("al-sidebar-task");
+    expect(styles).toContain(".al-sidebar.collapsed { width:64px");
+  });
+
   it("切换页面时仅重置主内容区滚动位置", () => {
     expect(app).toContain("useLayoutEffect");
     expect(app).toContain("mainRef.current");
@@ -74,14 +88,24 @@ describe("桌面端产品化 UI contract", () => {
     expect(taskPage).toContain("正在取消…");
   });
 
-  it("校对页以真实 summary 驱动右侧摘要与快捷键", () => {
+  it("校对页使用永久序号、三列工作区和固定进度窄栏", () => {
     expect(reviewPage).toContain("al-review-aside");
     expect(reviewPage).toContain("reviewSummary.reviewed_count");
     expect(reviewPage).toContain("reviewSummary.unreviewed_count");
     expect(reviewPage).toContain("confidenceLabel(selected.ocr_confidence)");
     expect(reviewPage).toContain("导出中心");
-    expect(reviewPage).toContain("系统判断：");
-    expect(reviewPage).toContain("人工结论：");
+    expect(reviewPage).toContain("系统判断");
+    expect(reviewPage).toContain("人工结论");
+    expect(reviewPage).toContain("完整 OCR 上下文");
+    expect(reviewPage).toContain("selected.context_full");
+    expect(reviewPage).toContain("global_sequence");
+    expect(reviewPage).toContain("sequenceLabel(item.global_sequence)");
+    expect(reviewPage).toContain("al-review-image-pane");
+    expect(reviewPage).toContain("al-result-filters");
+    expect(reviewPage).not.toContain("校对工作台");
+    expect(reviewPage).not.toContain("al-review-summary");
+    expect(reviewPage).not.toContain("summaryCollapsed");
+    expect(reviewPage).not.toContain("PanelRightExpandRegular");
     expect(reviewPage).toContain('role="listbox"');
     expect(reviewPage).toContain("NOTE_DRAFT_PREFIX");
     expect(reviewPage).toContain("if (!(await flushCurrentNote())) return");
@@ -106,6 +130,8 @@ describe("桌面端产品化 UI contract", () => {
     expect(reviewHighlightSettings).toContain("关键词前后每侧字数");
     expect(reviewHighlightSettings).toContain("context_radius");
     expect(reviewHighlightSettings).toContain("出处页始终按源文件无损显示");
+    expect(styles).toContain("grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) 56px");
+    expect(styles).toContain("white-space:pre-wrap");
   });
 
   it("任务内检索提供简繁范围、持久历史、分层证据和原图人工核查", () => {
