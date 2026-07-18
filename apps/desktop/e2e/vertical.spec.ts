@@ -1,15 +1,21 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 let app: ElectronApplication;
 let win: Page;
 let userDataDir: string;
+const APP_DIR = path.resolve(__dirname, "..");
+const RUN_ID = (process.env["ARCHIVELENS_TEST_RUN_ID"] ?? "vertical-local").replace(/[^A-Za-z0-9._-]/g, "-");
 
 test.beforeAll(async () => {
-  const exe = path.resolve(__dirname, "..", "release", "win-unpacked", "ArchiveLens.exe");
-  userDataDir = await mkdtemp(path.join(os.tmpdir(), "archivelens-vertical-e2e-"));
+  const exe = path.join(APP_DIR, "release", "win-unpacked", "ArchiveLens.exe");
+  const resultRoot = path.join(APP_DIR, "test-results");
+  await mkdir(resultRoot, { recursive: true });
+  await writeFile(path.join(resultRoot, ".archivelens-runid"), `${RUN_ID}\n`, "utf8");
+  userDataDir = await mkdtemp(path.join(os.tmpdir(), `archivelens-e2e-userdata-${RUN_ID}-vertical-`));
+  await writeFile(path.join(userDataDir, ".archivelens-test-owned"), `${RUN_ID}\n`, "utf8");
   app = await electron.launch({
     executablePath: exe,
     env: {

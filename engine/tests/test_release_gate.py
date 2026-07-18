@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE_SCRIPT = ROOT / "scripts" / "run-zero-cost-release-gate.ps1"
+CLEANUP_SCRIPT = ROOT / "scripts" / "cleanup-test-artifacts.ps1"
 VERIFY_SCRIPT = ROOT / "scripts" / "verify-release-chain.ps1"
 SMOKE_HELPER = ROOT / "scripts" / "release-smoke-evidence.ps1"
 
@@ -112,6 +113,94 @@ class ReleaseGateTests(unittest.TestCase):
 
         installer_text = (ROOT / "scripts" / "smoke-installer.ps1").read_text(encoding="utf-8-sig")
         self.assertIn('PSObject.Properties["DisplayName"]', installer_text)
+
+    def test_gate_finally_cleans_owned_artifacts_without_masking_original_failure(self) -> None:
+        text = GATE_SCRIPT.read_text(encoding="utf-8-sig")
+
+        self.assertIn("finally {", text)
+        self.assertIn("Invoke-TestArtifactCleanup $script:RunId", text)
+        self.assertIn('$script:CleanupStatus = "PASS"', text)
+        self.assertIn('$script:CleanupStatus = "FAIL"', text)
+        self.assertIn('if ($script:GateStatus -eq "PASS")', text)
+        self.assertIn("Test artifact cleanup also failed after the original gate failure", text)
+        self.assertIn("Save-GateSummary $script:GateStatus $script:GateError", text)
+        self.assertLess(text.index("finally {", text.index("Push-Location")), text.index("Save-GateSummary $script:GateStatus"))
+
+    def test_all_release_gate_temp_producers_write_run_ownership_markers(self) -> None:
+        installer_text = (ROOT / "scripts" / "smoke-installer.ps1").read_text(encoding="utf-8-sig")
+        portable_text = (ROOT / "scripts" / "smoke-portable.ps1").read_text(encoding="utf-8-sig")
+        vertical_text = (ROOT / "apps" / "desktop" / "e2e" / "vertical.spec.ts").read_text(encoding="utf-8-sig")
+        custom_text = (ROOT / "apps" / "desktop" / "e2e" / "custom-search.spec.ts").read_text(encoding="utf-8-sig")
+
+        for smoke_text in (installer_text, portable_text):
+            self.assertIn('Join-Path $ownedRoot ".archivelens-test-owned"', smoke_text)
+            self.assertIn("$runId + [Environment]::NewLine", smoke_text)
+        self.assertIn("archivelens-e2e-userdata-${RUN_ID}-vertical-", vertical_text)
+        self.assertIn('writeFile(path.join(userDataDir, ".archivelens-test-owned")', vertical_text)
+        self.assertNotIn("archivelens-vertical-e2e-", vertical_text)
+        self.assertEqual(4, custom_text.count("makeOwnedRunRoot("))
+        self.assertIn('writeFile(path.join(runRoot, ".archivelens-test-owned")', custom_text)
+
+    def test_cleanup_requires_matching_marker_and_leaves_no_owned_residual(self) -> None:
+        run_id = f"unit-{uuid.uuid4().hex}"
+        owned = Path(tempfile.mkdtemp(prefix=f"archivelens-e2e-userdata-{run_id}-owned-"))
+        mismatched = Path(tempfile.mkdtemp(prefix=f"archivelens-e2e-userdata-{run_id}-other-"))
+        try:
+            with tempfile.TemporaryDirectory(prefix="archivelens-cleanup-repo-") as repo_dir:
+                repo = Path(repo_dir)
+                report = repo / "apps" / "desktop" / "test-results"
+                write_file(owned / ".archivelens-test-owned", f"{run_id}\n")
+                write_file(owned / "data.bin", b"owned")
+                write_file(mismatched / ".archivelens-test-owned", "different-run\n")
+                write_file(mismatched / "keep.bin", b"keep")
+                write_file(report / ".archivelens-runid", f"{run_id}\n")
+                write_file(report / "trace.zip", b"trace")
+
+                command = [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(CLEANUP_SCRIPT),
+                    "-RunId",
+                    run_id,
+                    "-RepoRoot",
+                    str(repo),
+                    "-Confirm",
+                ]
+                confirmed = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                self.assertEqual(0, confirmed.returncode, confirmed.stdout + confirmed.stderr)
+                summary = json.loads(confirmed.stdout)
+                self.assertEqual(2, summary["found"])
+                self.assertEqual(2, summary["deleted"])
+                self.assertEqual(0, summary["failed"])
+                self.assertFalse(owned.exists())
+                self.assertFalse(report.exists())
+                self.assertTrue(mismatched.exists())
+
+                residual = subprocess.run(
+                    command[:-1],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                self.assertEqual(0, residual.returncode, residual.stdout + residual.stderr)
+                residual_summary = json.loads(residual.stdout)
+                self.assertEqual(0, residual_summary["found"])
+                self.assertEqual(0, residual_summary["eligible"])
+        finally:
+            shutil.rmtree(owned, ignore_errors=True)
+            shutil.rmtree(mismatched, ignore_errors=True)
 
     def test_smoke_helper_rejects_paths_outside_owned_temp_prefix(self) -> None:
         with tempfile.TemporaryDirectory(prefix="archivelens-setup-smoke-unit-") as owned:

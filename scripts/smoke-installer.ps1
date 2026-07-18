@@ -80,6 +80,11 @@ try {
 
   Remove-ReleaseSmokeOwnedRoot $ownedRoot $ownedPrefix
   New-Item -ItemType Directory -Force -Path $ownedRoot | Out-Null
+  [IO.File]::WriteAllText(
+    (Join-Path $ownedRoot ".archivelens-test-owned"),
+    $runId + [Environment]::NewLine,
+    (New-Object Text.UTF8Encoding($false))
+  )
 
   Write-Host ("[INFO] Silent install to task-owned path: {0}" -f $installDir)
   $installerProcess = Start-Process `

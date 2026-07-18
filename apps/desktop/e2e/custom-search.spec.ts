@@ -60,13 +60,18 @@ async function comparableExistingPath(value: string): Promise<string> {
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
+async function makeOwnedRunRoot(label: string): Promise<string> {
+  const runRoot = await mkdtemp(path.join(os.tmpdir(), `archivelens-ocr-temp-${RUN_ID}-${label}-`));
+  await writeFile(path.join(runRoot, ".archivelens-test-owned"), `${RUN_ID}\n`, "utf8");
+  return runRoot;
+}
+
 
 test("custom search UI creates a real OCR task and renders complete word evidence", async () => {
   const resultRoot = path.join(APP_DIR, "test-results");
   await mkdir(resultRoot, { recursive: true });
   await writeFile(path.join(resultRoot, ".archivelens-runid"), `${RUN_ID}\n`, "utf8");
-  const runRoot = await mkdtemp(path.join(os.tmpdir(), `archivelens-ocr-temp-${RUN_ID}-custom-ui-`));
-  await writeFile(path.join(runRoot, ".archivelens-test-owned"), `${RUN_ID}\n`, "utf8");
+  const runRoot = await makeOwnedRunRoot("custom-ui");
   const sourceDir = path.join(runRoot, "source");
   const userDataDir = path.join(runRoot, "user-data");
   await mkdir(sourceDir, { recursive: true });
@@ -446,7 +451,7 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
 });
 
 test("multiple file selection creates one cross-directory task", async () => {
-  const runRoot = await mkdtemp(path.join(os.tmpdir(), `archivelens-ocr-temp-${RUN_ID}-multi-file-ui-`));
+  const runRoot = await makeOwnedRunRoot("multi-file-ui");
   const userDataDir = path.join(runRoot, "user-data");
   const firstDir = path.join(runRoot, "first");
   const secondDir = path.join(runRoot, "second");
@@ -507,7 +512,7 @@ test("multiple file selection creates one cross-directory task", async () => {
 });
 
 test("mixed PNG and multi-page TIFF sources complete as one raster task", async () => {
-  const runRoot = await mkdtemp(path.join(os.tmpdir(), `archivelens-ocr-temp-${RUN_ID}-raster-ui-`));
+  const runRoot = await makeOwnedRunRoot("raster-ui");
   const userDataDir = path.join(runRoot, "user-data");
   const sourceDir = path.join(runRoot, "source");
   const pngFile = path.join(sourceDir, "single.png");

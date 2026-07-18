@@ -51,10 +51,18 @@ pnpm gate:release-local -- -OfflineNative
 11. 记录 Setup / Portable 的 Authenticode 状态。当前 Alpha 接受 `Valid` 或
     `NotSigned`，不会购买或调用付费签名服务；
 12. 生成非 partial 的 `release-manifest.json`、`SHA256SUMS.txt`，并验证源码、
-    Engine、win-unpacked、Setup、Portable、原生运行树和 smoke 证据绑定同一 SHA。
+    Engine、win-unpacked、Setup、Portable、原生运行树和 smoke 证据绑定同一 SHA；
+13. 无论前述步骤成功还是失败，都在 `finally` 中按本次 `RunId` 清理测试拥有的临时
+    目录和 Playwright 报告目录，再执行一次 dry-run，确认本次运行残留为 0。
 
 任何实际失败都会令门禁退出非零。公开许可证审核未批准属于预期阻塞，但技术门禁
-仍必须通过；脚本会验证该失败只来自 `PUBLIC_*` 人工批准项。
+仍必须通过；脚本会验证该失败只来自 `PUBLIC_*` 人工批准项。清理失败不会覆盖原始
+门禁错误；若原门禁成功而清理失败，则整个门禁仍判为失败。
+
+清理只接受双重归属证据：目录名必须包含已知前缀和本次 `RunId`，且目录内
+`.archivelens-test-owned` 的内容必须精确等于该 `RunId`；报告目录同样要求
+`.archivelens-runid` 精确匹配。盘根、仓库根、用户目录和 reparse point 会被拒绝，
+不存在标记、标记不匹配或非本次运行的目录不会被删除。
 
 ## 证据
 
@@ -67,6 +75,8 @@ pnpm gate:release-local -- -OfflineNative
 主要文件：
 
 - `release-gate-summary.json`：最终状态、零费用边界、未执行的外部动作和稳定版阻塞项；
+  其中 `test_artifact_cleanup_status`、`test_artifact_cleanup` 和
+  `test_artifact_cleanup_error` 记录清理及零残留复核；
 - `test-summary.json`：写入 release manifest 的已执行检查摘要；
 - `setup-smoke-evidence.json`：安装、实际包内资源、启动、清理和卸载证据；
 - `portable-smoke-evidence.json`：便携版实际包内资源、启动和清理证据；

@@ -166,6 +166,34 @@ function Get-ManifestStepSummary {
   )
 }
 
+function Invoke-TestArtifactCleanup([string]$RunId) {
+  $cleanupScript = Join-Path $PSScriptRoot "cleanup-test-artifacts.ps1"
+  if (-not (Test-Path -LiteralPath $cleanupScript -PathType Leaf)) {
+    throw "Test artifact cleanup script is unavailable: $cleanupScript"
+  }
+
+  $confirmedJson = @(
+    & $cleanupScript -RunId $RunId -RepoRoot $repoRoot -Confirm
+  ) -join [Environment]::NewLine
+  $confirmed = $confirmedJson | ConvertFrom-Json
+  if ([int]$confirmed.failed -ne 0 -or [int]$confirmed.skipped -ne 0) {
+    throw "Test artifact cleanup was incomplete: failed=$($confirmed.failed) skipped=$($confirmed.skipped)"
+  }
+
+  $residualJson = @(
+    & $cleanupScript -RunId $RunId -RepoRoot $repoRoot
+  ) -join [Environment]::NewLine
+  $residual = $residualJson | ConvertFrom-Json
+  if ([int]$residual.found -ne 0 -or [int]$residual.eligible -ne 0) {
+    throw "Test artifact cleanup left run-owned residuals: found=$($residual.found) eligible=$($residual.eligible)"
+  }
+
+  return [pscustomobject][ordered]@{
+    confirmed = $confirmed
+    residual = $residual
+  }
+}
+
 function Save-GateSummary([string]$Status, [string]$ErrorMessage = "") {
   $stableBlockers = New-Object System.Collections.Generic.List[string]
   $stableBlockers.Add("formal release authorization is not provided")
@@ -201,6 +229,9 @@ function Save-GateSummary([string]$Status, [string]$ErrorMessage = "") {
     setup_smoke_evidence = $script:SetupEvidencePath
     portable_smoke_evidence = $script:PortableEvidencePath
     release_chain_evidence = $script:ReleaseChainPath
+    test_artifact_cleanup_status = $script:CleanupStatus
+    test_artifact_cleanup = $script:ArtifactCleanup
+    test_artifact_cleanup_error = if ([string]::IsNullOrWhiteSpace($script:CleanupError)) { $null } else { $script:CleanupError }
     error = if ([string]::IsNullOrWhiteSpace($ErrorMessage)) { $null } else { $ErrorMessage }
   }
   Write-ReleaseSmokeJson $script:GateSummaryPath $summary
@@ -219,6 +250,12 @@ $script:SetupEvidencePath = ""
 $script:PortableEvidencePath = ""
 $script:ReleaseChainPath = ""
 $script:GateSummaryPath = ""
+$script:RunId = ""
+$script:GateStatus = "FAIL"
+$script:GateError = ""
+$script:CleanupStatus = "NOT_RUN"
+$script:CleanupError = ""
+$script:ArtifactCleanup = $null
 
 $savedEnvironment = @{}
 foreach ($name in @(
@@ -309,6 +346,7 @@ try {
   }
 
   $runId = "release-{0}-{1}" -f $script:FrozenSha.Substring(0, 12), $timestamp
+  $script:RunId = $runId
   $env:PYTHONUTF8 = "1"
   $env:PYTHONIOENCODING = "utf-8"
   $env:PYTHONPATH = "{0};{1}" -f (Join-Path $repoRoot "engine\src"), (Join-Path $repoRoot "engine")
@@ -502,27 +540,58 @@ try {
     throw "Release gate changed tracked repository content"
   }
 
-  Save-GateSummary "PASS"
-  Write-Host ("[PASS] Zero-cost local candidate gate completed: {0}" -f $script:GateSummaryPath)
-  Write-Host "[INFO] No push, pull request, merge, signing purchase, deployment, or release was performed."
-  Write-Host "[INFO] Stable public release remains blocked by human approval and real cross-version upgrade/rollback evidence."
+  $script:GateStatus = "PASS"
 }
 catch {
-  $message = $_.Exception.Message
-  if (-not [string]::IsNullOrWhiteSpace($script:GateSummaryPath)) {
-    try {
-      Save-GateSummary "FAIL" $message
-    }
-    catch {
-      Write-Warning ("Unable to write failure summary: {0}" -f $_.Exception.Message)
-    }
-  }
-  Write-Error ("[FAIL] Zero-cost release gate failed: {0}" -f $message)
-  exit 1
+  $script:GateStatus = "FAIL"
+  $script:GateError = $_.Exception.Message
 }
 finally {
+  if (-not [string]::IsNullOrWhiteSpace($script:RunId)) {
+    try {
+      $script:ArtifactCleanup = Invoke-TestArtifactCleanup $script:RunId
+      $script:CleanupStatus = "PASS"
+    }
+    catch {
+      $script:CleanupStatus = "FAIL"
+      $script:CleanupError = $_.Exception.Message
+      if ($script:GateStatus -eq "PASS") {
+        $script:GateStatus = "FAIL"
+        $script:GateError = "Release-gate test artifact cleanup failed: $($script:CleanupError)"
+      }
+      else {
+        Write-Warning ("Test artifact cleanup also failed after the original gate failure: {0}" -f $script:CleanupError)
+      }
+    }
+  }
   foreach ($name in $savedEnvironment.Keys) {
     [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], "Process")
   }
   Pop-Location
 }
+
+if (-not [string]::IsNullOrWhiteSpace($script:GateSummaryPath)) {
+  try {
+    Save-GateSummary $script:GateStatus $script:GateError
+  }
+  catch {
+    $summaryError = $_.Exception.Message
+    if ($script:GateStatus -eq "PASS") {
+      $script:GateStatus = "FAIL"
+      $script:GateError = "Unable to write release-gate summary: $summaryError"
+    }
+    else {
+      Write-Warning ("Unable to write failure summary: {0}" -f $summaryError)
+    }
+  }
+}
+
+if ($script:GateStatus -ne "PASS") {
+  Write-Error ("[FAIL] Zero-cost release gate failed: {0}" -f $script:GateError) -ErrorAction Continue
+  exit 1
+}
+
+Write-Host ("[PASS] Zero-cost local candidate gate completed: {0}" -f $script:GateSummaryPath)
+Write-Host "[INFO] Run-owned test artifacts were removed and a zero-residual dry-run check passed."
+Write-Host "[INFO] No push, pull request, merge, signing purchase, deployment, or release was performed."
+Write-Host "[INFO] Stable public release remains blocked by human approval and real cross-version upgrade/rollback evidence."

@@ -27,11 +27,11 @@ $tempPrefixes = @(
 )
 
 function Is-SafeTarget([string]$PathValue) {
-  $resolved = (Resolve-Path $PathValue).Path
+  $resolved = (Resolve-Path -LiteralPath $PathValue).Path
   $disallowed = @(
     [IO.Path]::GetPathRoot($resolved),
-    (Resolve-Path $RepoRoot).Path,
-    $HOME
+    (Resolve-Path -LiteralPath $RepoRoot).Path,
+    [Environment]::GetFolderPath("UserProfile")
   ) | Where-Object { $_ }
   if ($disallowed -contains $resolved) { return $false }
   $item = Get-Item -LiteralPath $resolved -Force
@@ -75,6 +75,8 @@ Get-ChildItem -LiteralPath $tempRoot -Force -Directory | ForEach-Object {
   if (-not ($tempPrefixes | Where-Object { $name.StartsWith($_) -and $name.Contains($RunId) })) { return }
   $ownedMarker = Join-Path $_.FullName $markerFile
   if (-not (Test-Path $ownedMarker)) { return }
+  $marker = (Get-Content -LiteralPath $ownedMarker -Raw).Trim()
+  if ($marker -ne $RunId) { return }
   $candidates.Add($_.FullName)
 }
 
@@ -104,7 +106,7 @@ $summary = [pscustomobject]@{
 
 if (-not $Confirm) {
   $summary | ConvertTo-Json -Depth 6
-  exit 0
+  return
 }
 
 $failed = New-Object System.Collections.Generic.List[object]

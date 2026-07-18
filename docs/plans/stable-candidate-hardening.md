@@ -111,15 +111,24 @@
 - **Setup/Portable 当前制品**：本 worktree **不存在** `apps/desktop/release` 与 `.tmp/release-gate`（本轮未跑门禁）。因此当前**没有可引用的 Setup/Portable 制品或签名事实**，只能记为“不存在当前制品 / 签名未验证”。
 - **NotSigned 是已批准的 Alpha 策略**（门禁 :444-460 接受 `Valid`/`NotSigned`），**不是**对某个当前文件签名状态的实测结论——不得冒充当前制品签名事实。最近一次同 SHA 全通过证据见历史审计 B-13（`2fa7bebc`，30/30；历史，非本轮）。
 
-### 1.9 已确认缺陷：本地门禁 `finally` 未调用清理（VERIFIED）
+### 1.9 B0 已确认缺陷与 B7 修复：本地门禁残留清理（VERIFIED）
 
-- `scripts/cleanup-test-artifacts.ps1` 存在且安全：按 `RunId` + 临时前缀（`archivelens-e2e-userdata-`/`-setup-smoke-`/`-portable-smoke-`/`-migration-test-`/`-ocr-temp-`）**且**目录内含 `.archivelens-test-owned` 标记，或报告根含 `.archivelens-runid` 标记匹配 `RunId` 筛选；`Is-SafeTarget` 拒绝盘根/仓库根/`$HOME`/reparse point（:13-40, 60-90）。
-- **缺陷**：`run-zero-cost-release-gate.ps1` 的 `finally`（:525-530）**仅还原环境变量并 `Pop-Location`，从不调用 `cleanup-test-artifacts.ps1`**。门禁注入 `$env:ARCHIVELENS_TEST_RUN_ID`（:315）但运行结束不回收本次 smoke 在 C:`%TEMP%` 的残留。
-- **标记覆盖现状（VERIFIED，更正首版）**：
-  - Playwright **已写**标记：`lifecycle.spec.ts`（:17-26，写 `.archivelens-test-owned` 与 `.archivelens-runid`）、`custom-search.spec.ts`（:67-69）、`review-completeness.spec.ts`（:27-28）。`vertical.spec.ts` **未写**标记（本轮 grep 确认）。
-  - Python smoke（`html-smoke.py`/`packaged-ocr-smoke.py`/`shutdown-inference-smoke.py`）**已写** `.archivelens-test-owned`。
-  - PowerShell smoke（`smoke-installer.ps1`/`smoke-portable.ps1`）创建 `archivelens-{setup,portable}-smoke-{runId}` 目录但**未写** `.archivelens-test-owned`；成功时自清理（`Remove-ReleaseSmokeOwnedRoot`），**失败中断时目录孤立且 cleanup 无法匹配**——这是真实缺口。
-- **B7 待办**：核对**所有**产生已知前缀目录的路径是否 100% 写标记，重点补 PS smoke 失败路径与 `vertical.spec.ts`；并在门禁 `finally` 按 RunId+前缀+标记调用清理。本轮只记录，不清理。
+- **B0 缺陷事实**：门禁原先在 `catch` 中直接 `exit 1`，`finally` 只还原环境变量；
+  `vertical.spec.ts` 与 Setup/Portable smoke 也没有统一写入所有权标记，失败中断可能留下
+  无法自动归属的目录。
+- **B7 已修复**：`finally` 现在调用 `cleanup-test-artifacts.ps1 -Confirm`，随后以 dry-run
+  复核 `found=0/eligible=0`；若原门禁失败，清理错误单独记录而不覆盖原始错误；若原门禁
+  成功但清理失败，则门禁整体失败。
+- **所有权边界已收紧**：临时目录必须同时满足已知前缀、名称含本次 `RunId`、且
+  `.archivelens-test-owned` 内容精确等于该 `RunId`；报告目录要求 `.archivelens-runid`
+  精确匹配。盘根、仓库根、用户目录与 reparse point 仍拒绝。无标记或标记不匹配的
+  同名前缀目录不会删除。
+- **标记覆盖已补齐**：`vertical.spec.ts`、`custom-search.spec.ts` 的全部临时根及
+  `smoke-installer.ps1`/`smoke-portable.ps1` 均写运行标记；既有 lifecycle、export-job、
+  review-completeness 与 Python smoke 继续使用同一合同。
+- **定向验证**：`engine.tests.test_release_gate` 9 项通过；真实 PowerShell 清理测试证明只
+  删除匹配标记的临时/报告目录，保留同名前缀但标记不匹配的目录，并复核本次残留为 0。
+  完整冻结候选门禁结果由 B7 最终运行的 gitignored 证据记录。
 
 ### 1.10 CI（VERIFIED 配置；远程不可验证）
 
@@ -377,10 +386,12 @@ B1 删除清理作业；B2 Export Job；B3 来源预检；B4 本地数据/隐私
   `BLOCKED_BY_MISSING_TRUSTED_PREVIOUS_ARTIFACT`。
 
 ### B7（文档收口 + 完整门禁 + 最终验收）
-- 冻结候选 SHA **前**完成所有跟踪文档。
-- 修复门禁 `finally`：按 `run_id`+已知前缀+`.archivelens-test-owned`/`.archivelens-runid` 标记调用 `cleanup-test-artifacts.ps1 -Confirm`；**清理错误不掩盖原始错误**；补齐 PS smoke 失败路径与 `vertical.spec.ts` 标记覆盖（100% 核对）。
-- 冻结候选后跑完整零成本门禁；**结束后本次 RunId 残留为 0**（dry-run 可审计）。
-- 产出最终验收摘要（不发布、不 push、远程 CI 仅配置审查）。
+- 已在冻结候选 SHA **前**完成跟踪文档与 B7 清理实现。
+- 已修复门禁 `finally` 清理、原错误保留、标记精确匹配和零残留复核，并通过
+  `test_release_gate` 9 项、TypeScript typecheck 与真实 ESLint 定向验证。
+- 完整零成本门禁将在本提交冻结后执行；实际结果仅写 gitignored 的 `.tmp/release-gate/`
+  与最终任务报告，不再通过跟踪文档改变候选 SHA。
+- 不发布、不 push，远程 CI 仅配置审查。
 
 ---
 
@@ -392,7 +403,8 @@ B1 删除清理作业；B2 Export Job；B3 来源预检；B4 本地数据/隐私
    v2 并新增旧表，结论为 `UNSAFE_HISTORICAL_FUTURE_SCHEMA_GUARD`。当前代码拒绝更高版本。
 4. **Setup/Portable 当前签名/制品**：本轮无制品，仅“不存在/未验证”；NotSigned 是策略非实测（§1.8）。
 5. **远程 CI**：push 不执行，仅配置审查/本地模拟（§1.10）。
-6. **`vertical.spec.ts` 标记与 PS smoke 失败路径**：标记覆盖待 B7 补齐核对（§1.9）。
+6. **完整冻结候选门禁**：B7 清理实现与定向测试已完成，Setup/Portable、完整 E2E、同 SHA
+   制品链与清理零残留仍以冻结后完整门禁的实际结果为准，不提前宣称通过。
 7. **跨版本升级/回滚**：历史源码→当前 schema 的数据库升级已验证；当年可信发布制品
    provenance 与安全降级不通过，整体 PARTIAL。公开许可证批准、正式发布仍未授权。
 
