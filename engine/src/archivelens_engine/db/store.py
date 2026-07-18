@@ -28,6 +28,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from .migration_backup import (
+    MigrationBackupManager,
+    MigrationBackupRecord,
+    MigrationRecoveryError,
+)
 from ..search_terms import (
     EXACT_LITERAL_SEARCH_MODE,
     LEGACY_SEARCH_MODE,
@@ -402,6 +407,8 @@ class TaskStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.migration_backups = MigrationBackupManager(self.db_path)
+        self.last_migration_backup: MigrationBackupRecord | None = None
         # check_same_thread=False 允许跨线程；所有访问仍经 _lock 串行化（见各方法）。
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
@@ -423,6 +430,14 @@ class TaskStore:
             return
         if current > SCHEMA_VERSION:
             raise RuntimeError(f"unsupported schema version: {current} > {SCHEMA_VERSION}")
+        backup: MigrationBackupRecord | None = None
+        if current > 0:
+            backup = self.migration_backups.create(
+                self.conn,
+                source_schema=current,
+                target_schema=SCHEMA_VERSION,
+            )
+            self.last_migration_backup = backup
         try:
             self.conn.execute("BEGIN IMMEDIATE")
             self._execute_schema_sql(SCHEMA_SQL)
@@ -437,9 +452,45 @@ class TaskStore:
             )
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self.conn.commit()
-        except Exception:
+        except Exception as migration_error:
             self.conn.rollback()
+            if backup is not None:
+                self.conn.close()
+                try:
+                    self.migration_backups.restore(backup)
+                except Exception as recovery_error:
+                    try:
+                        self.migration_backups.mark_outcome(
+                            backup,
+                            "migration_failed_restore_failed",
+                            error_type=type(recovery_error).__name__,
+                        )
+                    except Exception:
+                        pass
+                    raise MigrationRecoveryError(
+                        "schema migration failed and automatic backup restore could not be verified"
+                    ) from recovery_error
+                try:
+                    self.last_migration_backup = self.migration_backups.mark_outcome(
+                        backup,
+                        "migration_failed_restored",
+                        error_type=type(migration_error).__name__,
+                    )
+                except Exception:
+                    # 数据库已从已校验备份恢复；元数据 outcome 更新失败不能反向伪装成
+                    # 数据恢复失败。保留原 created 记录，并继续抛出最初的迁移错误。
+                    self.last_migration_backup = backup
             raise
+        else:
+            if backup is not None:
+                try:
+                    self.last_migration_backup = self.migration_backups.mark_outcome(
+                        backup,
+                        "migration_completed",
+                    )
+                except Exception:
+                    # 迁移事务已经提交，不能因仅诊断元数据更新失败而报告数据库迁移失败。
+                    self.last_migration_backup = backup
 
     def _execute_schema_sql(self, script: str) -> None:
         statement_lines: list[str] = []

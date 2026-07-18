@@ -30,6 +30,8 @@ describe("本地数据统计与受控目录", () => {
     const root = await makeRoot();
     await sizedFile(path.join(root, "engine", "archivelens.db"), 5);
     await sizedFile(path.join(root, "engine", "archivelens.db-wal"), 7);
+    await sizedFile(path.join(root, "engine", "backups", "archivelens-v9.sqlite3"), 31);
+    await sizedFile(path.join(root, "engine", "backups", "archivelens-v9.json"), 37);
     await sizedFile(path.join(root, "engine", "tasks", "task-1", "scan", "page.png"), 11);
     await sizedFile(path.join(root, "engine", "tasks", "task-1", "exports", "report.html"), 13);
     await sizedFile(path.join(root, "engine", ".export-jobs", "export-1", "partial"), 17);
@@ -39,8 +41,9 @@ describe("本地数据统计与受控目录", () => {
 
     const summary = await collectLocalDataSummary(root);
     expect(summary.complete).toBe(true);
-    expect(summary.total_bytes).toBe(124);
+    expect(summary.total_bytes).toBe(192);
     expect(summary.database_bytes).toBe(12);
+    expect(summary.migration_backup_bytes).toBe(68);
     expect(summary.task_derived_bytes).toBe(11);
     expect(summary.export_bytes).toBe(13);
     expect(summary.temporary_export_bytes).toBe(17);

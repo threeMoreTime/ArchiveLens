@@ -30,6 +30,7 @@ export interface LocalDataSummary {
   log_path: string;
   total_bytes: number;
   database_bytes: number;
+  migration_backup_bytes: number;
   task_derived_bytes: number;
   export_bytes: number;
   temporary_export_bytes: number;

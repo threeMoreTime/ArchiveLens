@@ -19,6 +19,7 @@
     "total": { "lines": 80, "branches": 70 },
     "files": {
       "engine/src/archivelens_engine/db/store.py": { "lines": 87, "branches": 75 },
+      "engine/src/archivelens_engine/db/migration_backup.py": { "lines": 95, "branches": 90 },
       "engine/src/archivelens_engine/server.py": { "lines": 74, "branches": 66 },
       "engine/src/archivelens_engine/source_preflight.py": { "lines": 77, "branches": 70 },
       "engine/src/archivelens_engine/html_export.py": { "lines": 91, "branches": 81 }

@@ -167,6 +167,7 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
               <dl className="al-local-data-summary">
                 <div><dt>当前可读数据合计</dt><dd>{formatDataSize(localData.total_bytes)}</dd></div>
                 <div><dt>数据库（OCR 原文、索引、校对与任务记录）</dt><dd>{formatDataSize(localData.database_bytes)}</dd></div>
+                <div><dt>数据库迁移备份（最近 3 份）</dt><dd>{formatDataSize(localData.migration_backup_bytes)}</dd></div>
                 <div><dt>任务派生数据（页面图片、crop 等）</dt><dd>{formatDataSize(localData.task_derived_bytes)}</dd></div>
                 <div><dt>成功导出</dt><dd>{formatDataSize(localData.export_bytes)}</dd></div>
                 <div><dt>导出临时残留</dt><dd>{formatDataSize(localData.temporary_export_bytes)}</dd></div>
@@ -189,7 +190,7 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
               {cleanupFeedback && <InlineFeedback tone="info">{cleanupFeedback}</InlineFeedback>}
               <div className="al-inline-actions"><Button disabled={cleaning} onClick={() => void cleanupTemporaryData()}>{cleaning ? "正在清理…" : cleanupConfirming ? "确认清理安全临时残留" : "清理安全临时残留"}</Button>{cleanupConfirming && <Button disabled={cleaning} onClick={() => setCleanupConfirming(false)}>取消</Button>}</div>
             </div>
-            <Text className="al-muted">卸载 ArchiveLens 默认保留本地数据；安装版与 Portable 默认使用同一 Windows userData。删除任务也不是物理介质安全擦除，备份与导出副本需由用户单独管理。</Text>
+            <Text className="al-muted">数据库升级前会自动建立可校验备份并保留最近 3 份；备份同样是本地明文。卸载 ArchiveLens 默认保留本地数据；安装版与 Portable 默认使用同一 Windows userData。删除任务也不是物理介质安全擦除，备份与导出副本需由用户单独管理。</Text>
           </Card>
         </main>
 

@@ -14,6 +14,7 @@ export interface LocalDataSummary {
   log_path: string;
   total_bytes: number;
   database_bytes: number;
+  migration_backup_bytes: number;
   task_derived_bytes: number;
   export_bytes: number;
   temporary_export_bytes: number;
@@ -61,6 +62,7 @@ export async function collectLocalDataSummary(userDataPath: string): Promise<Loc
     log_path: logRoot,
     total_bytes: 0,
     database_bytes: 0,
+    migration_backup_bytes: 0,
     task_derived_bytes: 0,
     export_bytes: 0,
     temporary_export_bytes: 0,
@@ -118,6 +120,8 @@ export async function collectLocalDataSummary(userDataPath: string): Promise<Loc
         summary.settings_bytes += size;
       } else if (segments[0] === "engine" && segments[1] === ".export-jobs") {
         summary.temporary_export_bytes += size;
+      } else if (segments[0] === "engine" && segments[1] === "backups") {
+        summary.migration_backup_bytes += size;
       } else if (segments[0] === "engine" && segments.length === 2 && isDatabaseFile(segments[1]!)) {
         summary.database_bytes += size;
       } else if (segments[0] === "engine" && segments[1] === "tasks" && segments[2]) {

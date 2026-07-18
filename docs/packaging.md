@@ -63,7 +63,10 @@ pnpm --filter @archivelens/desktop dist
 - 门禁不会 push、创建 PR、合并、购买签名、部署或发布。公开发布必须另外通过
   绑定冻结候选 SHA 的许可证人工门禁，且仍需独立的正式发布授权；
 - 当前没有上一可信稳定版安装器时，跨版本升级与回滚必须标记 `NOT_VERIFIED`，
-  不得据此宣称稳定发布就绪；
+  不得据此宣称稳定发布就绪；从历史提交在当前机器重建的安装器可用于兼容性演练，
+  但不能替代当年发布制品的来源证明；
+- 历史 `alpha.10` 已实证会改写未来 schema，绝不能用于直接打开当前数据。降级必须
+  在应用退出后恢复升级前、与旧版本 schema 匹配且校验通过的备份；
 - 安装/卸载/Portable 的本地明文、保留和清理合同见
   [`privacy-and-local-data.md`](privacy-and-local-data.md)；卸载配置必须保持
   `deleteAppDataOnUninstall: false`，除非以后经过独立产品与数据安全审核；
