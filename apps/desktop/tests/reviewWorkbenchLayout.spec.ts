@@ -12,23 +12,27 @@ const reviewPage = source("pages/ReviewPage.tsx");
 const styles = source("styles.css");
 
 describe("校对工作台固定视口与舒适操作契约", () => {
-  it("校对路由使用固定视口，三栏不显示纵向滚动条", () => {
+  it("校对路由使用固定视口，三列与进度窄栏各自控制滚动", () => {
     expect(app).toContain('location.pathname.startsWith("/review/")');
     expect(app).toContain("al-main-review");
     expect(styles).toContain(".al-main-review { overflow:hidden;");
     expect(styles).toContain(".al-result-scroll::-webkit-scrollbar { display:none; }");
     expect(styles).toContain("scrollbar-width:none");
-    expect(styles).toMatch(/\.al-detail \{[^}]*min-height:0;[^}]*overflow:hidden;/);
+    expect(styles).toContain("grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) 56px");
+    expect(styles).toMatch(/\.al-detail \{[^}]*min-height:0;[^}]*overflow-y:auto;/);
     expect(styles).toMatch(/\.al-review-aside \{[^}]*overflow:hidden;/);
     expect(styles).toContain("@media (max-height: 760px)");
   });
 
-  it("摘要支持折叠并将用户选择保存到本地", () => {
-    expect(reviewPage).toContain('REVIEW_SUMMARY_COLLAPSED_KEY');
-    expect(reviewPage).toContain('localStorage.setItem(REVIEW_SUMMARY_COLLAPSED_KEY');
-    expect(reviewPage).toContain('aria-label={summaryCollapsed ? "展开校对摘要" : "收起校对摘要"}');
-    expect(reviewPage).toContain("al-review-aside collapsed");
+  it("移除可展开摘要，只保留永久待处理进度窄栏", () => {
+    expect(reviewPage).not.toContain("REVIEW_SUMMARY_COLLAPSED_KEY");
+    expect(reviewPage).not.toContain("展开校对摘要");
+    expect(reviewPage).not.toContain("收起校对摘要");
+    expect(reviewPage).toContain('className="al-review-aside"');
+    expect(reviewPage).toContain("al-review-aside-collapsed-summary");
     expect(reviewPage).toContain("al-review-aside-progress");
+    expect(reviewPage).toContain("待处理");
+    expect(styles).toContain("writing-mode:vertical-rl");
   });
 
   it("固定画布提供明确缩放工具，判断、导航和备注分组排列", () => {

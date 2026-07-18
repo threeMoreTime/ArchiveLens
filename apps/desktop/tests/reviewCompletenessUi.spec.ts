@@ -22,10 +22,12 @@ describe("校对全量访问 UI contract", () => {
     expect(reviewPage).toContain("末页");
   });
 
-  it("明确展示扫描、校对与未校对状态，且跨页导航调用服务端", () => {
-    expect(reviewPage).toContain("扫描未完成");
-    expect(reviewPage).toContain("校对已完成");
-    expect(reviewPage).toContain("未校对 {reviewSummary.unreviewed_count}");
+  it("横向状态摘要已移除，进度窄栏保留待处理数量，且跨页导航调用服务端", () => {
+    expect(reviewPage).not.toContain("扫描未完成");
+    expect(reviewPage).not.toContain("校对已完成");
+    expect(reviewPage).toContain("reviewSummary.unreviewed_count");
+    expect(reviewPage).toContain("待处理");
+    expect(reviewPage).toContain('aria-label={`已校对 ${reviewSummary.reviewed_count}，共 ${total} 条`}');
     expect(reviewPage).toContain("for (let nextPage = loadedPageIndex + 1; nextPage < totalPages");
     expect(reviewPage).toContain("下一条待处理");
   });
@@ -45,7 +47,7 @@ describe("校对全量访问 UI contract", () => {
   });
 
   it("校对页统一进入导出中心，未完成结果使用应用内确认", () => {
-    expect(reviewPage).toContain("前往导出中心");
+    expect(reviewPage).toContain(">导出中心</Button>");
     expect(reviewPage).not.toContain("window.confirm");
     expect(exportPage).toContain("仍然导出阶段性结果");
     expect(exportPage).toContain("setAwaitingConfirmation(true)");
