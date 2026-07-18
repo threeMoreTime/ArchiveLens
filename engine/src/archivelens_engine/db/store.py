@@ -676,7 +676,7 @@ class TaskStore:
                     SELECT export_id,
                            ROW_NUMBER() OVER (
                                PARTITION BY task_id, format
-                               ORDER BY created_at DESC, export_id DESC
+                               ORDER BY rowid DESC
                            ) AS duplicate_rank
                     FROM export_jobs
                     WHERE status IN ({active_sql})
@@ -1293,7 +1293,7 @@ class TaskStore:
     def list_export_jobs(self, task_id: str, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         with self._lock:
             rows = self.conn.execute(
-                "SELECT * FROM export_jobs WHERE task_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                "SELECT * FROM export_jobs WHERE task_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?",
                 (task_id, limit, offset),
             ).fetchall()
         return [self._export_job_for_api(dict(row)) for row in rows]
@@ -1520,7 +1520,8 @@ class TaskStore:
     def list_queued_export_jobs_internal(self, *, limit: int = 1) -> list[dict[str, Any]]:
         with self._lock:
             rows = self.conn.execute(
-                "SELECT * FROM export_jobs WHERE status='queued' ORDER BY created_at, export_id LIMIT ?",
+                # rowid 是本表的实际插入顺序；墙钟可能回拨，随机 export_id 也不能作为 FIFO tie-breaker。
+                "SELECT * FROM export_jobs WHERE status='queued' ORDER BY rowid LIMIT ?",
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]

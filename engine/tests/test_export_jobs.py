@@ -582,17 +582,42 @@ class ExportJobRestartTests(unittest.TestCase):
             second_task, _ = _seed_exportable_task(server, tmp)
             first = server.store.create_export_job(task_id=first_task, format="json")
             second = server.store.create_export_job(task_id=second_task, format="json")
+            # 强制墙钟相同，证明 FIFO 不依赖时间精度或随机 export_id 排序。
+            server.store.conn.execute(
+                "UPDATE export_jobs SET created_at='2026-07-18T00:00:00+00:00' WHERE export_id IN (?, ?)",
+                (first["export_id"], second["export_id"]),
+            )
+            server.store.conn.commit()
             server.store.close()
-            server2 = _make_server(tmp)
-            try:
-                first_job = _wait_terminal(server2, first["export_id"])
-                second_job = _wait_terminal(server2, second["export_id"])
-                self.assertEqual(first_job["status"], "completed")
-                self.assertEqual(second_job["status"], "completed")
-                self.assertLessEqual(first_job["started_at"], second_job["started_at"])
-            finally:
-                _drain_export_threads(server2)
-                server2.store.close()
+            started: list[str] = []
+            original_emit = Server.emit_event
+
+            def capture_start(
+                instance: Server,
+                event: str,
+                task_id: str | None = None,
+                payload: dict | None = None,
+            ) -> None:
+                if (
+                    event == "export.progress"
+                    and payload
+                    and payload.get("stage") == "preparing"
+                    and payload.get("completed") == 0
+                ):
+                    started.append(str(payload["export_id"]))
+                original_emit(instance, event, task_id, payload)
+
+            with patch.object(Server, "emit_event", new=capture_start):
+                server2 = _make_server(tmp)
+                try:
+                    first_job = _wait_terminal(server2, first["export_id"])
+                    second_job = _wait_terminal(server2, second["export_id"])
+                    self.assertEqual(first_job["status"], "completed")
+                    self.assertEqual(second_job["status"], "completed")
+                    self.assertEqual(started[:2], [first["export_id"], second["export_id"]])
+                finally:
+                    _drain_export_threads(server2)
+                    server2.store.close()
         finally:
             import shutil
 
