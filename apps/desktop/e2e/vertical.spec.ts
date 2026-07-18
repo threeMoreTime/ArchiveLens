@@ -76,6 +76,13 @@ test("E2E-4 导出中心生成 HTML 并保持应用可用", async () => {
   await win.getByRole("radio", { name: /HTML 审阅报告/ }).click();
   await win.getByRole("button", { name: "导出 HTML" }).click();
   await win.getByRole("button", { name: "仍然导出 HTML" }).click();
-  await expect(win.getByText(/已导出 \d+ 条结果至/)).toBeVisible({ timeout: 60_000 });
-  await expect(win.getByText("本次导出：已完成")).toBeVisible();
+  const taskId = win.url().split("/export/")[1]!;
+  await expect.poll(async () => win.evaluate(async (id) => {
+    const jobs = await window.archiveLens.export.listJobs(id);
+    return jobs.items.find((job) => job.format === "html")?.status;
+  }, taskId), { timeout: 90_000 }).toBe("completed");
+  const completedJob = win.locator(".al-export-job-row").filter({ hasText: "HTML 审阅报告" }).first();
+  await expect(completedJob).toContainText("已完成");
+  await expect(completedJob.getByRole("button", { name: "打开文件夹" })).toBeVisible();
+  await expect(win.locator(".al-export-history")).toContainText("HTML 审阅报告");
 });

@@ -389,8 +389,15 @@ B1 删除清理作业；B2 Export Job；B3 来源预检；B4 本地数据/隐私
 - 已在冻结候选 SHA **前**完成跟踪文档与 B7 清理实现。
 - 已修复门禁 `finally` 清理、原错误保留、标记精确匹配和零残留复核，并通过
   `test_release_gate` 9 项、TypeScript typecheck 与真实 ESLint 定向验证。
-- 完整零成本门禁将在本提交冻结后执行；实际结果仅写 gitignored 的 `.tmp/release-gate/`
-  与最终任务报告，不再通过跟踪文档改变候选 SHA。
+- 第一次预冻结门禁以 `-OfflineNative` 运行，在完整原生组件准备阶段因缺少锁定的
+  Tesseract 缓存资源 fail-closed；清理状态 PASS、复核残留 0。标准模式补齐并校验全部
+  锁定公开资源后，第二次门禁通过 376 项 Python、154 项 Desktop、构建、打包及 26/27
+  项 E2E，最终发现 `vertical.spec.ts` 仍等待 B2 前同步导出文案。
+- 已将该 E2E 改为核验持久化 Export Job 的 `completed` 状态、打开目录动作和成功历史，
+  同时修复 `ExportPage` 在作业状态刷新时未同步成功导出历史的问题；重建 win-unpacked
+  后纵向 4/4 E2E 通过，定向运行残留复核为 0。
+- 最终完整零成本门禁将在本次修复提交冻结后重新执行；实际结果仅写 gitignored 的
+  `.tmp/release-gate/` 与最终任务报告，不再通过跟踪文档改变候选 SHA。
 - 不发布、不 push，远程 CI 仅配置审查。
 
 ---

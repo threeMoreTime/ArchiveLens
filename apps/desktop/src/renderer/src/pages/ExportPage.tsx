@@ -62,8 +62,10 @@ export default function ExportPage() {
     try {
       const result = await window.archiveLens.export.listJobs(id, { limit: 50, offset: 0 });
       setJobs(result.items);
+      const exports = await window.archiveLens.export.list(id, { limit: 10, offset: 0 });
+      setHistory(exports.items);
     } catch {
-      // 作业列表读取失败不阻塞主流程；下次轮询/事件再刷新
+      // 作业或历史读取失败不阻塞主流程；下次轮询/事件再刷新
     }
   }, []);
 
