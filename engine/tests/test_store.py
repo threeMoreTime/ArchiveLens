@@ -80,7 +80,7 @@ class TaskStoreTests(unittest.TestCase):
         self.assertEqual([row["source_id"] for row in self.store.list_task_sources(task_id)], ["source-a", "source-b"])
         self.assertEqual([row["task_id"] for row in self.store.list_tasks(query="乙/同名")], [task_id])
 
-    def test_export_snapshot_streams_in_persisted_source_order(self) -> None:
+    def test_export_snapshot_streams_in_permanent_sequence_order(self) -> None:
         task_id = self.store.create_task(
             source_kind="files",
             source_files=[
@@ -102,8 +102,9 @@ class TaskStoreTests(unittest.TestCase):
             snapshot_rows = list(rows)
 
         self.assertEqual((total, page_count), (2, 2))
-        self.assertEqual([row["source_id"] for row in snapshot_rows], ["source-z", "source-a"])
-        self.assertEqual([row["source_ordinal"] for row in snapshot_rows], [0, 1])
+        self.assertEqual([row["source_id"] for row in snapshot_rows], ["source-a", "source-z"])
+        self.assertEqual([row["source_ordinal"] for row in snapshot_rows], [1, 0])
+        self.assertEqual([row["global_sequence"] for row in snapshot_rows], [1, 2])
         self.assertEqual(self.store.query_occurrences(task_id=task_id)[0], 3)
 
     def test_task_failures_and_export_history_roundtrip(self) -> None:

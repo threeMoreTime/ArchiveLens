@@ -105,11 +105,11 @@ class TaskOccurrenceReconciliationTests(unittest.TestCase):
 
             reopened = TaskStore(database)
             try:
-                self.assertEqual(SCHEMA_VERSION, 11)
+                self.assertEqual(SCHEMA_VERSION, 12)
                 task = reopened.get_task(task_id)
                 assert task is not None
                 self.assertEqual(task["search_script_scope"], "both")
-                self.assertEqual(reopened.conn.execute("PRAGMA user_version").fetchone()[0], 11)
+                self.assertEqual(reopened.conn.execute("PRAGMA user_version").fetchone()[0], 12)
                 self.assertIsNotNone(reopened.last_migration_backup)
             finally:
                 reopened.close()

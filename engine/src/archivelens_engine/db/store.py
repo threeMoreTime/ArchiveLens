@@ -40,7 +40,7 @@ from ..search_terms import (
     unicode_sequence,
 )
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 OCR_CORPUS_VERSION = 1
 OCR_INDEX_NOT_BUILT = "not_built"
 OCR_INDEX_BUILDING = "building"
@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS occurrences (
     occurrence_id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
+    global_sequence INTEGER NOT NULL CHECK(global_sequence > 0),
     document_id TEXT,
     file_path TEXT,
     relative_path TEXT,
@@ -448,6 +449,7 @@ class TaskStore:
                 self._migrate_schema(current)
             else:
                 self._create_occurrence_business_indexes()
+            self._ensure_occurrence_sequence_contract()
             self._ensure_export_job_contract()
             self.conn.execute(
                 "INSERT INTO schema_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -520,6 +522,98 @@ class TaskStore:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_business_key_matched_text "
             "ON occurrences(task_id, source_id, page_number, matched_text, bbox_hash) "
             "WHERE source_id <> '' AND bbox_hash <> '' AND matched_text IS NOT NULL AND matched_text <> ''"
+        )
+
+    def _ensure_occurrence_sequence_contract(self) -> None:
+        """回填并约束任务内永久命中序号。
+
+        v11 及更早数据库通过 ALTER TABLE 只能增加可空列，因此这里使用数据库
+        触发器补足正整数与不可变约束。回填顺序与历史导出顺序一致：来源导入
+        顺序、页码、页内命中顺序，最后以 occurrence_id 稳定打破并列。
+        """
+        self._ensure_column("occurrences", "global_sequence", "INTEGER")
+        rows = self.conn.execute(
+            """
+            SELECT o.occurrence_id, o.task_id, o.global_sequence
+            FROM occurrences o
+            LEFT JOIN task_sources ts
+              ON ts.task_id=o.task_id AND ts.source_id=o.source_id
+            ORDER BY o.task_id,
+                     CASE WHEN ts.ordinal IS NULL THEN 1 ELSE 0 END,
+                     ts.ordinal,
+                     COALESCE(o.source_id, ''),
+                     COALESCE(o.file_name, ''),
+                     COALESCE(o.page_number, 0),
+                     COALESCE(o.page_occurrence_index, 0),
+                     o.occurrence_id
+            """
+        ).fetchall()
+        used_by_task: dict[str, set[int]] = {}
+        for row in rows:
+            task_id = str(row["task_id"])
+            value = row["global_sequence"]
+            if isinstance(value, int) and value > 0:
+                used_by_task.setdefault(task_id, set()).add(value)
+        next_by_task: dict[str, int] = {}
+        for row in rows:
+            value = row["global_sequence"]
+            if isinstance(value, int) and value > 0:
+                continue
+            task_id = str(row["task_id"])
+            used = used_by_task.setdefault(task_id, set())
+            sequence = next_by_task.get(task_id, 1)
+            while sequence in used:
+                sequence += 1
+            self.conn.execute(
+                "UPDATE occurrences SET global_sequence=? WHERE occurrence_id=?",
+                (sequence, row["occurrence_id"]),
+            )
+            used.add(sequence)
+            next_by_task[task_id] = sequence + 1
+        invalid = self.conn.execute(
+            "SELECT COUNT(*) FROM occurrences "
+            "WHERE global_sequence IS NULL OR typeof(global_sequence) <> 'integer' OR global_sequence < 1"
+        ).fetchone()[0]
+        if invalid:
+            raise RuntimeError("migration could not establish valid occurrence sequences")
+        duplicates = self.conn.execute(
+            """
+            SELECT task_id, global_sequence, COUNT(*)
+            FROM occurrences
+            GROUP BY task_id, global_sequence
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        if duplicates:
+            raise RuntimeError("migration found duplicate occurrence sequences")
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_task_sequence "
+            "ON occurrences(task_id, global_sequence)"
+        )
+        self.conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_occurrences_sequence_insert
+            BEFORE INSERT ON occurrences
+            WHEN NEW.global_sequence IS NULL
+              OR typeof(NEW.global_sequence) <> 'integer'
+              OR NEW.global_sequence < 1
+            BEGIN
+                SELECT RAISE(ABORT, 'global_sequence must be a positive integer');
+            END
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_occurrences_sequence_update
+            BEFORE UPDATE OF global_sequence ON occurrences
+            WHEN NEW.global_sequence IS NULL
+              OR typeof(NEW.global_sequence) <> 'integer'
+              OR NEW.global_sequence < 1
+              OR NEW.global_sequence <> OLD.global_sequence
+            BEGIN
+                SELECT RAISE(ABORT, 'global_sequence is immutable');
+            END
+            """
         )
 
     def _migrate_schema(self, current: int) -> None:
@@ -1629,7 +1723,7 @@ class TaskStore:
     # ---- occurrences ----
     def add_occurrence(self, task_id: str, occ: dict[str, Any]) -> None:
         cols = [
-            "occurrence_id", "task_id", "document_id", "file_path", "relative_path",
+            "occurrence_id", "task_id", "global_sequence", "document_id", "file_path", "relative_path",
             "file_name", "page_number", "page_index", "page_occurrence_index",
             "source_id",
             "matched_character", "character_variant", "matched_text", "match_start", "match_end",
@@ -1660,6 +1754,12 @@ class TaskStore:
         placeholders = ", ".join("?" for _ in cols)
         # RLock 可重入：add_occurrences 持锁时本方法同线程可再进入
         with self._lock:
+            row = self.conn.execute(
+                "SELECT COALESCE(MAX(global_sequence), 0) + 1 AS next_sequence "
+                "FROM occurrences WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            record["global_sequence"] = int(row["next_sequence"])
             self.conn.execute(
                 f"INSERT OR IGNORE INTO occurrences ({', '.join(cols)}) VALUES ({placeholders})",
                 [record.get(c) for c in cols],
@@ -2836,8 +2936,7 @@ class TaskStore:
                     LEFT JOIN review_records r
                       ON r.task_id = o.task_id AND r.occurrence_id = o.occurrence_id
                     WHERE {clause}
-                    ORDER BY COALESCE(o.file_name, ''),
-                             o.page_number, o.page_occurrence_index, o.occurrence_id
+                    ORDER BY o.global_sequence
                     LIMIT ? OFFSET ?""",
                 params + [limit, offset],
             ).fetchall()
@@ -2894,10 +2993,7 @@ class TaskStore:
                 LEFT JOIN task_sources ts
                   ON ts.task_id = o.task_id AND ts.source_id = o.source_id
                 WHERE o.task_id=?
-                ORDER BY CASE WHEN ts.ordinal IS NULL THEN 1 ELSE 0 END,
-                         ts.ordinal,
-                         COALESCE(o.relative_path, o.file_name, ''),
-                         o.page_number, o.page_occurrence_index, o.occurrence_id
+                ORDER BY o.global_sequence
                 """,
                 (task_id,),
             )

@@ -167,6 +167,7 @@ export interface ExportJobCreateResult {
 export interface OccurrenceItem {
   occurrence_id: string;
   task_id: string;
+  global_sequence: number;
   document_id: string;
   file_path: string;
   file_name: string;
