@@ -33,9 +33,17 @@ def integrity(*, complete: bool = False) -> dict[str, object]:
     }
 
 
-def occurrence(*, occurrence_id: str, page_relpath: str, matched_text: str, x0: float) -> dict[str, object]:
+def occurrence(
+    *,
+    occurrence_id: str,
+    page_relpath: str,
+    matched_text: str,
+    x0: float,
+    global_sequence: int = 1,
+) -> dict[str, object]:
     return {
         "occurrence_id": occurrence_id,
+        "global_sequence": global_sequence,
         "document_id": "document-1",
         "file_name": "档案一.pdf",
         "relative_path": "卷一/档案一.pdf",
@@ -64,8 +72,20 @@ class HtmlExportTests(unittest.TestCase):
         pages.mkdir()
         Image.new("RGB", (3000, 1200), "white").save(pages / "page-12.png")
         self.items = [
-            occurrence(occurrence_id="hit-1", page_relpath="pages/page-12.png", matched_text="约", x0=0.1),
-            occurrence(occurrence_id="hit-2", page_relpath="pages/page-12.png", matched_text="約", x0=0.5),
+            occurrence(
+                occurrence_id="hit-1",
+                page_relpath="pages/page-12.png",
+                matched_text="约",
+                x0=0.1,
+                global_sequence=1,
+            ),
+            occurrence(
+                occurrence_id="hit-2",
+                page_relpath="pages/page-12.png",
+                matched_text="約",
+                x0=0.5,
+                global_sequence=2,
+            ),
         ]
         self.task = {"name": "档案检索", "search_text": "约 / 約", "workspace_dir": str(self.root)}
 
@@ -117,6 +137,10 @@ class HtmlExportTests(unittest.TestCase):
         self.assertIn('id="status-filter"', report)
         self.assertIn('id="report-search"', report)
         self.assertIn('id="sort-order"', report)
+        self.assertIn('<option value="sequence" selected>序号升序</option>', report)
+        self.assertIn('id="record-nav"', report)
+        self.assertIn('id="record-nav-toggle"', report)
+        self.assertIn('aria-label="全部筛选结果导航"', report)
         self.assertIn('id="image-modal"', report)
         self.assertIn('id="back-top"', report)
         self.assertIn("@page{size:A4 portrait", report)
@@ -125,6 +149,25 @@ class HtmlExportTests(unittest.TestCase):
         self.assertIn("Object.assign(state,saved)", report)
         self.assertIn("当前筛选条件不会影响打印内容", report)
         self.assertNotIn("contenteditable", report.lower())
+
+    def test_uses_permanent_sequence_and_occurrence_first_card_contract(self) -> None:
+        report = self.build()
+        script_match = re.search(r"const DATA=(.*?);\nconst STATUS_RANK=", report, re.DOTALL)
+        self.assertIsNotNone(script_match)
+        data = json.loads(script_match.group(1))
+
+        self.assertEqual(
+            [hit["globalSequence"] for page in data["pages"] for hit in page["hits"]],
+            [1, 2],
+        )
+        self.assertIn('sort:"sequence"', report)
+        self.assertIn('sequenceLabel=(value)=>`#${String(value).padStart(4,"0")}`', report)
+        self.assertIn('card.append(head,hitNode(hit),button)', report)
+        self.assertIn('button.append(imageStage(page,[hit]))', report)
+        self.assertIn('state.filtered.forEach((record)=>host.append(recordNavItem(record)))', report)
+        self.assertIn('target.scrollIntoView', report)
+        self.assertIn('button.title=record.page.relativePath', report)
+        self.assertIn('.occurrence-card.print-break{break-before:page}', report)
 
     def test_uses_hashed_csp_and_serializes_untrusted_content_without_dom_html_injection(self) -> None:
         self.task["name"] = '<script>alert("task")</script>'
@@ -222,7 +265,7 @@ class HtmlExportTests(unittest.TestCase):
         self.assertEqual(len({page["relativePath"] for page in data["pages"]}), 2)
         self.assertNotIn(r"F:\\甲", report)
         self.assertNotIn(r"G:\\乙", report)
-        self.assertIn("page.sourceId===state.file", report)
+        self.assertIn("page.sourceId!==state.file", report)
 
     def test_stream_writer_consumes_one_shot_items_and_atomically_replaces_output(self) -> None:
         output = self.root / "exports" / "report.html"
