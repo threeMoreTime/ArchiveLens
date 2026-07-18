@@ -10,7 +10,7 @@
 import { z } from "zod";
 
 /** IPC 协议版本，必须与 Python 侧 `archivelens_engine.PROTOCOL_VERSION` 一致。 */
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 3 as const;
 
 export const MAX_SEARCH_TEXT_LENGTH = 32;
 export const MAX_SOURCE_FILES = 200;
@@ -165,6 +165,8 @@ export const TaskCreateParamsSchema = z.union([
     ...TaskCreateCommonSchema,
     source_type: z.literal("folder").optional(),
     source_dir: z.string().min(1),
+    preflight_token: z.string().length(64).optional(),
+    preflight_confirmed: z.boolean().optional(),
   }),
   z.object({
     ...TaskCreateCommonSchema,
@@ -199,6 +201,7 @@ export const ErrorCodeSchema = z.enum([
   "SOURCE_FILE_CHANGED",
   "PAGE_RENDER_LIMIT_EXCEEDED",
   "OCR_CORPUS_UNAVAILABLE",
+  "PREFLIGHT_STALE",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -273,6 +276,9 @@ export const MethodNameSchema = z.enum([
   "app.info",
   "diagnostics.run",
   "tasks.create",
+  "tasks.preflight",
+  "tasks.preflightGet",
+  "tasks.preflightCancel",
   "tasks.start",
   "tasks.pause",
   "tasks.resume",
@@ -485,6 +491,74 @@ export const ExportJobCreateResultSchema = z.object({
   status: ExportJobStatusSchema,
   retry_of: z.string().optional().default(""),
 }).passthrough();
+
+export const SourcePreflightStatusSchema = z.enum([
+  "queued",
+  "running",
+  "cancelling",
+  "cancelled",
+  "completed",
+  "failed",
+]);
+export type SourcePreflightStatus = z.infer<typeof SourcePreflightStatusSchema>;
+
+export const SourcePreflightWarningSchema = z.object({
+  code: z.string().min(1),
+  message: z.string().min(1),
+});
+
+export const SourcePreflightDetailSchema = z.object({
+  path: z.string(),
+  reason: z.string(),
+  code: z.string().optional(),
+}).passthrough();
+
+export const SourcePreflightResultSchema = z.object({
+  source_dir: z.string().min(1),
+  supported_file_count: z.number().int().nonnegative(),
+  unsupported_file_count: z.number().int().nonnegative(),
+  duplicate_count: z.number().int().nonnegative(),
+  total_bytes: z.number().int().nonnegative(),
+  format_counts: z.record(z.string(), z.number().int().nonnegative()),
+  known_pages: z.number().int().nonnegative(),
+  estimated_pages: z.number().int().nonnegative(),
+  page_count_complete: z.boolean(),
+  unknown_page_file_count: z.number().int().nonnegative(),
+  inaccessible_files: z.array(SourcePreflightDetailSchema),
+  inaccessible_count: z.number().int().nonnegative(),
+  invalid_files: z.array(SourcePreflightDetailSchema),
+  invalid_file_count: z.number().int().nonnegative(),
+  skipped_links: z.array(SourcePreflightDetailSchema),
+  skipped_link_count: z.number().int().nonnegative(),
+  warning_codes: z.array(z.string()),
+  warnings: z.array(SourcePreflightWarningSchema),
+  available_disk_bytes: z.number().int(),
+  estimated_required_disk_bytes: z.number().int().nonnegative(),
+  estimate_basis: z.string().min(1),
+  requires_confirmation: z.boolean(),
+  confirmation_codes: z.array(z.string()),
+  blocking_codes: z.array(z.string()),
+  can_create: z.boolean(),
+  truncated_details: z.boolean(),
+  scan_token: z.string().length(64),
+});
+export type SourcePreflightResult = z.infer<typeof SourcePreflightResultSchema>;
+
+export const SourcePreflightJobSchema = z.object({
+  preflight_id: z.string().min(1),
+  source_dir: z.string().min(1),
+  status: SourcePreflightStatusSchema,
+  result: SourcePreflightResultSchema.nullable(),
+  error_code: ErrorCodeSchema.nullable(),
+  error_message: z.string().nullable(),
+  created_at: z.string().min(1),
+  updated_at: z.string().min(1),
+  finished_at: z.string().nullable(),
+});
+export type SourcePreflightJob = z.infer<typeof SourcePreflightJobSchema>;
+
+export const SourcePreflightStartParamsSchema = z.object({ source_dir: z.string().min(1) });
+export const SourcePreflightJobParamsSchema = z.object({ preflight_id: z.string().min(1) });
 
 export const ExportJobActionResultSchema = z.object({
   export_id: z.string().min(1),
@@ -718,6 +792,8 @@ export const TaskSearchEventPayloadSchema = z.object({
 
 export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "tasks.create") return TaskCreateResultSchema.parse(value);
+  if (["tasks.preflight", "tasks.preflightGet", "tasks.preflightCancel"].includes(method))
+    return SourcePreflightJobSchema.parse(value);
   if (method === "tasks.delete") return TaskDeleteResultSchema.parse(value);
   if (method === "tasks.cleanupTarget") return TaskCleanupTargetResultSchema.parse(value);
   if (method === "tasks.get") return TaskSummarySchema.parse(value);

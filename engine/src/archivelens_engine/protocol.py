@@ -47,6 +47,7 @@ class ErrorCode:
     SOURCE_FILE_CHANGED = "SOURCE_FILE_CHANGED"
     PAGE_RENDER_LIMIT_EXCEEDED = "PAGE_RENDER_LIMIT_EXCEEDED"
     OCR_CORPUS_UNAVAILABLE = "OCR_CORPUS_UNAVAILABLE"
+    PREFLIGHT_STALE = "PREFLIGHT_STALE"
 
 
 # --------------------------------------------------------------------------- #

@@ -13,6 +13,7 @@ import type {
   ReviewHighlightSettingsUpdateParams,
   ReviewPageImageResult,
   ReviewPreparePageImageParams,
+  SourcePreflightJob,
 } from "@shared/index";
 
 export interface EnvironmentInfo {
@@ -218,6 +219,8 @@ export interface ArchiveLensApi {
     create(p: ({
       source_type?: "folder";
       source_dir: string;
+      preflight_token?: string;
+      preflight_confirmed?: boolean;
     } | {
       source_type: "files";
       source_files: string[];
@@ -240,6 +243,9 @@ export interface ArchiveLensApi {
       search_mode: "exact_literal";
       review_preferences?: ReviewDisplayPreferences;
     }>;
+    preflight(source_dir: string): Promise<SourcePreflightJob>;
+    getPreflight(preflight_id: string): Promise<SourcePreflightJob>;
+    cancelPreflight(preflight_id: string): Promise<SourcePreflightJob>;
     start(task_id: string): Promise<{ task_id: string; status: string }>;
     get(task_id: string): Promise<TaskSummary>;
     list(p?: { limit?: number; offset?: number; status?: string; query?: string }): Promise<{ items: TaskSummary[]; limit: number; offset: number; total: number }>;

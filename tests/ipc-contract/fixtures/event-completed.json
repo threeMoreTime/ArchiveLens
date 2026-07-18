@@ -1,1 +1,1 @@
-{"protocol_version":2,"event":"task.completed","task_id":"task_abc","sequence":100,"timestamp":"2026-07-07T01:00:00+00:00","payload":{"occurrence_count":6,"search_text":"档案","search_mode":"exact_literal"}}
+{"protocol_version":3,"event":"task.completed","task_id":"task_abc","sequence":100,"timestamp":"2026-07-07T01:00:00+00:00","payload":{"occurrence_count":6,"search_text":"档案","search_mode":"exact_literal"}}

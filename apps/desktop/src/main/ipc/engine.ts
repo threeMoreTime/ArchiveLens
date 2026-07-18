@@ -8,9 +8,13 @@ import {
   OcrSearchHitsParamsSchema,
   OcrSearchPreparePageImageParamsSchema,
   OcrSearchSessionsParamsSchema,
+  SourcePreflightJobParamsSchema,
+  SourcePreflightStartParamsSchema,
+  TaskCreateParamsSchema,
 } from "@shared/index";
 
 export const HTML_EXPORT_TIMEOUT_MS = 30 * 60_000;
+export const TASK_CREATE_TIMEOUT_MS = 30 * 60_000;
 
 /**
  * 转发类 IPC：把 Renderer 请求经 Sidecar 投递到 Python Engine。
@@ -28,7 +32,18 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
     return result;
   });
 
-  ipcMain.handle("tasks.create", async (_e, params) => sidecar.call("tasks.create", params));
+  ipcMain.handle("tasks.create", async (_e, params: unknown) =>
+    sidecar.call("tasks.create", TaskCreateParamsSchema.parse(params), TASK_CREATE_TIMEOUT_MS),
+  );
+  ipcMain.handle("tasks.preflight", async (_e, params: unknown) =>
+    sidecar.call("tasks.preflight", SourcePreflightStartParamsSchema.parse(params)),
+  );
+  ipcMain.handle("tasks.preflightGet", async (_e, params: unknown) =>
+    sidecar.call("tasks.preflightGet", SourcePreflightJobParamsSchema.parse(params)),
+  );
+  ipcMain.handle("tasks.preflightCancel", async (_e, params: unknown) =>
+    sidecar.call("tasks.preflightCancel", SourcePreflightJobParamsSchema.parse(params)),
+  );
   ipcMain.handle("tasks.start", async (_e, params) => {
     const r = await sidecar.call<{ workspace_dir?: string }>("tasks.start", params);
     // 扫描完成后 workspace_dir 由 engine 写入；此处也兼容查询时再注册。

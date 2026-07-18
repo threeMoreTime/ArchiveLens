@@ -14,6 +14,6 @@ from __future__ import annotations
 __version__ = "0.1.0-alpha.11"
 
 #: Electron Main 与 Python Engine 之间 IPC 协议版本。两端必须一致。
-PROTOCOL_VERSION: int = 2
+PROTOCOL_VERSION: int = 3
 
 __all__ = ["__version__", "PROTOCOL_VERSION"]

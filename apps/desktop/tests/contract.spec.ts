@@ -36,6 +36,8 @@ import {
   MethodNameSchema,
   normalizeSearchText,
   parseMethodResult,
+  SourcePreflightJobSchema,
+  SourcePreflightResultSchema,
 } from "@shared/index";
 
 const FIXTURE_DIR = path.resolve(__dirname, "../../../tests/ipc-contract/fixtures");
@@ -118,6 +120,61 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(TaskCreateParamsSchema.safeParse({ source_type: "files", source_files: Array.from({ length: 201 }, (_, index) => `E:\\${index}.pdf`), search_text: "档案" }).success).toBe(false);
   });
 
+  it("文件夹预检合同覆盖统计、磁盘、确认与取消生命周期", () => {
+    expect(PROTOCOL_VERSION).toBe(3);
+    for (const method of ["tasks.preflight", "tasks.preflightGet", "tasks.preflightCancel"]) {
+      expect(MethodNameSchema.safeParse(method).success, method).toBe(true);
+    }
+    expect(ErrorCodeSchema.safeParse("PREFLIGHT_STALE").success).toBe(true);
+    expect(TaskCreateParamsSchema.safeParse({
+      source_type: "folder",
+      source_dir: "E:\\OCR",
+      search_text: "档案",
+      preflight_token: "a".repeat(64),
+      preflight_confirmed: true,
+    }).success).toBe(true);
+    const result = SourcePreflightResultSchema.parse({
+      source_dir: "E:\\OCR",
+      supported_file_count: 2,
+      unsupported_file_count: 1,
+      duplicate_count: 0,
+      total_bytes: 1024,
+      format_counts: { pdf: 1, png: 1 },
+      known_pages: 3,
+      estimated_pages: 3,
+      page_count_complete: true,
+      unknown_page_file_count: 0,
+      inaccessible_files: [],
+      inaccessible_count: 0,
+      invalid_files: [],
+      invalid_file_count: 0,
+      skipped_links: [],
+      skipped_link_count: 0,
+      warning_codes: [],
+      warnings: [],
+      available_disk_bytes: 10_000,
+      estimated_required_disk_bytes: 5_000,
+      estimate_basis: "test",
+      requires_confirmation: false,
+      confirmation_codes: [],
+      blocking_codes: [],
+      can_create: true,
+      truncated_details: false,
+      scan_token: "b".repeat(64),
+    });
+    expect(SourcePreflightJobSchema.safeParse({
+      preflight_id: "preflight-1",
+      source_dir: "E:\\OCR",
+      status: "completed",
+      result,
+      error_code: null,
+      error_message: null,
+      created_at: "2026-07-18T00:00:00Z",
+      updated_at: "2026-07-18T00:00:01Z",
+      finished_at: "2026-07-18T00:00:01Z",
+    }).success).toBe(true);
+  });
+
   it("review-update 合法 decision 通过", () => {
     expect(RequestSchema.safeParse(load("review-update.json")).success).toBe(true);
   });
@@ -133,7 +190,7 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(ReviewDisplayPreferencesSchema.parse({ ...preferences, page_quality: "standard" }).page_quality).toBe("maximum");
   });
 
-  it("原文件页面证据方法保持协议 v2 的增量兼容", () => {
+  it("原文件页面证据方法保持现行协议的增量兼容", () => {
     expect(MethodNameSchema.safeParse("review.preparePageImage").success).toBe(true);
     expect(ReviewPreparePageImageParamsSchema.safeParse({
       task_id: "task-1",
@@ -344,19 +401,19 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     }
   });
 
-  it("engine.ready payload 必须携带严格 protocol v2 与 engine version", () => {
-    const valid = { protocol_version: 2, event: "engine.ready", task_id: null, payload: { protocol_version: 2, engine_version: "0.1.0-alpha.11" } };
+  it("engine.ready payload 必须携带严格 protocol v3 与 engine version", () => {
+    const valid = { protocol_version: PROTOCOL_VERSION, event: "engine.ready", task_id: null, payload: { protocol_version: PROTOCOL_VERSION, engine_version: "0.1.0-alpha.11" } };
     expect(EngineReadyEventSchema.safeParse(valid).success).toBe(true);
     for (const payload of [
       { protocol_version: 1, engine_version: "old" },
       { engine_version: "missing" },
       "invalid",
-      { protocol_version: "2", engine_version: "string-version" },
-      { protocol_version: 3, engine_version: "future" },
+      { protocol_version: "3", engine_version: "string-version" },
+      { protocol_version: PROTOCOL_VERSION + 1, engine_version: "future" },
     ]) {
       expect(EngineReadyEventSchema.safeParse({ ...valid, payload }).success).toBe(false);
     }
-    expect(EngineReadyEventSchema.safeParse({ ...valid, payload: { protocol_version: 2.0, engine_version: "same-number" } }).success).toBe(true);
+    expect(EngineReadyEventSchema.safeParse({ ...valid, payload: { protocol_version: 3.0, engine_version: "same-number" } }).success).toBe(true);
   });
 
   it("task create/get/list 结果使用明确运行时 schema", () => {
@@ -375,7 +432,7 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
 
   it("非法枚举 decision 被拒", () => {
     const bad = {
-      protocol_version: 2,
+      protocol_version: PROTOCOL_VERSION,
       request_id: "r",
       method: "review.updateDecision",
       params: { task_id: "t", occurrence_id: "o", decision: "bogus" },
@@ -384,7 +441,7 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(RequestSchema.safeParse(bad).success).toBe(true);
   });
 
-  it("任务删除 cleanup 可选字段与新方法保持协议 v2 兼容（不新增错误码、不递增版本）", () => {
+  it("任务删除 cleanup 使用附加字段和方法且不新增专用错误码", () => {
     const baseTask = {
       task_id: "task-1", status: "completed", search_text: "档", search_terms: ["档"],
       search_mode: "exact_literal", processed_pages: 1, total_pages: 1, occurrence_count: 1,
@@ -401,10 +458,9 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(TaskCleanupTargetResultSchema.safeParse({ task_id: "task-1", path: "E:\\residual", extra: 1 }).success).toBe(true);
     // 闭合枚举：未知错误码被拒——证明 B1 未新增协议错误码、因此无需递增 PROTOCOL_VERSION
     expect(ErrorCodeSchema.safeParse("CLEANUP_FAILED_HYPOTHETICAL").success).toBe(false);
-    expect(PROTOCOL_VERSION).toBe(2);
   });
 
-  it("B2 导出作业方法与 schema 保持协议 v2 兼容（仅附加方法/字段，未新增错误码）", () => {
+  it("B2 导出作业使用附加方法和字段且不新增专用错误码", () => {
     for (const method of ["exports.create", "exports.get", "exports.listJobs", "exports.cancel", "exports.retry"]) {
       expect(MethodNameSchema.safeParse(method).success, method).toBe(true);
     }
@@ -424,7 +480,6 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(parseMethodResult("exports.cancel", { export_id: "exp-2", status: "cancelling" })).toEqual({ export_id: "exp-2", status: "cancelling" });
     expect(() => parseMethodResult("exports.cancel", { export_id: "exp-2", task_id: "task-1", format: "json", status: "cancelling" })).not.toThrow();
     expect(ExportJobSchema.safeParse({ ...job, format: "xml" }).success).toBe(false);
-    // 未新增协议错误码、未递增版本（并发冲突复用 TASK_STATE_CONFLICT）
-    expect(PROTOCOL_VERSION).toBe(2);
+    // B2 本身未新增协议错误码（并发冲突复用 TASK_STATE_CONFLICT）；当前 v3 由 B3 必需预检链触发。
   });
 });

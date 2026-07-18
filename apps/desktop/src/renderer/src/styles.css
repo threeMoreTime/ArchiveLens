@@ -176,6 +176,11 @@ body {
 .al-config-summary { display:grid; gap:var(--al-space-3); margin-top:var(--al-space-3); }
 .al-config-summary span { display:grid; gap:var(--al-space-1); color:var(--muted); font-size:12px; min-width:0; }
 .al-config-summary strong { color:var(--ink); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.al-preflight-card { display:grid; gap:var(--al-space-3); }
+.al-preflight-running { display:flex; align-items:center; gap:var(--al-space-2); color:var(--muted); }
+.al-preflight-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--al-space-3); }
+.al-preflight-grid span { display:grid; gap:var(--al-space-1); min-width:0; color:var(--muted); font-size:12px; }
+.al-preflight-grid strong { color:var(--ink); font-size:14px; overflow-wrap:anywhere; }
 .al-new-scan-footer { position:sticky; bottom:0; display:flex; justify-content:space-between; gap:var(--al-space-4); align-items:center; padding:var(--al-space-4) 0; background:linear-gradient(90deg,rgba(244,239,231,.96),rgba(244,239,231,.88)); }
 .al-task-meta { margin: 16px 0; line-height: 1.8; }
 .al-task-card { background:var(--card); border:1px solid var(--line); border-radius:var(--al-radius-md); padding:var(--al-space-6); margin:var(--al-space-4) 0; box-shadow:var(--al-shadow-1); }
@@ -540,6 +545,7 @@ button.al-task-delete-button:disabled { background:#efd4d1; color:#875b56; borde
   .al-search-detail { min-height:620px; overflow:visible; }
 }
 @media (max-width: 720px) {
+  .al-preflight-grid { grid-template-columns:1fr; }
   .al-home-aside, .al-new-scan-aside, .al-task-aside, .al-export-task-grid, .al-export-format-grid, .al-export-aside, .al-settings-aside { grid-template-columns:1fr; }
   .al-review-option-grid { grid-template-columns:1fr; }
   .al-context-radius-row { grid-template-columns:1fr auto; }

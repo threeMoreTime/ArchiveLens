@@ -13,7 +13,7 @@
 | 能力 | 状态 | 证据 |
 | --- | --- | --- |
 | Python Engine 项目化（`engine/`） | ✅ | 正式包 + pyproject + lock |
-| JSONL Sidecar IPC（TS↔Python） | ✅ | Protocol v2 + Python/TS 共享契约 |
+| JSONL Sidecar IPC（TS↔Python） | ✅ | Protocol v3 + Python/TS 共享契约 |
 | Electron Main/Preload/Renderer 安全骨架 | ✅ | typecheck + build + 生命周期 E2E |
 | Sidecar 端到端握手 | ✅ | `engine.ready` + `app.info` + 主窗口 |
 | Worker/Task 真实状态机（修复残留 checkpoint 误判） | ✅ | checkpoint / sequence / migration 回归 |
@@ -27,6 +27,7 @@
 | 失败恢复与诊断 | ✅ | 结构化失败明细 + 影响/建议 + 日志入口 |
 | 校对与导出保护 | ✅ | 备注自动保存 + 系统/人工状态分离 + 应用内阶段性导出确认 |
 | 图片档案扫描 | ✅ | TIFF（含多页）/ JPEG / PNG，支持混合任务与创建期安全校验 |
+| 文件夹扫描预检 | ✅ | 可取消；统计格式、页数和磁盘；不跟随链接；大任务软警告确认 |
 
 详见 [docs/architecture.md](docs/architecture.md) 与最终阶段报告。
 

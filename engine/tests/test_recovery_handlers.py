@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from PIL import Image
+
 from archivelens_engine.server import Server, _h_tasks_create, _h_tasks_resume, _h_tasks_start
 from archivelens_engine.protocol import ProtocolError
 
@@ -18,6 +20,11 @@ class RecoveryHandlerTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.src = Path(self.tmp) / "src"
         self.src.mkdir()
+        image = Image.new("RGB", (8, 8), color="white")
+        try:
+            image.save(self.src / "page.png")
+        finally:
+            image.close()
         self.server = Server(workspace_root=self.tmp)
 
     def tearDown(self) -> None:

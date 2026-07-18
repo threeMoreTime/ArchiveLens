@@ -13,6 +13,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+
 from archivelens_engine import PROTOCOL_VERSION
 from archivelens_engine.protocol import (
     ErrorCode,
@@ -56,6 +58,7 @@ _VALID_ERROR_CODES = {
     "SOURCE_FILE_CHANGED",
     "PAGE_RENDER_LIMIT_EXCEEDED",
     "OCR_CORPUS_UNAVAILABLE",
+    "PREFLIGHT_STALE",
 }
 
 
@@ -102,6 +105,11 @@ class IpcContractPythonTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "src"
             src.mkdir()
+            image = Image.new("RGB", (8, 8), "white")
+            try:
+                image.save(src / "page.png", "PNG")
+            finally:
+                image.close()
             with patch.dict(os.environ, {"AL_SLOWFAKE_PAGES": "1"}):
                 server = Server(workspace_root=tmpdir)
             try:

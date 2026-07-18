@@ -126,14 +126,15 @@ class HandlersTests(unittest.TestCase):
         src = Path(self.tmp) / "src"
         src.mkdir()
         (src / "a.pdf").write_bytes(b"%PDF-1.4")
-        (src / "b.djvu").write_bytes(b"AT&T")
+        (src / "b.djvu").write_bytes(b"AT&TFORM")
         Image.new("RGB", (8, 8), color="white").save(src / "c.tiff")
         Image.new("RGB", (8, 8), color="white").save(src / "d.jpg")
         Image.new("RGB", (8, 8), color="white").save(src / "e.png")
         (src / "ignore.txt").write_text("x")
-        result = self.server.handlers["tasks.create"](
-            self.server, {"source_dir": str(src), "search_text": "  档案  "}
-        )
+        with mock.patch("archivelens_engine.source_preflight.DocumentBackendRegistry.page_count", return_value=1):
+            result = self.server.handlers["tasks.create"](
+                self.server, {"source_dir": str(src), "search_text": "  档案  "}
+            )
         self.assertEqual(result["file_count"], 5)
         self.assertEqual(result["counts"]["tiff"], 1)
         self.assertEqual(result["counts"]["jpeg"], 1)
@@ -148,7 +149,7 @@ class HandlersTests(unittest.TestCase):
     def test_tasks_create_persists_review_preferences(self) -> None:
         src = Path(self.tmp) / "preferences"
         src.mkdir()
-        (src / "a.pdf").write_bytes(b"%PDF-1.4")
+        Image.new("RGB", (8, 8), color="white").save(src / "a.png")
         preferences = {"page_quality": "high", "context_direction": "ttb", "context_radius": 28}
         result = self.server.handlers["tasks.create"](
             self.server,
@@ -340,6 +341,7 @@ class HandlersTests(unittest.TestCase):
     def test_tasks_create_rolls_back_task_when_initial_event_fails(self) -> None:
         src = Path(self.tmp) / "atomic-src"
         src.mkdir()
+        Image.new("RGB", (8, 8), color="white").save(src / "page.png")
         self.server.store.conn.execute(
             "CREATE TRIGGER fail_created_event BEFORE INSERT ON task_events BEGIN SELECT RAISE(FAIL, 'injected create event failure'); END"
         )

@@ -59,6 +59,7 @@ from .protocol import (
 from .runtime.task_control import TaskControl
 from .runtime.task_state import LEGAL_TRANSITIONS, TERMINAL_TASK_STATUSES, TaskStateConflict, can_resume
 from .search_terms import EXACT_LITERAL_SEARCH_MODE, normalize_search_text, unicode_sequence
+from .source_preflight import PreflightCancelled, preflight_folder
 
 Handler = Callable[["Server", dict[str, Any]], dict[str, Any]]
 SLOWFAKE_SOURCE_ID = "source-main"
@@ -139,6 +140,9 @@ class Server:
         self._export_state_lock = threading.RLock()
         self._export_threads: dict[str, threading.Thread] = {}
         self._export_cancel_events: dict[str, threading.Event] = {}
+        self._preflight_lock = threading.RLock()
+        self._preflight_jobs: dict[str, dict[str, Any]] = {}
+        self._preflight_cancel_events: dict[str, threading.Event] = {}
         try:
             self.store.reconcile_incomplete_tasks(reason="ENGINE_PROCESS_EXITED")
             self.reconcile_cleanup_jobs()
@@ -377,6 +381,9 @@ class Server:
                 "app.shutdown": _h_shutdown,
                 "diagnostics.run": _h_diagnostics,
                 "tasks.create": _h_tasks_create,
+                "tasks.preflight": _h_tasks_preflight,
+                "tasks.preflightGet": _h_tasks_preflight_get,
+                "tasks.preflightCancel": _h_tasks_preflight_cancel,
                 "tasks.start": _h_tasks_start,
                 "tasks.get": _h_tasks_get,
                 "tasks.list": _h_tasks_list,
@@ -692,7 +699,9 @@ class Server:
                 review_image_quality=task["review_preferences"]["page_quality"],
                 context_direction=task["review_preferences"]["context_direction"],
                 context_radius=task["review_preferences"]["context_radius"],
-                source_files=self.store.list_task_sources(task_id) if task.get("source_kind") == "files" else None,
+                # B3 folder tasks also persist the safe preflight manifest.  This
+                # prevents the scanner from re-enumerating skipped junctions.
+                source_files=self.store.list_task_sources(task_id) or None,
                 resume_state_by_source=self.store.list_task_resume_states(task_id),
                 task_control=tc,
                 ocr_engine=self.ocr_engine,
@@ -855,6 +864,14 @@ def _h_shutdown(server: Server, params: dict) -> dict:
                 event.set()
         except Exception as exc:
             server._cleanup_diag(export_id, "shutdown_cancel_export", exc)
+    # Preflight is ephemeral; request cooperative cancellation so no directory
+    # traversal continues during graceful shutdown.
+    with server._preflight_lock:
+        for preflight_id, event in server._preflight_cancel_events.items():
+            event.set()
+            job = server._preflight_jobs.get(preflight_id)
+            if job is not None and job.get("status") not in _PREFLIGHT_TERMINAL:
+                job.update(status="cancelling", updated_at=now_iso())
     server.emit_event("engine.shutdown", payload={"reason": "requested"})
     return {"status": "shutting_down"}
 
@@ -947,6 +964,156 @@ def _validate_file_sources(params: dict[str, Any]) -> tuple[list[dict[str, str]]
     return records, source_dir, source_label
 
 
+_PREFLIGHT_TERMINAL = {"completed", "cancelled", "failed"}
+_PREFLIGHT_ACTIVE_LIMIT = 2
+
+
+def _preflight_public_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in job.items()
+        if key not in {"thread"}
+    }
+
+
+def _preflight_failure(exc: BaseException) -> tuple[str, str]:
+    if isinstance(exc, FileNotFoundError):
+        return ErrorCode.PATH_NOT_FOUND, str(exc)
+    if isinstance(exc, (PermissionError, NotADirectoryError)):
+        return ErrorCode.PERMISSION_DENIED, str(exc)
+    return ErrorCode.UNKNOWN_ERROR, str(exc) or exc.__class__.__name__
+
+
+def _run_preflight_job(server: Server, preflight_id: str, source_dir: str, cancel_event: threading.Event) -> None:
+    with server._preflight_lock:
+        job = server._preflight_jobs.get(preflight_id)
+        if job is None:
+            return
+        job.update(status="running", updated_at=now_iso())
+    try:
+        result, _manifest = preflight_folder(
+            source_dir,
+            server.workspace_root,
+            server.config,
+            cancel_event=cancel_event,
+        )
+        with server._preflight_lock:
+            job = server._preflight_jobs.get(preflight_id)
+            if job is not None:
+                job.update(status="completed", result=result, updated_at=now_iso(), finished_at=now_iso())
+    except PreflightCancelled:
+        with server._preflight_lock:
+            job = server._preflight_jobs.get(preflight_id)
+            if job is not None:
+                job.update(status="cancelled", updated_at=now_iso(), finished_at=now_iso())
+    except Exception as exc:  # noqa: BLE001 - background job must preserve diagnostics
+        code, message = _preflight_failure(exc)
+        with server._preflight_lock:
+            job = server._preflight_jobs.get(preflight_id)
+            if job is not None:
+                job.update(
+                    status="failed",
+                    error_code=code,
+                    error_message=message,
+                    updated_at=now_iso(),
+                    finished_at=now_iso(),
+                )
+    finally:
+        with server._preflight_lock:
+            server._preflight_cancel_events.pop(preflight_id, None)
+
+
+def _h_tasks_preflight(server: Server, params: dict) -> dict:
+    source_dir = _require(params, "source_dir", str).strip()
+    if not source_dir:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "source_dir 不能为空")
+    with server._preflight_lock:
+        active = sum(1 for item in server._preflight_jobs.values() if item.get("status") not in _PREFLIGHT_TERMINAL)
+        if active >= _PREFLIGHT_ACTIVE_LIMIT:
+            raise ProtocolError(ErrorCode.TASK_STATE_CONFLICT, "当前预检任务已达并发上限，请先取消或等待完成")
+        terminal_ids = [
+            key for key, item in server._preflight_jobs.items()
+            if item.get("status") in _PREFLIGHT_TERMINAL
+        ]
+        for old_id in terminal_ids[:-20]:
+            server._preflight_jobs.pop(old_id, None)
+        preflight_id = new_id("preflight_")
+        created = now_iso()
+        cancel_event = threading.Event()
+        job: dict[str, Any] = {
+            "preflight_id": preflight_id,
+            "source_dir": source_dir,
+            "status": "queued",
+            "result": None,
+            "error_code": None,
+            "error_message": None,
+            "created_at": created,
+            "updated_at": created,
+            "finished_at": None,
+        }
+        server._preflight_jobs[preflight_id] = job
+        server._preflight_cancel_events[preflight_id] = cancel_event
+        thread = threading.Thread(
+            target=_run_preflight_job,
+            args=(server, preflight_id, source_dir, cancel_event),
+            name=f"preflight-{preflight_id}",
+            daemon=True,
+        )
+        job["thread"] = thread
+        try:
+            thread.start()
+        except Exception as exc:
+            job.pop("thread", None)
+            server._preflight_cancel_events.pop(preflight_id, None)
+            job.update(
+                status="failed",
+                error_code=ErrorCode.UNKNOWN_ERROR,
+                error_message="预检工作线程启动失败",
+                updated_at=now_iso(),
+                finished_at=now_iso(),
+            )
+            raise ProtocolError(ErrorCode.UNKNOWN_ERROR, "预检工作线程启动失败") from exc
+        return _preflight_public_job(job)
+
+
+def _h_tasks_preflight_get(server: Server, params: dict) -> dict:
+    preflight_id = _require(params, "preflight_id", str)
+    with server._preflight_lock:
+        job = server._preflight_jobs.get(preflight_id)
+        if job is None:
+            raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"预检任务不存在：{preflight_id}")
+        return _preflight_public_job(job)
+
+
+def _h_tasks_preflight_cancel(server: Server, params: dict) -> dict:
+    preflight_id = _require(params, "preflight_id", str)
+    with server._preflight_lock:
+        job = server._preflight_jobs.get(preflight_id)
+        if job is None:
+            raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"预检任务不存在：{preflight_id}")
+        if job.get("status") in _PREFLIGHT_TERMINAL:
+            return _preflight_public_job(job)
+        event = server._preflight_cancel_events.get(preflight_id)
+        if event is not None:
+            event.set()
+        job.update(status="cancelling", updated_at=now_iso())
+        return _preflight_public_job(job)
+
+
+def _raise_for_blocked_preflight(report: dict[str, Any]) -> None:
+    blocking = list(report.get("blocking_codes") or [])
+    if not blocking:
+        return
+    details = {"preflight": report}
+    if "DISK_SPACE_LOW" in blocking:
+        raise ProtocolError(ErrorCode.DISK_SPACE_LOW, "任务工作区所在磁盘空间不足", details)
+    if "INACCESSIBLE_PATHS" in blocking:
+        raise ProtocolError(ErrorCode.PERMISSION_DENIED, "文件夹包含无法读取的路径，未创建任务", details)
+    if "NO_SUPPORTED_FILES" in blocking:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "文件夹中没有受支持的档案文件", details)
+    raise ProtocolError(ErrorCode.VALIDATION_ERROR, "文件夹包含无效档案文件，未创建任务", details)
+
+
 def _h_tasks_create(server: Server, params: dict) -> dict:
     if "parallel_workers" in params and (type(params["parallel_workers"]) is not int or params["parallel_workers"] != 1):
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "parallel_workers 当前仅支持整数 1")
@@ -973,11 +1140,35 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
     if source_type not in {"folder", "files"}:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "source_type 仅支持 folder 或 files")
     source_files: list[dict[str, str]] | None = None
+    preflight_report: dict[str, Any] | None = None
     if source_type == "folder":
         source_dir = _require(params, "source_dir", str)
+        supplied_token = params.get("preflight_token")
+        if supplied_token is not None and not isinstance(supplied_token, str):
+            raise ProtocolError(ErrorCode.VALIDATION_ERROR, "preflight_token 必须是字符串")
+        confirmed = params.get("preflight_confirmed", False)
+        if type(confirmed) is not bool:
+            raise ProtocolError(ErrorCode.VALIDATION_ERROR, "preflight_confirmed 必须是布尔值")
+        try:
+            preflight_report, source_files = preflight_folder(source_dir, server.workspace_root, server.config)
+        except (FileNotFoundError, PermissionError, NotADirectoryError) as exc:
+            code, message = _preflight_failure(exc)
+            raise ProtocolError(code, message) from exc
+        if supplied_token is not None and supplied_token != preflight_report["scan_token"]:
+            raise ProtocolError(
+                ErrorCode.PREFLIGHT_STALE,
+                "文件夹内容在预检后发生变化，请重新预检",
+                {"preflight": preflight_report},
+            )
+        _raise_for_blocked_preflight(preflight_report)
+        if preflight_report["requires_confirmation"] and not confirmed:
+            raise ProtocolError(
+                ErrorCode.VALIDATION_ERROR,
+                "该文件夹存在规模、链接、网络或磁盘风险，需要确认后才能创建任务",
+                {"preflight": preflight_report, "requires_confirmation": True},
+            )
+        source_dir = str(preflight_report["source_dir"])
         src = Path(source_dir)
-        if not src.exists() or not src.is_dir():
-            raise ProtocolError(ErrorCode.PATH_NOT_FOUND, f"来源目录不存在：{source_dir}")
         source_kind = "folder"
         source_label = src.name or str(src)
     else:
@@ -993,31 +1184,9 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
     except OSError as exc:
         raise ProtocolError(ErrorCode.PERMISSION_DENIED, f"输出目录不可写：{output_dir}", {"error": str(exc)})
 
-    counts = {key: 0 for key in FORMAT_COUNT_KEYS}
-    if source_files is None:
-        invalid_files: list[dict[str, str]] = []
-        for p in src.rglob("*"):
-            if not p.is_file():
-                continue
-            if p.suffix.lower() not in SUPPORTED_SOURCE_SUFFIXES:
-                continue
-            if p.suffix.lower() in RASTER_SOURCE_SUFFIXES:
-                try:
-                    RASTER_IMAGE_BACKEND.validate(p)
-                except DocumentBackendError as exc:
-                    invalid_files.append({"path": str(p), "reason": exc.message})
-                    continue
-            counts[count_key(p)] += 1
-        if invalid_files:
-            preview = "；".join(f"{Path(item['path']).name}：{item['reason']}" for item in invalid_files[:5])
-            suffix = "；其余文件请查看错误详情" if len(invalid_files) > 5 else ""
-            raise ProtocolError(
-                ErrorCode.VALIDATION_ERROR,
-                f"文件夹包含无效图片，未创建任务：{preview}{suffix}",
-                {"invalid_files": invalid_files},
-            )
-    else:
-        for source in source_files:
+    counts = dict(preflight_report["format_counts"]) if preflight_report is not None else {key: 0 for key in FORMAT_COUNT_KEYS}
+    if preflight_report is None:
+        for source in source_files or []:
             counts[count_key(Path(source["file_path"]))] += 1
     file_count = sum(counts.values())
 
@@ -1032,8 +1201,10 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         "search_mode": EXACT_LITERAL_SEARCH_MODE,
         "review_preferences": review_preferences,
     }
-    if source_files is not None:
+    if source_kind == "files" and source_files is not None:
         payload["source_files"] = [source["file_path"] for source in source_files]
+    if preflight_report is not None:
+        payload["preflight"] = preflight_report
     task_id, event = server.store.create_task_with_event(
         source_dir=source_dir,
         source_kind=source_kind,
@@ -1477,7 +1648,10 @@ def _export_final_path(workspace_root: Path, task_id: str, fmt: str, export_id: 
     _require_format(fmt)
     root = _safe_workspace_root(workspace_root)
     suffix = "report.html" if fmt == "html" else ("review.json" if fmt == "review" else "report.json")
-    candidate = root / "tasks" / task_id / "exports" / f"{task_id}-{export_id}-{suffix}"
+    # task_id 已由父目录唯一标识，文件名不再重复它。除便于人工辨识外，这还为
+    # Windows 传统 MAX_PATH 留出约 38 个字符，避免较长 userData 根目录下的
+    # 原子移动被 WinError 3 误报为“路径不存在”。export_id 仍保证作业级唯一性。
+    candidate = root / "tasks" / task_id / "exports" / f"{export_id}-{suffix}"
     _assert_path_chain_no_reparse(root, candidate.parent)
     return candidate
 
@@ -2056,7 +2230,10 @@ def _render_html_export(
             raise ExportFailed(_classify_oserror(exc), "生成 HTML 报告失败") from exc
         except Exception as exc:  # noqa: BLE001
             raise ExportFailed("UNKNOWN_ERROR", "生成 HTML 报告失败") from exc
-    os.replace(temp_output, final_path)  # 原子替换到正式输出
+    try:
+        os.replace(temp_output, final_path)  # 原子替换到正式输出
+    except OSError as exc:
+        raise ExportFailed(_classify_oserror(exc), "写入 HTML 导出失败") from exc
     return {
         "path": str(final_path),
         "occurrence_count": total,

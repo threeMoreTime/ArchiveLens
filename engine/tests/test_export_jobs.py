@@ -148,7 +148,7 @@ class ExportJobLifecycleTests(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         out = Path(job["output_path"])
         self.assertTrue(out.exists())
-        self.assertEqual(out.name, f"{tid}-{export_id}-report.json")
+        self.assertEqual(out.name, f"{export_id}-report.json")
         history = self.server.store.list_exports(task_id=tid, limit=10, offset=0)
         self.assertTrue(any(h["path"] == str(out) for h in history))
         self.assertFalse((self.tmp / ".export-jobs" / export_id).exists())
@@ -161,7 +161,32 @@ class ExportJobLifecycleTests(unittest.TestCase):
             job = _wait_terminal(self.server, created["export_id"])
         self.assertEqual(job["status"], "completed")
         self.assertTrue(Path(job["output_path"]).exists())
-        self.assertEqual(Path(job["output_path"]).name, f"{tid}-{created['export_id']}-report.html")
+        self.assertEqual(Path(job["output_path"]).name, f"{created['export_id']}-report.html")
+
+    def test_compact_output_name_stays_below_legacy_windows_path_limit(self) -> None:
+        base = Path(tempfile.mkdtemp(prefix="archivelens-export-long-path-"))
+        long_root = base / ("workspace-" + "x" * 60)
+        try:
+            server = _make_server(long_root)
+            try:
+                tid, _original = _seed_exportable_task(server, long_root)
+                created = server.handlers["exports.create"](
+                    server, {"task_id": tid, "format": "json"}
+                )
+                job = _wait_terminal(server, created["export_id"])
+                self.assertEqual(job["status"], "completed")
+                output = Path(job["output_path"])
+                self.assertTrue(output.exists())
+                self.assertEqual(output.name, f"{created['export_id']}-report.json")
+                if os.name == "nt":
+                    self.assertLess(len(str(output)), 260)
+            finally:
+                _drain_export_threads(server)
+                server.store.close()
+        finally:
+            import shutil
+
+            shutil.rmtree(base, ignore_errors=True)
 
     def test_cancel_at_images_stage(self) -> None:
         tid, _original = _seed_exportable_task(self.server, self.tmp)
@@ -546,9 +571,7 @@ class ExportJobRestartTests(unittest.TestCase):
                 status="rendering_images",
                 current_stage="images",
             )
-            final_path = (
-                tmp / "tasks" / tid / "exports" / f"{tid}-{export_id}-report.html"
-            )
+            final_path = tmp / "tasks" / tid / "exports" / f"{export_id}-report.html"
             final_path.parent.mkdir(parents=True, exist_ok=True)
             final_path.write_text("uncommitted-output", encoding="utf-8")
             server.store.update_export_job(export_id, output_path=str(final_path))

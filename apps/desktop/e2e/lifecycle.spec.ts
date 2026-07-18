@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +11,7 @@ const SEARCH_TEXT = "档案";
 const SOURCE_ID = "source-main";
 const APP_DIR = path.resolve(__dirname, "..");
 const ENGINE_SRC = path.resolve(APP_DIR, "..", "..", "engine", "src");
+const PREFLIGHT_FIXTURE = path.resolve(APP_DIR, "..", "..", "tests", "fixtures", "offline-formats", "simplified-horizontal.png");
 const RUN_ID = (process.env["ARCHIVELENS_TEST_RUN_ID"] ?? "a11-local").replace(/[^A-Za-z0-9._-]/g, "-");
 
 async function makeOwnedTempDir(kind: "source" | "userData", label = "run"): Promise<string> {
@@ -157,6 +158,9 @@ async function firstWindow(app: ElectronApplication): Promise<Page> {
 }
 
 async function createSlowFakeTask(win: Page, sourceDir: string): Promise<string> {
+  // Slowfake only replaces OCR execution.  The product's folder preflight must
+  // still inspect a genuine supported source instead of accepting an empty dir.
+  await copyFile(PREFLIGHT_FIXTURE, path.join(sourceDir, "e2e-source.png"));
   return win.evaluate(async (dir) => {
     const api = (window as any).archiveLens;
     const task = await api.tasks.create({ source_dir: dir, search_text: "档案" });
@@ -726,7 +730,7 @@ test("Lifecycle: restart recover resumes from checkpoint without duplicates or m
     const appInfo = await secondWin.evaluate(async () => {
       return (window as any).archiveLens.app.getInfo();
     });
-    expect(appInfo.protocol_version).toBe(2);
+    expect(appInfo.protocol_version).toBe(3);
 
     const snapshot = await readPersistedTaskSnapshot(userDataDir, taskId);
     assertIntegrity(snapshot);

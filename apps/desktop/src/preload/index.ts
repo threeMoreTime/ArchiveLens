@@ -32,6 +32,9 @@ const api: ArchiveLensApi = {
   },
   tasks: {
     create: (p) => ipcRenderer.invoke("tasks.create", p),
+    preflight: (source_dir) => ipcRenderer.invoke("tasks.preflight", { source_dir }),
+    getPreflight: (preflight_id) => ipcRenderer.invoke("tasks.preflightGet", { preflight_id }),
+    cancelPreflight: (preflight_id) => ipcRenderer.invoke("tasks.preflightCancel", { preflight_id }),
     start: (task_id) => ipcRenderer.invoke("tasks.start", { task_id }),
     get: (task_id) => ipcRenderer.invoke("tasks.get", { task_id }),
     list: (p) => ipcRenderer.invoke("tasks.list", p ?? {}),

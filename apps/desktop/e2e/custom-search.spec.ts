@@ -109,6 +109,9 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
 
     await page.getByRole("button", { name: "选择文件夹" }).click();
     await expect(page.getByPlaceholder("点击右侧按钮选择文件夹")).toHaveValue(sourceDir);
+    await expect(page.getByLabel("文件夹预检结果")).toContainText("支持的档案");
+    await expect(page.getByLabel("文件夹预检结果")).toContainText("可用磁盘");
+    await expect(page.getByText("预检通过，可以创建扫描任务。")).toBeVisible();
     await expect(startButton).toBeEnabled();
 
     await searchInput.fill("档".repeat(32));

@@ -86,7 +86,7 @@ Renderer (React)  ──window.archiveLens──▶  Preload (sandbox)
 
 ## IPC 契约：TS↔Python 必须双端一致
 
-`packages/ipc-schema/src/index.ts`（Zod）与 `engine/src/archivelens_engine/protocol.py` 是**同一份协议的两个语言投影**，`PROTOCOL_VERSION = 2`。
+`packages/ipc-schema/src/index.ts`（Zod）与 `engine/src/archivelens_engine/protocol.py` 是**同一份协议的两个语言投影**，`PROTOCOL_VERSION = 3`。
 
 改协议的硬性要求：
 1. **两端同时改**，保持 schema 一一对应；

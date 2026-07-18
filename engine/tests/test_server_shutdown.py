@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 
+from archivelens_engine import PROTOCOL_VERSION
 from archivelens_engine.protocol import ErrorCode, ProtocolError
 from archivelens_engine.runtime.task_control import TaskControl
 from archivelens_engine.server import Server
@@ -49,7 +50,7 @@ class ShutdownTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _req(self, method: str, rid: str = "r1") -> str:
-        return json.dumps({"protocol_version": 2, "request_id": rid, "method": method, "params": {}})
+        return json.dumps({"protocol_version": PROTOCOL_VERSION, "request_id": rid, "method": method, "params": {}})
 
     def test_shutdown_rejects_new_requests(self) -> None:
         # shutdown
