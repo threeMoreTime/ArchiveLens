@@ -1,8 +1,15 @@
-import { app, dialog, ipcMain, shell, BrowserWindow } from "electron";
+import { app, dialog, ipcMain, shell } from "electron";
+import { mkdir } from "node:fs/promises";
 import type { SidecarManager } from "../sidecar/manager";
-import { AppInfoResultSchema, DiagnosticsResultSchema, SUPPORTED_SOURCE_EXTENSIONS } from "@shared/index";
+import {
+  AppInfoResultSchema,
+  DiagnosticsResultSchema,
+  StorageCleanupResultSchema,
+  SUPPORTED_SOURCE_EXTENSIONS,
+} from "@shared/index";
 import { logger } from "../logging/logger";
 import { loadDesktopBuildInfo } from "../buildInfo";
+import { collectLocalDataSummary } from "../localData";
 
 /**
  * 应用级 IPC handler（任务 §8.2 Preload API 对应）。
@@ -93,4 +100,19 @@ export function registerAppHandlers(sidecar: SidecarManager): void {
     const failure = await shell.openPath(logger.logDirectory);
     if (failure) throw new Error(`无法打开日志目录：${failure}`);
   });
+
+  ipcMain.handle("app.getLocalDataSummary", async () =>
+    collectLocalDataSummary(app.getPath("userData")),
+  );
+
+  ipcMain.handle("app.openUserDataDirectory", async () => {
+    const userDataPath = app.getPath("userData");
+    await mkdir(userDataPath, { recursive: true });
+    const failure = await shell.openPath(userDataPath);
+    if (failure) throw new Error(`无法打开本地数据目录：${failure}`);
+  });
+
+  ipcMain.handle("app.cleanupTemporaryData", async () =>
+    StorageCleanupResultSchema.parse(await sidecar.call("storage.cleanupTemporary", {})),
+  );
 }

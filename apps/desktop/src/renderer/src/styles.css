@@ -343,6 +343,19 @@ body {
 .al-settings-section { display:grid; gap:var(--al-space-4); margin:0; padding:var(--al-space-5); }
 .al-settings-section-heading > div { display:grid; gap:var(--al-space-1); }
 .al-settings-local-note { background:#f1f8ee; border-color:#b6d4ad; }
+.al-local-data-section { overflow:hidden; }
+.al-local-data-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--al-space-2); margin:0; }
+.al-local-data-summary > div { display:flex; justify-content:space-between; gap:var(--al-space-3); padding:var(--al-space-3); border:1px solid var(--line); border-radius:var(--al-radius-sm); background:#faf9f6; }
+.al-local-data-summary dt { color:var(--muted); font-size:12px; }
+.al-local-data-summary dd { margin:0; color:var(--ink); font-weight:600; white-space:nowrap; }
+.al-local-task-usage { padding:var(--al-space-3); border:1px solid var(--line); border-radius:var(--al-radius-sm); }
+.al-local-task-usage summary { cursor:pointer; font-weight:600; }
+.al-local-task-usage > div { display:flex; align-items:center; justify-content:space-between; gap:var(--al-space-3); padding-block:var(--al-space-3); border-bottom:1px solid var(--line); }
+.al-local-task-usage > div:last-child { padding-bottom:0; border-bottom:0; }
+.al-local-task-usage span { display:grid; min-width:0; gap:var(--al-space-1); }
+.al-local-task-usage strong, .al-local-task-usage small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.al-local-task-usage small { color:var(--muted); }
+.al-local-cleanup-panel { display:grid; gap:var(--al-space-2); padding:var(--al-space-4); border:1px solid #d6b978; border-radius:var(--al-radius-sm); background:#fffaf0; }
 .al-script-search-settings { display:grid; gap:var(--al-space-3); }
 .al-script-search-settings fieldset { margin:0; padding:0; border:0; }
 .al-script-search-settings legend { margin-bottom:var(--al-space-3); font-weight:600; }
@@ -546,6 +559,7 @@ button.al-task-delete-button:disabled { background:#efd4d1; color:#875b56; borde
 }
 @media (max-width: 720px) {
   .al-preflight-grid { grid-template-columns:1fr; }
+  .al-local-data-summary { grid-template-columns:1fr; }
   .al-home-aside, .al-new-scan-aside, .al-task-aside, .al-export-task-grid, .al-export-format-grid, .al-export-aside, .al-settings-aside { grid-template-columns:1fr; }
   .al-review-option-grid { grid-template-columns:1fr; }
   .al-context-radius-row { grid-template-columns:1fr auto; }

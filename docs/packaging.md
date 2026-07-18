@@ -47,7 +47,7 @@ pnpm --filter @archivelens/desktop dist
 
 - `appId: io.archivelens.desktop`；
 - NSIS 安装器（per-user、可卸载、默认保留用户数据）；
-- portable；
+- Portable（默认与安装版共用 `%APPDATA%\ArchiveLens`，关闭 Portable 不自动删除数据）；
 - `extraResources`：Engine、Tesseract、tessdata、DjVuLibre、ArchiveLens MIT 文本、
   第三方声明、原生许可证与 DjVu 对应源码均随包分发。
 
@@ -63,6 +63,9 @@ pnpm --filter @archivelens/desktop dist
   绑定冻结候选 SHA 的许可证人工门禁，且仍需独立的正式发布授权；
 - 当前没有上一可信稳定版安装器时，跨版本升级与回滚必须标记 `NOT_VERIFIED`，
   不得据此宣称稳定发布就绪；
+- 安装/卸载/Portable 的本地明文、保留和清理合同见
+  [`privacy-and-local-data.md`](privacy-and-local-data.md)；卸载配置必须保持
+  `deleteAppDataOnUninstall: false`，除非以后经过独立产品与数据安全审核；
 - 详细步骤、证据和阻塞规则见 [`release-gate.md`](release-gate.md)。
 
 ### 安装包产物（目标）

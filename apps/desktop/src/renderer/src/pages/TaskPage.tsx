@@ -83,7 +83,7 @@ export default function TaskPage() {
     setAction("open-folder");
     setActionError(null);
     try {
-      await window.archiveLens.files.openFolder(task.workspace_dir);
+      await window.archiveLens.tasks.openDirectory(taskId);
     } catch (nextError) {
       setActionError(`无法打开任务目录：${errorMessage(nextError)}`);
     } finally {

@@ -1,4 +1,4 @@
-import { ipcMain, shell } from "electron";
+import { app, ipcMain, shell } from "electron";
 import type { SidecarManager } from "../sidecar/manager";
 import { registerResourceRoot, unregisterResourceRoot } from "../security/protocol";
 import { getSettingsStore } from "./settings";
@@ -12,6 +12,7 @@ import {
   SourcePreflightStartParamsSchema,
   TaskCreateParamsSchema,
 } from "@shared/index";
+import { resolveTaskDataDirectory, resolveTaskExportDirectory } from "../localData";
 
 export const HTML_EXPORT_TIMEOUT_MS = 30 * 60_000;
 export const TASK_CREATE_TIMEOUT_MS = 30 * 60_000;
@@ -75,6 +76,12 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
     if (failure) throw new Error(`无法打开文件夹：${failure}`);
     return { ok: true };
   });
+  ipcMain.handle("tasks.openDirectory", async (_e, params: { task_id: string }) => {
+    const directory = await resolveTaskDataDirectory(app.getPath("userData"), params.task_id);
+    const failure = await shell.openPath(directory);
+    if (failure) throw new Error(`无法打开任务目录：${failure}`);
+    return { ok: true };
+  });
 
   ipcMain.handle("results.query", async (_e, params) => sidecar.call("results.query", params));
   ipcMain.handle("results.getDetail", async (_e, params) => sidecar.call("results.getDetail", params));
@@ -114,15 +121,11 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
   ipcMain.handle("exports.listJobs", async (_e, params) => sidecar.call("exports.listJobs", params));
   ipcMain.handle("exports.cancel", async (_e, params) => sidecar.call("exports.cancel", params));
   ipcMain.handle("exports.retry", async (_e, params) => sidecar.call("exports.retry", params));
-
-  ipcMain.handle("files.openFolder", async (_e, params: { path: string }) => {
-    const failure = await shell.openPath(params.path);
-    if (failure) throw new Error(`无法打开文件夹：${failure}`);
-    return { ok: true };
-  });
-  ipcMain.handle("files.openOriginal", async (_e, params: { path: string }) => {
-    const failure = await shell.openPath(params.path);
-    if (failure) throw new Error(`无法打开文件：${failure}`);
+  ipcMain.handle("exports.openDirectory", async (_e, params: { export_id: string }) => {
+    const job = await sidecar.call<{ task_id: string }>("exports.get", params);
+    const directory = await resolveTaskExportDirectory(app.getPath("userData"), job.task_id);
+    const failure = await shell.openPath(directory);
+    if (failure) throw new Error(`无法打开导出目录：${failure}`);
     return { ok: true };
   });
 }

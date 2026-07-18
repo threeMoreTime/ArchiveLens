@@ -413,6 +413,7 @@ class Server:
                 "exports.listJobs": _h_exports_list_jobs,
                 "exports.cancel": _h_exports_cancel,
                 "exports.retry": _h_exports_retry,
+                "storage.cleanupTemporary": _h_storage_cleanup_temporary,
             }
         )
 
@@ -2760,6 +2761,57 @@ def _h_exports_retry(server: Server, params: dict) -> dict:
         )
         raise ProtocolError(ErrorCode.UNKNOWN_ERROR, "导出工作线程启动失败，可重试") from exc
     return {"export_id": job["export_id"], "task_id": task_id, "format": fmt, "status": "queued", "retry_of": export_id}
+
+
+def _h_storage_cleanup_temporary(server: Server, params: dict) -> dict:
+    """重试清理数据库登记的终态导出残留，不扫描或猜测未知目录。
+
+    活动作业可能已经创建专属临时目录，必须跳过；任务数据、正式成功导出和来源文件
+    均不在清理集合内。单个清理失败不会阻止其他终态作业继续尝试。
+    """
+    if params:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "storage.cleanupTemporary 不接受参数")
+    try:
+        jobs = server.store.list_export_jobs_needing_cleanup()
+    except Exception as exc:
+        raise ProtocolError(ErrorCode.DATABASE_ERROR, "无法读取导出临时清理状态") from exc
+
+    attempted = 0
+    completed = 0
+    failed = 0
+    skipped_active = 0
+    for job in jobs:
+        export_id = str(job.get("export_id") or "")
+        if str(job.get("status") or "") not in EXPORT_JOB_TERMINAL_STATUSES:
+            skipped_active += 1
+            continue
+        attempted += 1
+        try:
+            _persist_export_temp_cleanup(server, export_id)
+            current = server.store.get_export_job(export_id)
+            if current is not None and current.get("cleanup_status") == "completed":
+                completed += 1
+            else:
+                failed += 1
+        except Exception as exc:  # noqa: BLE001 - 逐作业隔离并写脱敏诊断
+            server._cleanup_diag(export_id or "*", "manual_export_cleanup", exc)
+            failed += 1
+
+    try:
+        remaining = sum(
+            1
+            for job in server.store.list_export_jobs_needing_cleanup()
+            if str(job.get("status") or "") in EXPORT_JOB_TERMINAL_STATUSES
+        )
+    except Exception as exc:
+        raise ProtocolError(ErrorCode.DATABASE_ERROR, "无法确认导出临时清理结果") from exc
+    return {
+        "attempted": attempted,
+        "completed": completed,
+        "failed": failed,
+        "skipped_active": skipped_active,
+        "remaining": remaining,
+    }
 
 
 

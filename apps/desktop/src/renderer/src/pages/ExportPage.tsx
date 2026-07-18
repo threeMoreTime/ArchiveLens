@@ -176,10 +176,9 @@ export default function ExportPage() {
     }
   };
 
-  const openFolderFor = async (path: string) => {
-    const directory = path.replace(/[/\\][^/\\]+$/, "");
+  const openExportFolder = async (exportId: string) => {
     try {
-      await window.archiveLens.files.openFolder(directory);
+      await window.archiveLens.export.openDirectory(exportId);
     } catch (nextError) {
       setActionError(`无法打开导出目录：${errorMessage(nextError)}`);
     }
@@ -188,7 +187,7 @@ export default function ExportPage() {
   const openTaskFolder = async () => {
     if (!task?.workspace_dir) return;
     try {
-      await window.archiveLens.files.openFolder(task.workspace_dir);
+      await window.archiveLens.tasks.openDirectory(taskId ?? "");
     } catch (nextError) {
       setActionError(`无法打开任务目录：${errorMessage(nextError)}`);
     }
@@ -277,7 +276,7 @@ export default function ExportPage() {
                       {job.cleanup_status === "failed" && <InlineFeedback tone="warning">{job.cleanup_error_message || "导出临时文件清理失败，将在下次启动重试。"}</InlineFeedback>}
                       <div className="al-inline-actions">
                         {ACTIVE_JOB.has(job.status) && job.export_id !== activeJob?.export_id && <Button size="small" disabled={busy || job.status === "cancelling"} onClick={() => void cancelJob(job.export_id)}>{job.status === "cancelling" ? "正在取消…" : "取消导出"}</Button>}
-                        {job.status === "completed" && job.output_path && <Button size="small" onClick={() => void openFolderFor(job.output_path)}>打开文件夹</Button>}
+                        {job.status === "completed" && job.output_path && <Button size="small" onClick={() => void openExportFolder(job.export_id)}>打开文件夹</Button>}
                         {(job.status === "failed" || job.status === "cancelled" || job.status === "interrupted") && <Button size="small" appearance="primary" disabled={busy || cleanupActive} onClick={() => void retryJob(job.export_id)}>重新导出</Button>}
                       </div>
                     </div>
@@ -290,7 +289,7 @@ export default function ExportPage() {
           <aside className="al-export-aside" aria-label="导出完整性摘要">
             <Card className="al-card"><Text weight="semibold">导出完整性</Text><div className="al-export-integrity"><span>扫描：{summary.scan_complete ? "已完整处理" : "未完整处理"}</span><span>校对：{summary.review_complete ? "已完成" : `未完成（剩余 ${summary.review_summary.unreviewed_count} 条）`}</span></div></Card>
             {(!summary.scan_complete || !summary.review_complete) && <InlineFeedback tone="warning">阶段性报告不应作为最终核验报告；请在扫描无失败且全部结果校对后重新导出。</InlineFeedback>}
-            <Card className="al-card"><div className="al-card-heading-row"><Text weight="semibold">成功导出历史</Text><Button appearance="subtle" size="small" onClick={() => void openTaskFolder()}>任务目录</Button></div>{history.length === 0 ? <Text className="al-muted">此任务尚无成功导出记录。</Text> : <div className="al-export-history">{history.map((item) => <button key={item.export_id} type="button" onClick={() => void openFolderFor(item.path)}><strong>{exportKindLabel(item.kind)}</strong><span>{formatDateTime(item.created_at)}</span><small title={item.path}>{item.path}</small></button>)}</div>}</Card>
+            <Card className="al-card"><div className="al-card-heading-row"><Text weight="semibold">成功导出历史</Text><Button appearance="subtle" size="small" onClick={() => void openTaskFolder()}>任务目录</Button></div>{history.length === 0 ? <Text className="al-muted">此任务尚无成功导出记录。</Text> : <div className="al-export-history">{history.map((item) => <button key={item.export_id} type="button" onClick={() => void openTaskFolder()}><strong>{exportKindLabel(item.kind)}</strong><span>{formatDateTime(item.created_at)}</span><small title={item.path}>{item.path}</small></button>)}</div>}</Card>
             <Card className="al-card"><Text weight="semibold">本地处理</Text><Text className="al-muted">导出文件与历史记录均保存在当前任务工作区，不会上传到网络服务。失败或取消不会覆盖已有成功文件。</Text></Card>
           </aside>
         </div>

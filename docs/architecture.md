@@ -124,7 +124,10 @@ Task 状态机 12 态（`draft/queued/starting/running/pausing/paused/stopping/c
 * 默认不上传文档 / OCR 内容；
 * 默认不发送遥测 / 分析；
 * 默认不加载远程网页（CSP `connect-src 'self'`）；
-* 仅在用户触发“安装依赖/下载组件”时访问网络，且使用 HTTPS + SHA-256 校验（计划项）。
+* 正式运行时不提供依赖下载入口；原生组件在构建阶段按锁定 SHA-256 准备并随包分发；
+* SQLite、OCR 原文/索引、页面图片、校对备注和导出默认以本地明文保存，不提供应用级透明加密；
+* Main 只允许按受信 `userData + task_id/export_id` 推导并打开应用目录，不接受 Renderer 任意绝对路径；
+* 数据清单、保留/清理、卸载和威胁模型见 [`privacy-and-local-data.md`](privacy-and-local-data.md)。
 
 ## 日志
 

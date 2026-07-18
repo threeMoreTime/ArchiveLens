@@ -217,4 +217,13 @@ describe("桌面端产品化 UI contract", () => {
     expect(diagnosticsPage).toContain("runDiagnostics");
     expect(diagnosticsPage).toContain("openLogDirectory");
   });
+
+  it("设置页透明展示本地明文、逐任务占用与安全临时清理边界", () => {
+    expect(settingsPage).toContain("本地处理不等于应用级加密");
+    expect(settingsPage).toContain("getLocalDataSummary");
+    expect(settingsPage).toContain("各任务占用");
+    expect(settingsPage).toContain("cleanupTemporaryData");
+    expect(settingsPage).toContain("未知孤立目录不会被自动猜测删除");
+    expect(settingsPage).toContain("卸载 ArchiveLens 默认保留本地数据");
+  });
 });

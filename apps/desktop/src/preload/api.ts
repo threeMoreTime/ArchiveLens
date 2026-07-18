@@ -14,7 +14,35 @@ import type {
   ReviewPageImageResult,
   ReviewPreparePageImageParams,
   SourcePreflightJob,
+  StorageCleanupResult,
 } from "@shared/index";
+
+export interface LocalDataTaskUsage {
+  task_id: string;
+  derived_bytes: number;
+  export_bytes: number;
+  total_bytes: number;
+}
+
+export interface LocalDataSummary {
+  user_data_path: string;
+  engine_data_path: string;
+  log_path: string;
+  total_bytes: number;
+  database_bytes: number;
+  task_derived_bytes: number;
+  export_bytes: number;
+  temporary_export_bytes: number;
+  log_bytes: number;
+  settings_bytes: number;
+  other_bytes: number;
+  file_count: number;
+  skipped_link_count: number;
+  unreadable_entry_count: number;
+  complete: boolean;
+  tasks: LocalDataTaskUsage[];
+  scanned_at: string;
+}
 
 export interface EnvironmentInfo {
   appVersion: string;
@@ -203,6 +231,9 @@ export interface ArchiveLensApi {
   app: {
     getInfo(): Promise<AppInfoResult>;
     getEnvironment(): Promise<EnvironmentInfo>;
+    getLocalDataSummary(): Promise<LocalDataSummary>;
+    cleanupTemporaryData(): Promise<StorageCleanupResult>;
+    openUserDataDirectory(): Promise<void>;
     openLogDirectory(): Promise<void>;
   };
   dialog: {
@@ -254,6 +285,7 @@ export interface ArchiveLensApi {
     cancel(task_id: string): Promise<{ task_id: string; status: string }>;
     delete(task_id: string): Promise<{ task_id: string; deleted: true }>;
     openCleanupDir(task_id: string): Promise<{ ok: boolean }>;
+    openDirectory(task_id: string): Promise<{ ok: boolean }>;
   };
   demo: {
     create(): Promise<DemoResult>;
@@ -305,10 +337,7 @@ export interface ArchiveLensApi {
     listJobs(task_id: string, p?: { limit?: number; offset?: number }): Promise<{ task_id: string; items: ExportJob[]; limit: number; offset: number; total: number }>;
     cancel(export_id: string): Promise<{ export_id: string; status: string }>;
     retry(export_id: string): Promise<ExportJobCreateResult>;
-  };
-  files: {
-    openFolder(path: string): Promise<{ ok: boolean }>;
-    openOriginal(path: string): Promise<{ ok: boolean }>;
+    openDirectory(export_id: string): Promise<{ ok: boolean }>;
   };
   settings: {
     get(task_id?: string): Promise<ReviewHighlightSettingsResult>;

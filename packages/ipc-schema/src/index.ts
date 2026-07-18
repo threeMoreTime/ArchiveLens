@@ -306,6 +306,7 @@ export const MethodNameSchema = z.enum([
   "exports.listJobs",
   "exports.cancel",
   "exports.retry",
+  "storage.cleanupTemporary",
   "files.openOriginal",
   "files.openFolder",
   "settings.get",
@@ -565,6 +566,15 @@ export const ExportJobActionResultSchema = z.object({
   status: ExportJobStatusSchema,
 }).passthrough();
 
+export const StorageCleanupResultSchema = z.object({
+  attempted: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  skipped_active: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+});
+export type StorageCleanupResult = z.infer<typeof StorageCleanupResultSchema>;
+
 export const ExportJobsListResultSchema = z.object({
   task_id: z.string().min(1),
   items: z.array(ExportJobSchema),
@@ -804,6 +814,7 @@ export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "exports.listJobs") return ExportJobsListResultSchema.parse(value);
   if (method === "exports.cancel") return ExportJobActionResultSchema.parse(value);
   if (method === "exports.retry") return ExportJobCreateResultSchema.parse(value);
+  if (method === "storage.cleanupTemporary") return StorageCleanupResultSchema.parse(value);
   if (method === "results.query") return ResultsQueryResultSchema.parse(value);
   if (method === "search.corpusStatus") return OcrCorpusStatusResultSchema.parse(value);
   if (method === "search.execute") return OcrSearchSessionSchema.parse(value);

@@ -327,8 +327,12 @@ B1 删除清理作业；B2 Export Job；B3 来源预检；B4 本地数据/隐私
 - 因新界面依赖新增预检方法且 v2 引擎无法履约，IPC 协议同步升级为 v3，旧引擎在握手阶段明确拒绝。
 
 ### B4（本地数据与隐私边界）
-- 明确静态数据（DB/OCR/导出）明文威胁模型与保留/处置策略；与备份（B6）、卸载保留策略一致。
-- 不引入遥测/远程；策略可文档化或最小设置项。
+- 已新增 `docs/privacy-and-local-data.md`，逐项记录 SQLite/WAL、OCR 原文与索引、页面/crop、校对、导出、临时目录、日志、设置、安装版/Portable、卸载和物理擦除边界；明确“本地处理不等于应用级加密”。
+- 设置页以 Main 只读扫描统计可读总量、分类占用和逐任务占用；不跟随 symlink/junction，无法读取时标记统计不完整。提供受控 userData/日志/任务目录入口。
+- 手动临时清理只调用 `storage.cleanupTemporary` 重试数据库登记的终态 Export Job；活动作业、未知孤立目录、正式成功导出、任务数据和来源文件均不在清理集合，且 UI 需要二次确认。
+- Preload 已撤除接受 Renderer 任意绝对路径的通用 `files` 命名空间；任务和导出目录由 Main 从受信 `userData + task_id/export_id` 推导，并检查整条目录链无链接。
+- 未引入遥测、远程服务、付费依赖、自动历史删除或应用级加密；B6 备份实现前仍明确标记升级恢复未验证。
+- B4 验证：`pnpm typecheck`、25 个 Vitest 文件/154 项、完整 Python 357 项通过/1 项环境跳过；随后新增的清理失败态回归连同 B4 清理定向共 3 项通过；生产构建和隔离 Electron `E2E-03` 均通过。E2E 仅触发并取消二次确认，未执行真实用户数据清理。
 
 ### B5（真实 ESLint/覆盖率/bundle/CI）
 - 引入真实静态规则门禁（ESLint flat config 或 Biome），首批零告警基线。
@@ -350,8 +354,8 @@ B1 删除清理作业；B2 Export Job；B3 来源预检；B4 本地数据/隐私
 
 ## 9. 未验证项（B0 诚实披露）
 
-1. **Python unittest 真实健康度**：本轮因未准备锁定 OCR 模型，79 error 为共同根因（§1.5）；门禁先 `prepare-native-runtime.ps1 -OcrOnly` 后的 278 通过为历史口径，**本轮未重跑**。
-2. **B3 junction/symlink 跟随行为**：源码无显式安全策略，但 `rglob` 实际是否跟随 Windows junction/symlink **未实测**（§1.4、§8 B3）。
+1. **Python unittest 真实健康度**：B3 完成后已在锁定模型可用的当前隔离环境重跑，355 通过、1 跳过（跳过项为当前 shell 无 `pwsh`）；后续批次仍须在各自提交前重跑受影响层级。
+2. **B3 junction/symlink 跟随行为**：已用 Windows 真实子 junction、父级 junction、symlink 和循环用例验证 fail-closed；创建成功后扫描只读取预检固化清单。
 3. **旧版本遇 future schema**：当前代码拒绝更高版本；历史二进制是否拒绝 future schema **未实测**（§1.3、§5.3）。
 4. **Setup/Portable 当前签名/制品**：本轮无制品，仅“不存在/未验证”；NotSigned 是策略非实测（§1.8）。
 5. **远程 CI**：push 不执行，仅配置审查/本地模拟（§1.10）。

@@ -26,6 +26,14 @@ describe("完整离线安装包", () => {
     expect(diagnostics).toContain("实际路径");
   });
 
+  it("安装版与 Portable 的本地数据保留合同明确且不在卸载时删除", () => {
+    const builder = readFileSync(path.join(root, "apps/desktop/electron-builder.yml"), "utf-8");
+    const readme = readFileSync(path.join(root, "README.md"), "utf-8");
+    expect(builder).toContain("deleteAppDataOnUninstall: false");
+    expect(readme).toContain("安装版与 Portable 默认使用同一 Windows userData");
+    expect(readme).toContain("默认以本地明文保存");
+  });
+
   it("锁定每项下载制品并使用无提权 NSIS 提取", () => {
     const lock = JSON.parse(readFileSync(path.join(root, "scripts/native-dependencies.lock.json"), "utf-8"));
     const prepare = readFileSync(path.join(root, "scripts/prepare-native-runtime.ps1"), "utf-8");

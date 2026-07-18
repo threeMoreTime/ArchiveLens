@@ -38,6 +38,7 @@ import {
   parseMethodResult,
   SourcePreflightJobSchema,
   SourcePreflightResultSchema,
+  StorageCleanupResultSchema,
 } from "@shared/index";
 
 const FIXTURE_DIR = path.resolve(__dirname, "../../../tests/ipc-contract/fixtures");
@@ -173,6 +174,18 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
       updated_at: "2026-07-18T00:00:01Z",
       finished_at: "2026-07-18T00:00:01Z",
     }).success).toBe(true);
+  });
+
+  it("本地临时残留清理合同只返回闭合计数", () => {
+    expect(MethodNameSchema.safeParse("storage.cleanupTemporary").success).toBe(true);
+    expect(StorageCleanupResultSchema.safeParse({
+      attempted: 2,
+      completed: 1,
+      failed: 1,
+      skipped_active: 1,
+      remaining: 1,
+    }).success).toBe(true);
+    expect(StorageCleanupResultSchema.safeParse({ attempted: -1 }).success).toBe(false);
   });
 
   it("review-update 合法 decision 通过", () => {

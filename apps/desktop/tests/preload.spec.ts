@@ -15,9 +15,16 @@ beforeAll(async () => {
 
 describe("Preload API 形状（任务 §五.3）", () => {
   it("暴露允许的命名空间", () => {
-    for (const k of ["app", "dialog", "subscribe", "tasks", "demo", "results", "search", "review", "export", "files", "settings"]) {
+    for (const k of ["app", "dialog", "subscribe", "tasks", "demo", "results", "search", "review", "export", "settings"]) {
       expect(exposed[k]).toBeDefined();
     }
+  });
+
+  it("不暴露可接收 renderer 任意路径的 files 命名空间", () => {
+    expect(exposed.files).toBeUndefined();
+    expect((exposed.app as Record<string, unknown>).openUserDataDirectory).toBeDefined();
+    expect((exposed.tasks as Record<string, unknown>).openDirectory).toBeDefined();
+    expect((exposed.export as Record<string, unknown>).openDirectory).toBeDefined();
   });
 
   it("不暴露 ipcRenderer / fs / child_process / require", () => {

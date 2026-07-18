@@ -6,6 +6,9 @@ const api: ArchiveLensApi = {
   app: {
     getInfo: () => ipcRenderer.invoke("app.getInfo"),
     getEnvironment: () => ipcRenderer.invoke("app.getEnvironment"),
+    getLocalDataSummary: () => ipcRenderer.invoke("app.getLocalDataSummary"),
+    cleanupTemporaryData: () => ipcRenderer.invoke("app.cleanupTemporaryData"),
+    openUserDataDirectory: () => ipcRenderer.invoke("app.openUserDataDirectory"),
     openLogDirectory: () => ipcRenderer.invoke("app.openLogDirectory"),
   },
   dialog: {
@@ -43,6 +46,7 @@ const api: ArchiveLensApi = {
     cancel: (task_id) => ipcRenderer.invoke("tasks.cancel", { task_id }),
     delete: (task_id) => ipcRenderer.invoke("tasks.delete", { task_id }),
     openCleanupDir: (task_id) => ipcRenderer.invoke("tasks.openCleanupDir", { task_id }),
+    openDirectory: (task_id) => ipcRenderer.invoke("tasks.openDirectory", { task_id }),
   },
   demo: {
     create: () => ipcRenderer.invoke("demo.create"),
@@ -73,10 +77,7 @@ const api: ArchiveLensApi = {
     listJobs: (task_id, p) => ipcRenderer.invoke("exports.listJobs", { task_id, ...(p ?? {}) }),
     cancel: (export_id) => ipcRenderer.invoke("exports.cancel", { export_id }),
     retry: (export_id) => ipcRenderer.invoke("exports.retry", { export_id }),
-  },
-  files: {
-    openFolder: (path) => ipcRenderer.invoke("files.openFolder", { path }),
-    openOriginal: (path) => ipcRenderer.invoke("files.openOriginal", { path }),
+    openDirectory: (export_id) => ipcRenderer.invoke("exports.openDirectory", { export_id }),
   },
   settings: {
     get: (task_id) => ipcRenderer.invoke("settings.get", task_id ? { task_id } : {}),
