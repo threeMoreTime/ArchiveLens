@@ -5,7 +5,7 @@
 失败/取消不覆盖、磁盘/权限/写入失败、临时清理失败与恶意 export_id/reparse 拒绝、
 进度单调与阶段顺序、重复 cancel 幂等、不同任务隔离与同 task+format 并发合同、
 active export 与 task delete 互斥、cleanup task 与 export create/retry 互斥、
-schema v8→v9 迁移与 future schema 拒绝、旧成功导出历史保留且不被失败 job 篡改、
+schema v8/v9→v10 迁移与 future schema 拒绝、旧成功导出历史保留且不被失败 job 篡改、
 原始来源永不修改。
 
 JSON 走真实全链路；HTML 阶段/取消/失败用可注入 writer 隔离（明确标注为注入，
@@ -17,7 +17,9 @@ patch 必须覆盖 _wait_terminal 全程，避免 worker 读到真实实现造�
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -71,9 +73,19 @@ def _wait_terminal(server: Server, export_id: str, timeout: float = 10.0) -> dic
             return None
         last = job
         if job["status"] in TERMINAL:
-            return job
+            with server._export_state_lock:
+                worker = server._export_threads.get(export_id)
+            if worker is None or not worker.is_alive():
+                return server.store.get_export_job(export_id)
         time.sleep(0.02)
     return last
+
+
+def _drain_export_threads(server: Server) -> None:
+    with server._export_state_lock:
+        workers = list(server._export_threads.values())
+    for worker in workers:
+        worker.join(timeout=5)
 
 
 def _fake_writer(server: Server, *, cancel_at: str | None = None, fail_at: str | None = None, exc: BaseException | None = None):
@@ -120,6 +132,7 @@ class ExportJobLifecycleTests(unittest.TestCase):
         self.server = _make_server(self.tmp)
 
     def tearDown(self) -> None:
+        _drain_export_threads(self.server)
         self.server.store.close()
         import shutil
 
@@ -135,7 +148,7 @@ class ExportJobLifecycleTests(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         out = Path(job["output_path"])
         self.assertTrue(out.exists())
-        self.assertEqual(out.name, f"{tid}-report.json")
+        self.assertEqual(out.name, f"{tid}-{export_id}-report.json")
         history = self.server.store.list_exports(task_id=tid, limit=10, offset=0)
         self.assertTrue(any(h["path"] == str(out) for h in history))
         self.assertFalse((self.tmp / ".export-jobs" / export_id).exists())
@@ -148,7 +161,7 @@ class ExportJobLifecycleTests(unittest.TestCase):
             job = _wait_terminal(self.server, created["export_id"])
         self.assertEqual(job["status"], "completed")
         self.assertTrue(Path(job["output_path"]).exists())
-        self.assertEqual(Path(job["output_path"]).name, f"{tid}-report.html")
+        self.assertEqual(Path(job["output_path"]).name, f"{tid}-{created['export_id']}-report.html")
 
     def test_cancel_at_images_stage(self) -> None:
         tid, _original = _seed_exportable_task(self.server, self.tmp)
@@ -160,14 +173,17 @@ class ExportJobLifecycleTests(unittest.TestCase):
 
     def test_cancel_at_writing_stage_does_not_touch_final(self) -> None:
         tid, _original = _seed_exportable_task(self.server, self.tmp)
-        final = self.tmp / "tasks" / tid / "exports" / f"{tid}-report.html"
-        final.parent.mkdir(parents=True, exist_ok=True)
-        final.write_text("PREEXISTING-SUCCESS", encoding="utf-8")
+        with patch("archivelens_engine.server.write_offline_review_report", side_effect=_fake_writer(self.server)):
+            previous = self.server.handlers["exports.create"](self.server, {"task_id": tid, "format": "html"})
+            previous_job = _wait_terminal(self.server, previous["export_id"])
+        final = Path(previous_job["output_path"])
+        previous_bytes = final.read_bytes()
         with patch("archivelens_engine.server.write_offline_review_report", side_effect=_fake_writer(self.server, cancel_at="writing")):
             created = self.server.handlers["exports.create"](self.server, {"task_id": tid, "format": "html"})
             job = _wait_terminal(self.server, created["export_id"])
         self.assertEqual(job["status"], "cancelled")
-        self.assertEqual(final.read_text(encoding="utf-8"), "PREEXISTING-SUCCESS")
+        self.assertEqual(final.read_bytes(), previous_bytes)
+        self.assertFalse(Path(job["output_path"]).exists())
 
     def test_cancel_cleans_temp_dir_and_status_cancelled(self) -> None:
         tid, _original = _seed_exportable_task(self.server, self.tmp)
@@ -194,17 +210,20 @@ class ExportJobLifecycleTests(unittest.TestCase):
 
     def test_permission_failure_marks_failed_and_preserves_final(self) -> None:
         tid, _original = _seed_exportable_task(self.server, self.tmp)
-        final = self.tmp / "tasks" / tid / "exports" / f"{tid}-report.html"
-        final.parent.mkdir(parents=True, exist_ok=True)
-        final.write_text("PREEXISTING", encoding="utf-8")
+        with patch("archivelens_engine.server.write_offline_review_report", side_effect=_fake_writer(self.server)):
+            previous = self.server.handlers["exports.create"](self.server, {"task_id": tid, "format": "html"})
+            previous_job = _wait_terminal(self.server, previous["export_id"])
+        final = Path(previous_job["output_path"])
+        previous_bytes = final.read_bytes()
         with patch("archivelens_engine.server.write_offline_review_report", side_effect=_fake_writer(self.server, fail_at="writing", exc=PermissionError(13, "denied"))):
             created = self.server.handlers["exports.create"](self.server, {"task_id": tid, "format": "html"})
             job = _wait_terminal(self.server, created["export_id"])
         self.assertEqual(job["status"], "failed")
         self.assertEqual(job["error_code"], "PERMISSION_DENIED")
-        self.assertEqual(final.read_text(encoding="utf-8"), "PREEXISTING")
+        self.assertEqual(final.read_bytes(), previous_bytes)
+        self.assertFalse(Path(job["output_path"]).exists())
         history = self.server.store.list_exports(task_id=tid, limit=10, offset=0)
-        self.assertFalse(any(h["path"] == str(final) for h in history))
+        self.assertEqual(sum(h["path"] == str(final) for h in history), 1)
 
     def test_cancel_is_idempotent(self) -> None:
         tid, _original = _seed_exportable_task(self.server, self.tmp)
@@ -254,6 +273,207 @@ class ExportJobLifecycleTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, ErrorCode.TASK_STATE_CONFLICT)
             _wait_terminal(self.server, first["export_id"])
 
+    def test_cancel_wins_completion_race_and_removes_job_owned_output(self) -> None:
+        tid, _original = _seed_exportable_task(self.server, self.tmp)
+        completion_entered = threading.Event()
+        release_completion = threading.Event()
+        original_complete = self.server.store.complete_export_job
+
+        def blocked_complete(*args, **kwargs):
+            completion_entered.set()
+            self.assertTrue(release_completion.wait(timeout=5))
+            return original_complete(*args, **kwargs)
+
+        with patch.object(self.server.store, "complete_export_job", side_effect=blocked_complete):
+            created = self.server.handlers["exports.create"](self.server, {"task_id": tid, "format": "json"})
+            self.assertTrue(completion_entered.wait(timeout=5))
+            cancelled = self.server.handlers["exports.cancel"](
+                self.server, {"export_id": created["export_id"]}
+            )
+            self.assertEqual(cancelled["status"], "cancelling")
+            release_completion.set()
+            job = _wait_terminal(self.server, created["export_id"])
+        self.assertEqual(job["status"], "cancelled")
+        self.assertFalse(Path(job["output_path"]).exists())
+
+    def test_missing_worker_cancel_becomes_interrupted_not_stuck_cancelling(self) -> None:
+        tid, _original = _seed_exportable_task(self.server, self.tmp)
+        job = self.server.store.create_export_job(task_id=tid, format="json")
+        self.server.store.transition_export_job(
+            job["export_id"], ("queued",), status="writing", current_stage="writing"
+        )
+        result = self.server.handlers["exports.cancel"](
+            self.server, {"export_id": job["export_id"]}
+        )
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(self.server.store.get_export_job(job["export_id"])["status"], "interrupted")
+
+    def test_database_failure_after_atomic_move_keeps_previous_success(self) -> None:
+        tid, _original = _seed_exportable_task(self.server, self.tmp)
+        first = self.server.handlers["exports.create"](self.server, {"task_id": tid, "format": "json"})
+        first_job = _wait_terminal(self.server, first["export_id"])
+        previous = Path(first_job["output_path"])
+        previous_bytes = previous.read_bytes()
+        history_before = self.server.store.list_exports(task_id=tid, limit=20, offset=0)
+        with patch.object(
+            self.server.store,
+            "complete_export_job",
+            side_effect=sqlite3.OperationalError("injected completion failure"),
+        ):
+            failed = self.server.handlers["exports.create"](
+                self.server, {"task_id": tid, "format": "json"}
+            )
+            failed_job = _wait_terminal(self.server, failed["export_id"])
+        self.assertEqual(failed_job["status"], "failed")
+        self.assertEqual(failed_job["error_code"], "DATABASE_ERROR")
+        self.assertEqual(previous.read_bytes(), previous_bytes)
+        self.assertFalse(Path(failed_job["output_path"]).exists())
+        self.assertEqual(
+            self.server.store.list_exports(task_id=tid, limit=20, offset=0), history_before
+        )
+
+    def test_ambiguous_commit_is_verified_before_output_rollback(self) -> None:
+        tid, _original = _seed_exportable_task(self.server, self.tmp)
+        original_complete = self.server.store.complete_export_job
+
+        def committed_then_raised(*args, **kwargs):
+            self.assertTrue(original_complete(*args, **kwargs))
+            raise sqlite3.OperationalError("injected ambiguous commit result")
+
+        with patch.object(
+            self.server.store, "complete_export_job", side_effect=committed_then_raised
+        ):
+            created = self.server.handlers["exports.create"](
+                self.server, {"task_id": tid, "format": "json"}
+            )
+            job = _wait_terminal(self.server, created["export_id"])
+        self.assertEqual(job["status"], "completed")
+        self.assertTrue(Path(job["output_path"]).exists())
+        self.assertTrue(
+            any(
+                item["path"] == job["output_path"]
+                for item in self.server.store.list_exports(task_id=tid, limit=20, offset=0)
+            )
+        )
+
+    def test_global_export_concurrency_is_bounded(self) -> None:
+        task_ids = [_seed_exportable_task(self.server, self.tmp)[0] for _ in range(3)]
+        first_entered = threading.Event()
+        release = threading.Event()
+        counter_lock = threading.Lock()
+        active_writers = 0
+        maximum_writers = 0
+
+        def blocked_writer(*, output_path, **_kwargs):
+            nonlocal active_writers, maximum_writers
+            with counter_lock:
+                active_writers += 1
+                maximum_writers = max(maximum_writers, active_writers)
+                first_entered.set()
+            try:
+                self.assertTrue(release.wait(timeout=5))
+                output_path.write_text("{}", encoding="utf-8")
+                return {"file_size_bytes": 2, "page_count": 0, "hit_count": 0}
+            finally:
+                with counter_lock:
+                    active_writers -= 1
+
+        with patch("archivelens_engine.server.write_offline_review_report", side_effect=blocked_writer):
+            first = self.server.handlers["exports.create"](
+                self.server, {"task_id": task_ids[0], "format": "html"}
+            )
+            second = self.server.handlers["exports.create"](
+                self.server, {"task_id": task_ids[1], "format": "html"}
+            )
+            third = self.server.handlers["exports.create"](
+                self.server, {"task_id": task_ids[2], "format": "html"}
+            )
+            self.assertTrue(first_entered.wait(timeout=5))
+            self.assertEqual(self.server.store.get_export_job(second["export_id"])["status"], "queued")
+            self.assertEqual(self.server.store.get_export_job(third["export_id"])["status"], "queued")
+            release.set()
+            _wait_terminal(self.server, first["export_id"])
+            _wait_terminal(self.server, second["export_id"])
+            _wait_terminal(self.server, third["export_id"])
+        self.assertEqual(maximum_writers, 1)
+
+    def test_sync_export_cannot_overlap_async_same_task_and_format(self) -> None:
+        tid, _original = _seed_exportable_task(self.server, self.tmp)
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_writer(*, output_path, **_kwargs):
+            entered.set()
+            self.assertTrue(release.wait(timeout=5))
+            output_path.write_text("{}", encoding="utf-8")
+            return {"file_size_bytes": 2, "page_count": 0, "hit_count": 0}
+
+        with patch("archivelens_engine.server.write_offline_review_report", side_effect=blocked_writer):
+            active = self.server.handlers["exports.create"](
+                self.server, {"task_id": tid, "format": "html"}
+            )
+            self.assertTrue(entered.wait(timeout=5))
+            with self.assertRaises(ProtocolError) as ctx:
+                self.server.handlers["export.html"](self.server, {"task_id": tid})
+            self.assertEqual(ctx.exception.code, ErrorCode.TASK_STATE_CONFLICT)
+            release.set()
+            _wait_terminal(self.server, active["export_id"])
+
+    def test_shutdown_cancels_running_job_without_starting_next_queued_job(self) -> None:
+        first_task, _ = _seed_exportable_task(self.server, self.tmp)
+        second_task, _ = _seed_exportable_task(self.server, self.tmp)
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_writer(*, output_path, **_kwargs):
+            entered.set()
+            self.assertTrue(release.wait(timeout=5))
+            output_path.write_text("{}", encoding="utf-8")
+            return {"file_size_bytes": 2, "page_count": 0, "hit_count": 0}
+
+        with patch("archivelens_engine.server.write_offline_review_report", side_effect=blocked_writer):
+            first = self.server.handlers["exports.create"](
+                self.server, {"task_id": first_task, "format": "html"}
+            )
+            second = self.server.handlers["exports.create"](
+                self.server, {"task_id": second_task, "format": "html"}
+            )
+            self.assertTrue(entered.wait(timeout=5))
+            self.server.handlers["app.shutdown"](self.server, {})
+            release.set()
+            first_job = _wait_terminal(self.server, first["export_id"])
+        self.assertEqual(first_job["status"], "cancelled")
+        self.assertEqual(self.server.store.get_export_job(second["export_id"])["status"], "queued")
+        with self.server._export_state_lock:
+            self.assertNotIn(second["export_id"], self.server._export_threads)
+
+    def test_temp_cleanup_failure_is_persisted_for_user_diagnostics(self) -> None:
+        tid, _original = _seed_exportable_task(self.server, self.tmp)
+        emitted_events: list[str] = []
+        original_emit = self.server.emit_event
+
+        def capture_emit(event: str, *args: object, **kwargs: object) -> None:
+            emitted_events.append(event)
+            original_emit(event, *args, **kwargs)
+
+        with (
+            patch("archivelens_engine.server.write_offline_review_report", side_effect=_fake_writer(self.server)),
+            patch(
+                "archivelens_engine.server._cleanup_export_temp",
+                side_effect=CleanupError("PERMISSION_DENIED", "injected private path"),
+            ),
+            patch.object(self.server, "emit_event", side_effect=capture_emit),
+        ):
+            created = self.server.handlers["exports.create"](
+                self.server, {"task_id": tid, "format": "html"}
+            )
+            job = _wait_terminal(self.server, created["export_id"])
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["cleanup_status"], "failed")
+        self.assertEqual(job["cleanup_error_code"], "PERMISSION_DENIED")
+        self.assertNotIn("private path", job["cleanup_error_message"])
+        self.assertIn("export.cleanup", emitted_events)
+
 
 class ExportJobInteractionTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -261,6 +481,7 @@ class ExportJobInteractionTests(unittest.TestCase):
         self.server = _make_server(self.tmp)
 
     def tearDown(self) -> None:
+        _drain_export_threads(self.server)
         self.server.store.close()
         import shutil
 
@@ -296,8 +517,9 @@ class ExportJobInteractionTests(unittest.TestCase):
 
     def test_existing_success_history_not_overwritten_by_failed_job(self) -> None:
         tid, _original = _seed_exportable_task(self.server, self.tmp)
-        ok = self.server.handlers["exports.create"](self.server, {"task_id": tid, "format": "json"})
-        _wait_terminal(self.server, ok["export_id"])
+        with patch("archivelens_engine.server.write_offline_review_report", side_effect=_fake_writer(self.server)):
+            ok = self.server.handlers["exports.create"](self.server, {"task_id": tid, "format": "html"})
+            _wait_terminal(self.server, ok["export_id"])
         out = Path(self.server.store.get_export_job(ok["export_id"])["output_path"])
         original_bytes = out.read_bytes()
         history_before = len(self.server.store.list_exports(task_id=tid, limit=10, offset=0))
@@ -316,9 +538,20 @@ class ExportJobRestartTests(unittest.TestCase):
             server = _make_server(tmp)
             tid, _original = _seed_exportable_task(server, tmp)
             export_id = server.store.create_export_job(
-                task_id=tid, format="html", output_path=str(tmp / "tasks" / tid / "exports" / f"{tid}-report.html")
+                task_id=tid, format="html"
             )["export_id"]
-            server.store.update_export_job(export_id, status="rendering_images")
+            server.store.transition_export_job(
+                export_id,
+                ("queued",),
+                status="rendering_images",
+                current_stage="images",
+            )
+            final_path = (
+                tmp / "tasks" / tid / "exports" / f"{tid}-{export_id}-report.html"
+            )
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            final_path.write_text("uncommitted-output", encoding="utf-8")
+            server.store.update_export_job(export_id, output_path=str(final_path))
             (tmp / ".export-jobs" / export_id).mkdir(parents=True, exist_ok=True)
             (tmp / ".export-jobs" / export_id / "partial").write_text("x", encoding="utf-8")
             server.store.close()
@@ -327,6 +560,8 @@ class ExportJobRestartTests(unittest.TestCase):
                 job = server2.store.get_export_job(export_id)
                 self.assertEqual(job["status"], "interrupted")
                 self.assertFalse((tmp / ".export-jobs" / export_id).exists())
+                self.assertFalse(final_path.exists())
+                self.assertEqual(job["cleanup_status"], "completed")
                 with patch("archivelens_engine.server.write_offline_review_report", side_effect=_fake_writer(server2)):
                     retry = server2.handlers["exports.retry"](server2, {"export_id": export_id})
                     self.assertNotEqual(retry["export_id"], export_id)
@@ -334,6 +569,62 @@ class ExportJobRestartTests(unittest.TestCase):
                 self.assertEqual(retry_job["status"], "completed")
             finally:
                 server2.store.close()
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_queued_jobs_resume_in_fifo_order_after_restart(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="archivelens-export-queued-restart-"))
+        try:
+            server = _make_server(tmp)
+            first_task, _ = _seed_exportable_task(server, tmp)
+            second_task, _ = _seed_exportable_task(server, tmp)
+            first = server.store.create_export_job(task_id=first_task, format="json")
+            second = server.store.create_export_job(task_id=second_task, format="json")
+            server.store.close()
+            server2 = _make_server(tmp)
+            try:
+                first_job = _wait_terminal(server2, first["export_id"])
+                second_job = _wait_terminal(server2, second["export_id"])
+                self.assertEqual(first_job["status"], "completed")
+                self.assertEqual(second_job["status"], "completed")
+                self.assertLessEqual(first_job["started_at"], second_job["started_at"])
+            finally:
+                _drain_export_threads(server2)
+                server2.store.close()
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_restart_fails_closed_when_interrupted_state_cannot_persist(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="archivelens-export-reconcile-db-fail-"))
+        try:
+            server = _make_server(tmp)
+            tid, _ = _seed_exportable_task(server, tmp)
+            job = server.store.create_export_job(task_id=tid, format="json")
+            server.store.transition_export_job(
+                job["export_id"], ("queued",), status="writing", current_stage="writing"
+            )
+            server.store.close()
+            with (
+                patch.object(
+                    TaskStore,
+                    "transition_export_job",
+                    side_effect=sqlite3.OperationalError("injected state write failure"),
+                ),
+                self.assertRaises(RuntimeError),
+            ):
+                _make_server(tmp)
+            # 构造失败必须释放 DB 句柄，随后仍可重新打开并完成真实恢复。
+            recovered = _make_server(tmp)
+            try:
+                self.assertEqual(
+                    recovered.store.get_export_job(job["export_id"])["status"], "interrupted"
+                )
+            finally:
+                recovered.store.close()
         finally:
             import shutil
 
@@ -394,10 +685,71 @@ class ExportJobSafetyTests(unittest.TestCase):
 
             shutil.rmtree(tmp, ignore_errors=True)
 
+    @unittest.skipUnless(os.name == "nt", "Windows junction 行为")
+    def test_export_temp_parent_junction_is_rejected(self) -> None:
+        import subprocess
+        import shutil
+
+        tmp = Path(tempfile.mkdtemp(prefix="archivelens-export-parent-junction-"))
+        server = _make_server(tmp)
+        outside = tmp / "outside-temp"
+        outside.mkdir()
+        parent = tmp / ".export-jobs"
+        try:
+            if parent.exists():
+                shutil.rmtree(parent)
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(parent), str(outside)],
+                check=True,
+                capture_output=True,
+            )
+            tid, _original = _seed_exportable_task(server, tmp)
+            created = server.handlers["exports.create"](
+                server, {"task_id": tid, "format": "json"}
+            )
+            job = _wait_terminal(server, created["export_id"])
+            self.assertEqual(job["status"], "failed")
+            self.assertEqual(list(outside.iterdir()), [])
+        finally:
+            _drain_export_threads(server)
+            server.store.close()
+            subprocess.run(["cmd", "/c", "rmdir", str(parent)], check=False, capture_output=True)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction 行为")
+    def test_export_final_parent_junction_is_rejected(self) -> None:
+        import subprocess
+        import shutil
+
+        tmp = Path(tempfile.mkdtemp(prefix="archivelens-export-final-junction-"))
+        server = _make_server(tmp)
+        tid, _original = _seed_exportable_task(server, tmp)
+        tasks_parent = tmp / "tasks"
+        outside = tmp / "outside-final"
+        outside.mkdir()
+        try:
+            shutil.rmtree(tasks_parent)
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(tasks_parent), str(outside)],
+                check=True,
+                capture_output=True,
+            )
+            created = server.handlers["exports.create"](
+                server, {"task_id": tid, "format": "json"}
+            )
+            job = _wait_terminal(server, created["export_id"])
+            self.assertEqual(job["status"], "failed")
+            self.assertEqual(list(outside.rglob("*")), [])
+        finally:
+            _drain_export_threads(server)
+            server.store.close()
+            subprocess.run(["cmd", "/c", "rmdir", str(tasks_parent)], check=False, capture_output=True)
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 class ExportJobSchemaTests(unittest.TestCase):
-    def test_schema_version_is_v9(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 9)
+    def test_schema_version_is_v10(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 10)
 
     def test_migration_from_v8_creates_export_jobs_table(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="archivelens-export-migrate-"))
@@ -414,7 +766,15 @@ class ExportJobSchemaTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='export_jobs'"
             ).fetchone()
             self.assertIsNotNone(table)
-            self.assertEqual(store2.conn.execute("PRAGMA user_version").fetchone()[0], 9)
+            self.assertEqual(store2.conn.execute("PRAGMA user_version").fetchone()[0], 10)
+            columns = {
+                row[1] for row in store2.conn.execute("PRAGMA table_info(export_jobs)").fetchall()
+            }
+            self.assertIn("cleanup_status", columns)
+            index = store2.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_export_jobs_one_active_format'"
+            ).fetchone()
+            self.assertIsNotNone(index)
             store2.close()
         finally:
             import shutil

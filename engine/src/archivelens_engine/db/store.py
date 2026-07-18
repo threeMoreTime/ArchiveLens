@@ -35,7 +35,7 @@ from ..search_terms import (
     unicode_sequence,
 )
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 OCR_CORPUS_VERSION = 1
 OCR_INDEX_NOT_BUILT = "not_built"
 OCR_INDEX_BUILDING = "building"
@@ -47,6 +47,55 @@ LEGACY_TASK_REQUIRES_REVIEW = "LEGACY_TASK_REQUIRES_REVIEW"
 DEFAULT_REVIEW_IMAGE_QUALITY = "maximum"
 DEFAULT_CONTEXT_DIRECTION = "ltr"
 DEFAULT_CONTEXT_RADIUS = 15
+
+EXPORT_JOB_ACTIVE_STATUSES = (
+    "queued",
+    "preparing",
+    "rendering_images",
+    "building",
+    "writing",
+    "cancelling",
+)
+EXPORT_JOB_PROGRESS_STATUSES = (
+    "queued",
+    "preparing",
+    "rendering_images",
+    "building",
+    "writing",
+)
+EXPORT_JOB_TERMINAL_STATUSES = ("cancelled", "completed", "failed", "interrupted")
+EXPORT_JOB_FORMATS = ("html", "json", "review")
+MAX_CONCURRENT_EXPORT_JOBS = 1
+
+
+class ExportJobConflictError(RuntimeError):
+    """同一任务和格式已有活动导出。"""
+
+
+class ExportJobCapacityError(RuntimeError):
+    """活动导出达到本地并发上限。"""
+
+
+EXPORT_JOB_MUTABLE_FIELDS = frozenset(
+    {
+        "status",
+        "current_stage",
+        "progress_completed",
+        "progress_total",
+        "output_path",
+        "temporary_path",
+        "error_code",
+        "error_message",
+        "cancel_requested",
+        "cleanup_status",
+        "cleanup_error_code",
+        "cleanup_error_message",
+        "cleanup_attempt_count",
+        "started_at",
+        "finished_at",
+        "updated_at",
+    }
+)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -326,6 +375,10 @@ CREATE TABLE IF NOT EXISTS export_jobs (
     error_message TEXT NOT NULL DEFAULT '',
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     retry_of TEXT NOT NULL DEFAULT '',
+    cleanup_status TEXT NOT NULL DEFAULT 'pending',
+    cleanup_error_code TEXT NOT NULL DEFAULT '',
+    cleanup_error_message TEXT NOT NULL DEFAULT '',
+    cleanup_attempt_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     started_at TEXT,
     finished_at TEXT,
@@ -377,6 +430,7 @@ class TaskStore:
                 self._migrate_schema(current)
             else:
                 self._create_occurrence_business_indexes()
+            self._ensure_export_job_contract()
             self.conn.execute(
                 "INSERT INTO schema_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 ("schema_version", str(SCHEMA_VERSION)),
@@ -602,6 +656,66 @@ class TaskStore:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_export_jobs_task ON export_jobs(task_id, format)"
             )
+        if current < 10:
+            self._ensure_column("export_jobs", "cleanup_status", "TEXT NOT NULL DEFAULT 'pending'")
+            self._ensure_column("export_jobs", "cleanup_error_code", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("export_jobs", "cleanup_error_message", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("export_jobs", "cleanup_attempt_count", "INTEGER NOT NULL DEFAULT 0")
+
+    def _ensure_export_job_contract(self) -> None:
+        """建立 v10 导出约束；迁移时把重复活动作业安全标记为 interrupted。"""
+        active_sql = ",".join(f"'{status}'" for status in EXPORT_JOB_ACTIVE_STATUSES)
+        now = now_iso()
+        self.conn.execute(
+            f"""
+            UPDATE export_jobs
+            SET status='interrupted', current_stage='interrupted', finished_at=?, updated_at=?,
+                error_code='ENGINE_PROCESS_EXITED', error_message='升级时发现重复活动导出，请重试'
+            WHERE export_id IN (
+                SELECT export_id FROM (
+                    SELECT export_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY task_id, format
+                               ORDER BY created_at DESC, export_id DESC
+                           ) AS duplicate_rank
+                    FROM export_jobs
+                    WHERE status IN ({active_sql})
+                ) WHERE duplicate_rank > 1
+            )
+            """,
+            (now, now),
+        )
+        self.conn.execute(
+            f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_export_jobs_one_active_format
+            ON export_jobs(task_id, format)
+            WHERE status IN ({active_sql})
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_export_jobs_validate_insert
+            BEFORE INSERT ON export_jobs
+            WHEN NEW.format NOT IN ('html','json','review')
+              OR NEW.status NOT IN ('queued','preparing','rendering_images','building','writing','cancelling','cancelled','completed','failed','interrupted')
+              OR NEW.cleanup_status NOT IN ('pending','completed','failed')
+            BEGIN
+                SELECT RAISE(ABORT, 'invalid export job state');
+            END
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_export_jobs_validate_update
+            BEFORE UPDATE OF format, status, cleanup_status ON export_jobs
+            WHEN NEW.format NOT IN ('html','json','review')
+              OR NEW.status NOT IN ('queued','preparing','rendering_images','building','writing','cancelling','cancelled','completed','failed','interrupted')
+              OR NEW.cleanup_status NOT IN ('pending','completed','failed')
+            BEGIN
+                SELECT RAISE(ABORT, 'invalid export job state');
+            END
+            """
+        )
 
     def _mark_untrusted_legacy_tasks_for_review(self) -> None:
         """Prevent v1 tasks from resuming without authoritative page progress."""
@@ -1085,22 +1199,55 @@ class TaskStore:
         *,
         task_id: str,
         format: str,
-        output_path: str,
+        output_path: str = "",
         retry_of: str = "",
+        require_idle: bool = False,
     ) -> dict[str, Any]:
+        if format not in EXPORT_JOB_FORMATS:
+            raise ValueError(f"unsupported export format: {format}")
         export_id = new_id("exp_")
         now = now_iso()
         with self._lock:
-            with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                active_placeholders = ",".join("?" for _ in EXPORT_JOB_ACTIVE_STATUSES)
+                same = self.conn.execute(
+                    f"""SELECT 1 FROM export_jobs
+                        WHERE task_id=? AND format=? AND status IN ({active_placeholders})
+                        LIMIT 1""",
+                    (task_id, format, *EXPORT_JOB_ACTIVE_STATUSES),
+                ).fetchone()
+                if same is not None:
+                    raise ExportJobConflictError(f"active export exists: {task_id}/{format}")
+                if require_idle:
+                    active_count = int(
+                        self.conn.execute(
+                            f"SELECT COUNT(*) FROM export_jobs WHERE status IN ({active_placeholders})",
+                            EXPORT_JOB_ACTIVE_STATUSES,
+                        ).fetchone()[0]
+                    )
+                    if active_count:
+                        raise ExportJobCapacityError("another export is active or queued")
                 self.conn.execute(
                     """INSERT INTO export_jobs
                        (export_id, task_id, format, status, current_stage, progress_completed,
                         progress_total, output_path, temporary_path, error_code, error_message,
-                        cancel_requested, retry_of, created_at, updated_at)
-                       VALUES (?, ?, ?, 'queued', '', 0, 0, ?, '', '', '', 0, ?, ?, ?)""",
+                        cancel_requested, retry_of, cleanup_status, cleanup_error_code,
+                        cleanup_error_message, cleanup_attempt_count, created_at, updated_at)
+                       VALUES (?, ?, ?, 'queued', '', 0, 0, ?, '', '', '', 0, ?, 'pending', '', '', 0, ?, ?)""",
                     (export_id, task_id, format, output_path, retry_of, now, now),
                 )
-                return self._get_export_job_locked(export_id)
+                created = self._get_export_job_locked(export_id)
+                self.conn.commit()
+                if created is None:
+                    raise RuntimeError("export job insert was not readable")
+                return created
+            except sqlite3.IntegrityError as exc:
+                self.conn.rollback()
+                raise ExportJobConflictError(f"active export exists: {task_id}/{format}") from exc
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def _get_export_job_locked(self, export_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
@@ -1123,6 +1270,10 @@ class TaskStore:
             "error_message": str(row.get("error_message") or ""),
             "cancel_requested": bool(row.get("cancel_requested")),
             "retry_of": str(row.get("retry_of") or ""),
+            "cleanup_status": str(row.get("cleanup_status") or "pending"),
+            "cleanup_error_code": str(row.get("cleanup_error_code") or ""),
+            "cleanup_error_message": str(row.get("cleanup_error_message") or ""),
+            "cleanup_attempt_count": int(row.get("cleanup_attempt_count") or 0),
             "created_at": str(row["created_at"]),
             "started_at": row["started_at"],
             "finished_at": row["finished_at"],
@@ -1139,13 +1290,21 @@ class TaskStore:
         with self._lock:
             return self._get_export_job_locked(export_id)
 
-    def list_export_jobs(self, task_id: str) -> list[dict[str, Any]]:
+    def list_export_jobs(self, task_id: str, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         with self._lock:
             rows = self.conn.execute(
-                "SELECT * FROM export_jobs WHERE task_id=? ORDER BY created_at DESC",
-                (task_id,),
+                "SELECT * FROM export_jobs WHERE task_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (task_id, limit, offset),
             ).fetchall()
         return [self._export_job_for_api(dict(row)) for row in rows]
+
+    def count_export_jobs(self, task_id: str) -> int:
+        with self._lock:
+            return int(
+                self.conn.execute(
+                    "SELECT COUNT(*) FROM export_jobs WHERE task_id=?", (task_id,)
+                ).fetchone()[0]
+            )
 
     def list_active_export_jobs(self, task_id: str | None = None) -> list[dict[str, Any]]:
         """返回仍运行中的 job（未到终态）。task_id 可选过滤。"""
@@ -1162,7 +1321,7 @@ class TaskStore:
 
     def list_running_export_jobs_internal(self) -> list[dict[str, Any]]:
         """重启恢复用：返回所有非终态 job 的原始行（含 temporary_path）。"""
-        active = ("queued", "preparing", "rendering_images", "building", "writing", "cancelling")
+        active = ("preparing", "rendering_images", "building", "writing", "cancelling")
         placeholders = ",".join("?" for _ in active)
         with self._lock:
             rows = self.conn.execute(
@@ -1174,8 +1333,11 @@ class TaskStore:
     def update_export_job(self, export_id: str, **fields: Any) -> bool:
         if not fields:
             return False
-        if "export_id" in fields or "task_id" in fields or "format" in fields:
-            raise ValueError("export job identity fields are immutable")
+        unknown = set(fields) - EXPORT_JOB_MUTABLE_FIELDS
+        if unknown:
+            raise ValueError(f"unsupported export job fields: {sorted(unknown)}")
+        if "status" in fields:
+            raise ValueError("status transitions must use transition_export_job")
         fields.setdefault("updated_at", now_iso())
         cols = ", ".join(f"{k}=?" for k in fields)
         vals = list(fields.values()) + [export_id]
@@ -1185,6 +1347,183 @@ class TaskStore:
             )
             self.conn.commit()
         return cursor.rowcount == 1
+
+    def transition_export_job(
+        self,
+        export_id: str,
+        expected_statuses: Iterable[str],
+        *,
+        require_cancel_requested: bool | None = None,
+        **fields: Any,
+    ) -> dict[str, Any] | None:
+        """CAS 状态转换；失败时返回真实当前行，终态不会被旧写入回退。"""
+        expected = tuple(expected_statuses)
+        if not expected or "status" not in fields:
+            raise ValueError("expected statuses and target status are required")
+        unknown = set(fields) - EXPORT_JOB_MUTABLE_FIELDS
+        if unknown:
+            raise ValueError(f"unsupported export job fields: {sorted(unknown)}")
+        fields.setdefault("updated_at", now_iso())
+        set_sql = ", ".join(f"{key}=?" for key in fields)
+        placeholders = ",".join("?" for _ in expected)
+        where = f"export_id=? AND status IN ({placeholders})"
+        params: list[Any] = [*fields.values(), export_id, *expected]
+        if require_cancel_requested is not None:
+            where += " AND cancel_requested=?"
+            params.append(1 if require_cancel_requested else 0)
+        with self._lock:
+            with self.conn:
+                self.conn.execute(f"UPDATE export_jobs SET {set_sql} WHERE {where}", params)
+                return self._get_export_job_locked(export_id)
+
+    def set_export_job_progress(
+        self,
+        export_id: str,
+        *,
+        status: str,
+        current_stage: str,
+        completed: int,
+        total: int,
+    ) -> dict[str, Any] | None:
+        return self.transition_export_job(
+            export_id,
+            EXPORT_JOB_PROGRESS_STATUSES,
+            require_cancel_requested=False,
+            status=status,
+            current_stage=current_stage,
+            progress_completed=completed,
+            progress_total=total,
+        )
+
+    def finish_export_job(
+        self,
+        export_id: str,
+        *,
+        status: str,
+        error_code: str = "",
+        error_message: str = "",
+    ) -> dict[str, Any] | None:
+        if status not in {"cancelled", "failed", "interrupted"}:
+            raise ValueError(f"invalid terminal status: {status}")
+        return self.transition_export_job(
+            export_id,
+            EXPORT_JOB_ACTIVE_STATUSES,
+            status=status,
+            current_stage=status,
+            error_code=error_code,
+            error_message=error_message,
+            finished_at=now_iso(),
+        )
+
+    def complete_export_job(
+        self,
+        export_id: str,
+        *,
+        task_id: str,
+        kind: str,
+        path: str,
+        progress_completed: int,
+        progress_total: int,
+    ) -> bool:
+        """在同一 SQLite 事务中登记成功历史并把 job 置 completed。"""
+        placeholders = ",".join("?" for _ in EXPORT_JOB_PROGRESS_STATUSES)
+        now = now_iso()
+        history_id = new_id("exp_")
+        with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = self.conn.execute(
+                    f"""UPDATE export_jobs
+                        SET status='completed', current_stage='completed',
+                            progress_completed=?, progress_total=?, finished_at=?, updated_at=?
+                        WHERE export_id=? AND task_id=? AND format=?
+                          AND status IN ({placeholders}) AND cancel_requested=0""",
+                    (
+                        progress_completed,
+                        progress_total,
+                        now,
+                        now,
+                        export_id,
+                        task_id,
+                        kind,
+                        *EXPORT_JOB_PROGRESS_STATUSES,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    self.conn.rollback()
+                    return False
+                self.conn.execute(
+                    "INSERT INTO exports (export_id, task_id, kind, path, created_at) VALUES (?,?,?,?,?)",
+                    (history_id, task_id, kind, path, now),
+                )
+                self.conn.commit()
+                return True
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    def export_completion_recorded(self, export_id: str, *, path: str) -> bool:
+        """验证模糊 commit 结果：job 终态与成功历史必须同时存在且路径一致。"""
+        with self._lock:
+            job = self.conn.execute(
+                "SELECT task_id, format, status, output_path FROM export_jobs WHERE export_id=?",
+                (export_id,),
+            ).fetchone()
+            if job is None or job["status"] != "completed" or job["output_path"] != path:
+                return False
+            history = self.conn.execute(
+                "SELECT 1 FROM exports WHERE task_id=? AND kind=? AND path=? LIMIT 1",
+                (job["task_id"], job["format"], path),
+            ).fetchone()
+            return history is not None
+
+    def mark_export_cleanup_result(
+        self,
+        export_id: str,
+        *,
+        success: bool,
+        error_code: str = "",
+        error_message: str = "",
+    ) -> bool:
+        now = now_iso()
+        with self._lock:
+            cursor = self.conn.execute(
+                """UPDATE export_jobs
+                   SET cleanup_status=?, cleanup_error_code=?, cleanup_error_message=?,
+                       cleanup_attempt_count=cleanup_attempt_count+1,
+                       temporary_path=CASE WHEN ? THEN '' ELSE temporary_path END,
+                       updated_at=?
+                   WHERE export_id=?""",
+                (
+                    "completed" if success else "failed",
+                    "" if success else error_code,
+                    "" if success else error_message,
+                    1 if success else 0,
+                    now,
+                    export_id,
+                ),
+            )
+            self.conn.commit()
+        return cursor.rowcount == 1
+
+    def list_export_jobs_needing_cleanup(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                """SELECT * FROM export_jobs
+                   WHERE temporary_path <> ''
+                      OR cleanup_status = 'failed'
+                      OR (cleanup_status = 'pending' AND status <> 'queued')
+                   ORDER BY created_at"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_queued_export_jobs_internal(self, *, limit: int = 1) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM export_jobs WHERE status='queued' ORDER BY created_at, export_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def delete_export_job(self, export_id: str) -> bool:
         with self._lock:
@@ -2710,6 +3049,12 @@ class TaskStore:
 
 __all__ = [
     "TaskStore",
+    "ExportJobConflictError",
+    "ExportJobCapacityError",
+    "EXPORT_JOB_ACTIVE_STATUSES",
+    "EXPORT_JOB_PROGRESS_STATUSES",
+    "EXPORT_JOB_TERMINAL_STATUSES",
+    "MAX_CONCURRENT_EXPORT_JOBS",
     "SCHEMA_VERSION",
     "SCHEMA_SQL",
     "OCR_CORPUS_VERSION",

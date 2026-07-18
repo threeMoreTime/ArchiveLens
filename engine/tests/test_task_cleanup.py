@@ -556,10 +556,41 @@ class TaskCleanupWindowsRealTests(unittest.TestCase):
 
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_tasks_parent_junction_pointing_outside_root_is_rejected(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="archivelens-cleanup-parent-junction-"))
+        try:
+            server = _make_server(tmp)
+            tid, _task_dir, original = _seed_completed_task(server, tmp)
+            import shutil
+
+            tasks_parent = tmp / "tasks"
+            shutil.rmtree(tasks_parent)
+            outside = tmp / "outside-derived"
+            outside_task = outside / tid
+            outside_task.mkdir(parents=True)
+            secret = outside_task / "must-survive.txt"
+            secret.write_text("must-not-be-deleted", encoding="utf-8")
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(tasks_parent), str(outside)],
+                check=True,
+                capture_output=True,
+            )
+            with self.assertRaises(ProtocolError) as ctx:
+                _h_tasks_delete(server, {"task_id": tid})
+            self.assertEqual(ctx.exception.details["cleanup_status"], "cleanup_failed")
+            self.assertTrue(secret.exists())
+            self.assertTrue(original.exists())
+            subprocess.run(["cmd", "/c", "rmdir", str(tasks_parent)], check=False, capture_output=True)
+            server.store.close()
+        finally:
+            import shutil
+
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 class TaskCleanupSchemaTests(unittest.TestCase):
-    def test_schema_version_is_v9(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 9)
+    def test_schema_version_is_v10(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 10)
 
     def test_migration_from_v7_creates_cleanup_jobs_table(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="archivelens-cleanup-migrate-"))
@@ -576,7 +607,7 @@ class TaskCleanupSchemaTests(unittest.TestCase):
             ).fetchone()
             self.assertIsNotNone(table)
             version = store2.conn.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual(version, 9)
+            self.assertEqual(version, 10)
             self.assertIsNone(store2.task_cleanup_status("task_none"))
             store2.close()
         finally:

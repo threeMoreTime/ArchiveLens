@@ -67,7 +67,7 @@ const api: ArchiveLensApi = {
     list: (task_id, p) => ipcRenderer.invoke("exports.list", { task_id, ...(p ?? {}) }),
     create: (p) => ipcRenderer.invoke("exports.create", p),
     get: (export_id) => ipcRenderer.invoke("exports.get", { export_id }),
-    listJobs: (task_id) => ipcRenderer.invoke("exports.listJobs", { task_id }),
+    listJobs: (task_id, p) => ipcRenderer.invoke("exports.listJobs", { task_id, ...(p ?? {}) }),
     cancel: (export_id) => ipcRenderer.invoke("exports.cancel", { export_id }),
     retry: (export_id) => ipcRenderer.invoke("exports.retry", { export_id }),
   },

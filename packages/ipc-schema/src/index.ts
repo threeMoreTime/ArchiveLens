@@ -458,7 +458,7 @@ export type ExportJobStatus = z.infer<typeof ExportJobStatusSchema>;
 export const ExportJobSchema = z.object({
   export_id: z.string().min(1),
   task_id: z.string().min(1),
-  format: z.string().min(1),
+  format: z.enum(["json", "html", "review"]),
   status: ExportJobStatusSchema,
   current_stage: z.string().default(""),
   progress_completed: z.number().int().nonnegative().default(0),
@@ -468,6 +468,10 @@ export const ExportJobSchema = z.object({
   error_message: z.string().default(""),
   cancel_requested: z.boolean().default(false),
   retry_of: z.string().default(""),
+  cleanup_status: z.enum(["pending", "completed", "failed"]).default("pending"),
+  cleanup_error_code: z.string().default(""),
+  cleanup_error_message: z.string().default(""),
+  cleanup_attempt_count: z.number().int().nonnegative().default(0),
   created_at: z.string().min(1),
   started_at: z.string().nullable().default(null),
   finished_at: z.string().nullable().default(null),
@@ -477,14 +481,22 @@ export type ExportJob = z.infer<typeof ExportJobSchema>;
 export const ExportJobCreateResultSchema = z.object({
   export_id: z.string().min(1),
   task_id: z.string().min(1),
-  format: z.string().min(1),
-  status: z.string().min(1),
+  format: z.enum(["json", "html", "review"]),
+  status: ExportJobStatusSchema,
   retry_of: z.string().optional().default(""),
+}).passthrough();
+
+export const ExportJobActionResultSchema = z.object({
+  export_id: z.string().min(1),
+  status: ExportJobStatusSchema,
 }).passthrough();
 
 export const ExportJobsListResultSchema = z.object({
   task_id: z.string().min(1),
   items: z.array(ExportJobSchema),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
 }).passthrough();
 
 export const ExportsListResultSchema = z.object({
@@ -714,7 +726,7 @@ export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "exports.create") return ExportJobCreateResultSchema.parse(value);
   if (method === "exports.get") return ExportJobSchema.parse(value);
   if (method === "exports.listJobs") return ExportJobsListResultSchema.parse(value);
-  if (method === "exports.cancel") return ExportJobCreateResultSchema.parse(value);
+  if (method === "exports.cancel") return ExportJobActionResultSchema.parse(value);
   if (method === "exports.retry") return ExportJobCreateResultSchema.parse(value);
   if (method === "results.query") return ResultsQueryResultSchema.parse(value);
   if (method === "search.corpusStatus") return OcrCorpusStatusResultSchema.parse(value);

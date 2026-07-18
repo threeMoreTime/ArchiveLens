@@ -115,6 +115,10 @@ export interface ExportJob {
   error_message: string;
   cancel_requested: boolean;
   retry_of: string;
+  cleanup_status: "pending" | "completed" | "failed";
+  cleanup_error_code: string;
+  cleanup_error_message: string;
+  cleanup_attempt_count: number;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -292,7 +296,7 @@ export interface ArchiveLensApi {
     list(task_id: string, p?: { limit?: number; offset?: number }): Promise<{ task_id: string; items: ExportRecord[]; limit: number; offset: number }>;
     create(p: { task_id: string; format: "html" | "json" | "review" }): Promise<ExportJobCreateResult>;
     get(export_id: string): Promise<ExportJob>;
-    listJobs(task_id: string): Promise<{ task_id: string; items: ExportJob[] }>;
+    listJobs(task_id: string, p?: { limit?: number; offset?: number }): Promise<{ task_id: string; items: ExportJob[]; limit: number; offset: number; total: number }>;
     cancel(export_id: string): Promise<{ export_id: string; status: string }>;
     retry(export_id: string): Promise<ExportJobCreateResult>;
   };

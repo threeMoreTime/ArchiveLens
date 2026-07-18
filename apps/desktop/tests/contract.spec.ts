@@ -22,6 +22,7 @@ import {
   PROTOCOL_VERSION,
   TaskCleanupTargetResultSchema,
   ExportJobSchema,
+  ExportJobActionResultSchema,
   ExportJobCreateResultSchema,
   ExportJobsListResultSchema,
   OcrCorpusStatusResultSchema,
@@ -34,6 +35,7 @@ import {
   SearchScriptScopeSchema,
   MethodNameSchema,
   normalizeSearchText,
+  parseMethodResult,
 } from "@shared/index";
 
 const FIXTURE_DIR = path.resolve(__dirname, "../../../tests/ipc-contract/fixtures");
@@ -410,13 +412,18 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
       export_id: "exp-1", task_id: "task-1", format: "html", status: "rendering_images",
       current_stage: "images", progress_completed: 3, progress_total: 10, output_path: "",
       error_code: "", error_message: "", cancel_requested: false, retry_of: "", created_at: "2026-07-18T00:00:00Z",
+      cleanup_status: "completed", cleanup_error_code: "", cleanup_error_message: "", cleanup_attempt_count: 1,
       started_at: "2026-07-18T00:00:01Z", finished_at: null,
     };
     expect(ExportJobSchema.safeParse(job).success).toBe(true);
     expect(ExportJobSchema.safeParse({ ...job, status: "interrupted" }).success).toBe(true);
     expect(ExportJobSchema.safeParse({ ...job, status: "bogus" }).success).toBe(false);
     expect(ExportJobCreateResultSchema.safeParse({ export_id: "exp-2", task_id: "task-1", format: "json", status: "queued" }).success).toBe(true);
-    expect(ExportJobsListResultSchema.safeParse({ task_id: "task-1", items: [job] }).success).toBe(true);
+    expect(ExportJobActionResultSchema.safeParse({ export_id: "exp-2", status: "cancelling" }).success).toBe(true);
+    expect(ExportJobsListResultSchema.safeParse({ task_id: "task-1", items: [job], limit: 50, offset: 0, total: 1 }).success).toBe(true);
+    expect(parseMethodResult("exports.cancel", { export_id: "exp-2", status: "cancelling" })).toEqual({ export_id: "exp-2", status: "cancelling" });
+    expect(() => parseMethodResult("exports.cancel", { export_id: "exp-2", task_id: "task-1", format: "json", status: "cancelling" })).not.toThrow();
+    expect(ExportJobSchema.safeParse({ ...job, format: "xml" }).success).toBe(false);
     // 未新增协议错误码、未递增版本（并发冲突复用 TASK_STATE_CONFLICT）
     expect(PROTOCOL_VERSION).toBe(2);
   });

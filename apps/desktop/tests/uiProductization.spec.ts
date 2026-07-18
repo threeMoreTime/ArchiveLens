@@ -181,7 +181,10 @@ describe("桌面端产品化 UI contract", () => {
     expect(exportPage).toContain("报告包含大量页面图片，文件可能超过 300MB，打开、搜索和打印可能较慢");
     expect(exportPage).toContain("仍然导出 HTML");
     expect(exportPage).toContain('event.event === "export.progress"');
+    expect(exportPage).toContain('event.event === "export.cleanup"');
     expect(exportPage).toContain("正在处理页面图片");
+    expect(exportPage).toContain('job.status !== "queued" && ACTIVE_JOB.has(job.status)');
+    expect(exportPage).toContain('job.export_id !== activeJob?.export_id');
   });
 
   it("切换导出任务时不会沿用上一任务的导出成功状态", () => {

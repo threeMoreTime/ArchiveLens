@@ -65,7 +65,7 @@ export default function ExportPage() {
 
   const loadJobs = useCallback(async (id: string) => {
     try {
-      const result = await window.archiveLens.export.listJobs(id);
+      const result = await window.archiveLens.export.listJobs(id, { limit: 50, offset: 0 });
       setJobs(result.items);
     } catch {
       // 作业列表读取失败不阻塞主流程；下次轮询/事件再刷新
@@ -116,7 +116,7 @@ export default function ExportPage() {
   useEffect(() => {
     if (!taskId) return;
     return window.archiveLens.subscribe.onEvent((event: { task_id?: string | null; event: string }) => {
-      if (event.task_id === taskId && event.event === "export.progress") {
+      if (event.task_id === taskId && (event.event === "export.progress" || event.event === "export.cleanup")) {
         void loadJobs(taskId);
       }
     });
@@ -208,7 +208,8 @@ export default function ExportPage() {
   }
 
   const statusView = task ? taskStatusView(task) : null;
-  const activeJob = jobs.find((job) => ACTIVE_JOB.has(job.status)) ?? null;
+  const runningJob = jobs.find((job) => job.status !== "queued" && ACTIVE_JOB.has(job.status));
+  const activeJob = runningJob ?? jobs.find((job) => ACTIVE_JOB.has(job.status)) ?? null;
   const formatBusy = (fmt: string) => jobs.some((job) => job.format === fmt && ACTIVE_JOB.has(job.status));
   const incompleteReason = !summary?.scan_complete
     ? task?.failure_count
@@ -273,7 +274,9 @@ export default function ExportPage() {
                       <small className="al-muted">创建 {formatDateTime(job.created_at)}{job.finished_at ? ` · 完成 ${formatDateTime(job.finished_at)}` : ""}</small>
                       {job.status === "completed" && job.output_path && <small className="al-muted" title={job.output_path}>{job.output_path}</small>}
                       {job.error_message && <InlineFeedback tone="error">{job.error_message}</InlineFeedback>}
+                      {job.cleanup_status === "failed" && <InlineFeedback tone="warning">{job.cleanup_error_message || "导出临时文件清理失败，将在下次启动重试。"}</InlineFeedback>}
                       <div className="al-inline-actions">
+                        {ACTIVE_JOB.has(job.status) && job.export_id !== activeJob?.export_id && <Button size="small" disabled={busy || job.status === "cancelling"} onClick={() => void cancelJob(job.export_id)}>{job.status === "cancelling" ? "正在取消…" : "取消导出"}</Button>}
                         {job.status === "completed" && job.output_path && <Button size="small" onClick={() => void openFolderFor(job.output_path)}>打开文件夹</Button>}
                         {(job.status === "failed" || job.status === "cancelled" || job.status === "interrupted") && <Button size="small" appearance="primary" disabled={busy || cleanupActive} onClick={() => void retryJob(job.export_id)}>重新导出</Button>}
                       </div>
