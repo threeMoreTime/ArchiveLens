@@ -235,6 +235,16 @@ describe("桌面端产品化 UI contract", () => {
     expect(taskCenter).toContain("al-task-delete-menu-item");
     expect(taskCenter).toContain("不会删除原始文件");
     expect(taskCenter).toContain("DELETABLE_STATUSES");
+    expect(taskCenter).toContain("选择当前页");
+    expect(taskCenter).toContain("批量暂停");
+    expect(taskCenter).toContain("批量取消");
+    expect(taskCenter).toContain("批量删除");
+    expect(taskCenter).toContain("batchEligibility(current, action)");
+    expect(taskCenter).toContain("const boundedTargets = targets.slice(0, PAGE_SIZE)");
+    expect(taskCenter).toContain("batchRunRef.current");
+    expect(taskCenter).toContain("window.archiveLens.tasks.get(target.taskId)");
+    expect(taskCenter).toContain("重试失败项");
+    expect(taskCenter).toContain("不会删除任何原始 PDF、DjVu、TIFF、JPEG 或 PNG 文件");
   });
 
   it("环境诊断展示影响、处理建议、重试和日志入口", () => {
