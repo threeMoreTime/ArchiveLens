@@ -34,7 +34,7 @@ TASK_COMPLETION_TIMEOUT = int(os.environ.get("ARCHIVELENS_PACKAGED_OCR_TIMEOUT_S
 PROGRESS_LOG_INTERVAL_SEC = 30.0
 
 
-def resolve_case(args: argparse.Namespace) -> tuple[str, str, int]:
+def resolve_case(args: argparse.Namespace) -> tuple[str, str, int, dict[str, int]]:
     explicit = args.fixture is not None or args.search_text is not None or args.expected_count is not None
     case_id = args.case_id
     if case_id is None and not explicit:
@@ -46,10 +46,20 @@ def resolve_case(args: argparse.Namespace) -> tuple[str, str, int]:
         case = next((item for item in manifest["cases"] if item["id"] == case_id), None)
         if case is None:
             raise ValueError(f"unknown fixture case: {case_id}")
-        return str(case["file"]), str(case["search_text"]), int(case["expected_count"])
+        expected_matches: dict[str, int] = {}
+        for match in case.get("expected_matches", []):
+            matched_text = str(match["matched_text"])
+            expected_matches[matched_text] = expected_matches.get(matched_text, 0) + 1
+        return (
+            str(case["file"]),
+            str(case["search_text"]),
+            int(case["expected_count"]),
+            expected_matches,
+        )
     if args.fixture is None or args.search_text is None or args.expected_count is None:
         raise ValueError("explicit mode requires --fixture, --search-text, and --expected-count")
-    return args.fixture, args.search_text, args.expected_count
+    expected_matches = {} if args.expected_count == 0 else {args.search_text: args.expected_count}
+    return args.fixture, args.search_text, args.expected_count, expected_matches
 
 
 def main() -> int:
@@ -62,7 +72,7 @@ def main() -> int:
     configure_console()
 
     try:
-        fixture_name, search_text, expected_count = resolve_case(args)
+        fixture_name, search_text, expected_count, expected_matches = resolve_case(args)
     except ValueError as exc:
         log_status("FAIL", str(exc))
         return 2
@@ -261,10 +271,11 @@ def main() -> int:
         log_status("INFO", f"results total={total} matches={json.dumps(matched_texts, ensure_ascii=True, sort_keys=True)}")
 
         for item in items:
-            if item.get("matched_text") != search_text:
+            matched_text = str(item.get("matched_text") or "")
+            if matched_text not in expected_matches:
                 log_status("FAIL", f"unexpected matched_text: {item.get('matched_text')!r}")
                 return 1
-            if not item.get("context_full") or search_text not in str(item.get("context_full")):
+            if not item.get("context_full") or matched_text not in str(item.get("context_full")):
                 log_status("FAIL", "occurrence context is missing the matched text")
                 return 1
             coordinates = [item.get(key) for key in ("normalized_x0", "normalized_y0", "normalized_x1", "normalized_y1")]
@@ -322,7 +333,6 @@ def main() -> int:
         if total != expected_count:
             log_status("FAIL", f"total={total} expected={expected_count}")
             return 1
-        expected_matches = {} if expected_count == 0 else {search_text: expected_count}
         if matched_texts != expected_matches:
             log_status(
                 "FAIL",

@@ -397,6 +397,15 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
       imagesUnrotated: [...document.querySelectorAll<HTMLImageElement>(".image-stage img")]
         .every((image) => getComputedStyle(image).transform === "none"),
       pageCards: document.querySelectorAll(".page-card").length,
+      navItems: document.querySelectorAll(".record-nav-item").length,
+      navigationPresent: Boolean(document.getElementById("record-nav")),
+      defaultSort: (document.getElementById("sort-order") as HTMLSelectElement | null)?.value,
+      cardOrder: [...document.querySelectorAll<HTMLElement>(".occurrence-card")].every((card) =>
+        [...card.children].map((child) => child.className).join("|")
+          .startsWith("card-head|record-text|image-button"),
+      ),
+      sequenceLabels: [...document.querySelectorAll<HTMLElement>(".source-sequence")]
+        .map((element) => element.textContent ?? ""),
       overlays: document.querySelectorAll(".hit-overlay-svg rect").length,
       controls: ["file-filter", "status-filter", "report-search", "sort-order", "page-size", "print-report"]
         .every((id) => Boolean(document.getElementById(id))),
@@ -409,6 +418,11 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     expect(offlineReport.imagesLoaded).toBe(true);
     expect(offlineReport.imagesUnrotated).toBe(true);
     expect(offlineReport.pageCards).toBeGreaterThan(0);
+    expect(offlineReport.navItems).toBeGreaterThanOrEqual(offlineReport.pageCards);
+    expect(offlineReport.navigationPresent).toBe(true);
+    expect(offlineReport.defaultSort).toBe("sequence");
+    expect(offlineReport.cardOrder).toBe(true);
+    expect(offlineReport.sequenceLabels.every((label) => /^#\d{4,} · /.test(label))).toBe(true);
     expect(offlineReport.overlays).toBeGreaterThan(0);
     expect(offlineReport.controls).toBe(true);
     expect(pageErrors).toEqual([]);

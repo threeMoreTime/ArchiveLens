@@ -287,6 +287,51 @@ class CheckpointRoundtripTests(unittest.TestCase):
 
 
 class ReportPipelineLiteralMatchTests(unittest.TestCase):
+    def test_script_scope_matches_original_glyph_without_rewriting_ocr_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"
+            root.mkdir()
+            document = DocumentRecord(
+                document_id="doc-script-scope",
+                file_path=root / "sample.pdf",
+                relative_path="sample.pdf",
+                file_type="PDF",
+                file_size_bytes=1,
+                file_hash_sha256="abc",
+                modified_time=0.0,
+                page_count=1,
+            )
+            actual: dict[str, list[dict]] = {}
+            for scope in ("simplified", "traditional", "both"):
+                render_path = Path(tmp) / f"render-{scope}.png"
+                Image.new("RGB", (200, 100), color="white").save(render_path)
+                metadata = {
+                    "contextual_text": "原簿虧空待查",
+                    "resolved_text": "原簿亏空待查",
+                }
+                pipeline = ReportPipeline(
+                    root_dir=root,
+                    output_html=root / f"{scope}.html",
+                    workspace_dir=Path(tmp) / f"work-{scope}",
+                    search_terms=["亏空"],
+                    search_script_scope=scope,
+                    ocr_engine=lambda _path, metadata=metadata: ([
+                        ([[0, 0], [180, 0], [180, 40], [0, 40]], "原簿虧空待查", 0.98, [], [], [], metadata)
+                    ], None),
+                )
+                pipeline._render_page = lambda _document, _page_index, path=render_path: path  # type: ignore[method-assign]
+                try:
+                    _page, occurrences, ocr_page = pipeline._process_page(document, 0)
+                finally:
+                    pipeline.close()
+                actual[scope] = occurrences
+                self.assertEqual(ocr_page["lines"][0]["raw_text"], "原簿虧空待查")
+                self.assertEqual(ocr_page["lines"][0]["resolved_text"], "原簿亏空待查")
+
+            self.assertEqual(actual["simplified"], [])
+            self.assertEqual([item["matched_text"] for item in actual["traditional"]], ["虧空"])
+            self.assertEqual([item["matched_text"] for item in actual["both"]], ["虧空"])
+
     def test_word_matches_are_distinct_and_use_union_bbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "root"

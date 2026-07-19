@@ -49,6 +49,7 @@ async function launchDesktop(userDataDir: string): Promise<ElectronApplication> 
       AL_DEBUG: "1",
       AL_ENGINE_DEV: python,
       AL_ENGINE_SRC: ENGINE_SRC,
+      AL_SLOWFAKE_PAGES: "1",
     },
   });
 }
@@ -69,6 +70,63 @@ async function openReview(app: ElectronApplication, taskId: string): Promise<Pag
 async function closeApp(app: ElectronApplication): Promise<void> {
   await app.close().catch(() => undefined);
 }
+
+test("E2E-00：1080px 校对三列布局与菜单折叠记忆", async () => {
+  const userDataDir = await makeOwnedUserData();
+  const seeded = await seedReviewTask(userDataDir, 3);
+  let app = await launchDesktop(userDataDir);
+  try {
+    let page = await openReview(app, seeded.taskId);
+    await page.setViewportSize({ width: 1080, height: 760 });
+    await expect(page.getByRole("heading", { name: "校对工作台" })).toHaveCount(0);
+    await expect(page.locator(".al-review-summary")).toHaveCount(0);
+    await expect(page.locator(".al-review-aside-toggle")).toHaveCount(0);
+    await expect(page.locator(".al-sequence-badge").first()).toHaveText("#0001");
+    await expect(page.locator(".al-recoverable, .al-sidebar-task")).toHaveCount(0);
+
+    const layout = await page.locator(".al-review-body").evaluate(() => {
+      const rect = (selector: string) => {
+        const value = document.querySelector(selector)?.getBoundingClientRect();
+        return value ? { x: value.x, width: value.width } : null;
+      };
+      return {
+        image: rect(".al-review-image-pane"),
+        list: rect(".al-result-list"),
+        detail: rect(".al-detail"),
+        rail: rect(".al-review-aside"),
+      };
+    });
+    expect(layout.image).not.toBeNull();
+    expect(layout.list).not.toBeNull();
+    expect(layout.detail).not.toBeNull();
+    expect(layout.rail).not.toBeNull();
+    expect(layout.image!.x).toBeLessThan(layout.list!.x);
+    expect(layout.list!.x).toBeLessThan(layout.detail!.x);
+    expect(layout.detail!.x).toBeLessThan(layout.rail!.x);
+    expect(layout.image!.width / layout.list!.width).toBeGreaterThan(1.85);
+    expect(layout.image!.width / layout.list!.width).toBeLessThan(2.15);
+    expect(layout.list!.width / layout.detail!.width).toBeGreaterThan(0.9);
+    expect(layout.list!.width / layout.detail!.width).toBeLessThan(1.1);
+    expect(layout.rail!.width).toBeGreaterThanOrEqual(54);
+    expect(layout.rail!.width).toBeLessThanOrEqual(58);
+    await expect(page.locator(".al-context-block p")).toHaveCSS("white-space", "pre-wrap");
+
+    const sidebar = page.locator(".al-sidebar");
+    await expect(sidebar).toHaveCSS("width", "220px");
+    await page.getByRole("button", { name: "收起菜单" }).click();
+    await expect(sidebar).toHaveCSS("width", "64px");
+    await expect(page.getByRole("link", { name: "首页" })).toHaveAttribute("title", "首页");
+    await closeApp(app);
+
+    app = await launchDesktop(userDataDir);
+    page = await openReview(app, seeded.taskId);
+    await expect(page.locator(".al-sidebar")).toHaveCSS("width", "64px");
+    await expect(page.getByRole("button", { name: "展开菜单" })).toHaveAttribute("aria-expanded", "false");
+  } finally {
+    await closeApp(app);
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
 
 test("E2E-01：201 条结果可通过三页完整访问", async () => {
   const userDataDir = await makeOwnedUserData();
@@ -132,11 +190,13 @@ test("E2E-02：1000 条 UI 分页、校对持久化和导出与数据库 ID 集�
     await page.getByRole("textbox", { name: "校对备注" }).fill("自动保存备注：重启后仍应存在");
     await expect(page.locator(".al-save-state")).toHaveText("已自动保存");
     await page.getByRole("button", { name: /确认命中 \(A\)/ }).click();
-    await expect(page.getByText("已校对 1 · 未校对 999")).toBeVisible();
+    await expect(page.locator(".al-review-aside")).toHaveAttribute("aria-label", "已校对 1，共 1000 条");
+    await expect(page.locator(".al-review-aside strong")).toHaveText("999");
     await page.getByRole("button", { name: "下一页" }).click();
     await page.locator(".al-result-item").first().click();
     await page.getByRole("button", { name: /需要复核 \(S\)/ }).click();
-    await expect(page.getByText("已校对 2 · 未校对 998")).toBeVisible();
+    await expect(page.locator(".al-review-aside")).toHaveAttribute("aria-label", "已校对 2，共 1000 条");
+    await expect(page.locator(".al-review-aside strong")).toHaveText("998");
 
     const exportPath = await page.evaluate(async (taskId) => {
       return (await (window as any).archiveLens.export.json(taskId)).path as string;

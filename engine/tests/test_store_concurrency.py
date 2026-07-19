@@ -95,6 +95,11 @@ class TaskStoreConcurrencyTests(unittest.TestCase):
         # 数据一致：20 次 × 1 occurrence = 20
         total, items = self.store.query_occurrences(task_id=self.task_id, limit=10000)
         self.assertEqual(total, 20, f"occurrence 丢失：{total}")
+        self.assertEqual(
+            [item["global_sequence"] for item in items],
+            list(range(1, 21)),
+            "并发写入后永久序号不连续或重复",
+        )
         # review 不丢失（occ_0..occ_14，15 条；注意 occ_xxx 不在 occurrences 表，但 review_records 独立）
         reviews = self.store.list_reviews(self.task_id)
         self.assertEqual(len(reviews), 15, f"review 丢失：{len(reviews)}")

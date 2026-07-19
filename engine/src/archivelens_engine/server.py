@@ -43,7 +43,13 @@ from .documents.formats import (
     count_key,
 )
 from .html_export import write_offline_review_report
-from .ocr_core import build_bbox_hash
+from .ocr_core import (
+    build_bbox_hash,
+    build_context_fields,
+    normalize_bbox,
+    split_line_bbox,
+    union_bboxes,
+)
 from .ocr_engine import ArchiveLensOCR
 from .ocr_search import OCRSearchService, OCRSearchUnavailable, SCRIPT_SCOPES
 from .page_evidence import PageEvidenceError, PageEvidenceService
@@ -72,6 +78,7 @@ DEFAULT_REVIEW_PREFERENCES = {
     "context_direction": "ltr",
     "context_radius": 15,
 }
+DEFAULT_SEARCH_SCRIPT_SCOPE = "both"
 
 
 def _write_protocol_line(line: str) -> None:
@@ -669,6 +676,108 @@ class Server:
             if not tc.should_cancel():
                 self.store.update_task(task_id, status="running")
 
+    def _reconcile_task_search_occurrences(self, task: dict[str, Any]) -> int:
+        """从已持久化 OCR 索引回填历史页命中；幂等且不重新执行 OCR。"""
+        task_id = str(task["task_id"])
+        corpus_status = self.store.get_ocr_corpus_status(task_id)
+        if int(corpus_status.get("indexed_pages", 0) or 0) == 0:
+            return 0
+        collected = self.ocr_search.collect_hits(
+            task_id=task_id,
+            query_text=str(task["search_text"]),
+            script_scope=str(task["search_script_scope"]),
+            allow_building=True,
+        )
+        sources = {
+            str(source["source_id"]): source
+            for source in self.store.list_task_sources(task_id)
+        }
+        rows: list[dict[str, Any]] = []
+        page_indexes: dict[tuple[str, int], int] = {}
+        for hit in collected["hits"]:
+            line = hit.get("line")
+            if not isinstance(line, dict):
+                continue
+            source_start = hit.get("source_start")
+            source_end = hit.get("source_end")
+            if not isinstance(source_start, int) or not isinstance(source_end, int):
+                # 长度变化的 OpenCC 映射仍保留在检索页，但不能伪造校对坐标。
+                continue
+            raw_text = str(line.get("raw_text") or "")
+            if not 0 <= source_start < source_end <= len(raw_text):
+                continue
+            line_points = TaskStore._box_points(line.get("bbox"))
+            width = float(line.get("source_page_width") or 0.0)
+            height = float(line.get("source_page_height") or 0.0)
+            if not line_points or width <= 0 or height <= 0:
+                continue
+            xs = [point[0] for point in line_points]
+            ys = [point[1] for point in line_points]
+            character_boxes = split_line_bbox(
+                raw_text,
+                (min(xs), min(ys), max(xs), max(ys)),
+            )
+            x0, y0, x1, y1 = union_bboxes(character_boxes[source_start:source_end])
+            box_fields = normalize_bbox(x0, y0, x1, y1, width, height)
+            source_text = raw_text[source_start:source_end]
+            matched_text = (
+                str(hit["matched_text"])
+                if hit.get("match_layer") == "ocr_top_k"
+                else source_text
+            )
+            source_id = str(line.get("source_id") or "")
+            page_no = int(line.get("page_no") or 0)
+            source = sources.get(source_id, {})
+            page_key = (source_id, page_no)
+            page_indexes[page_key] = page_indexes.get(page_key, 0) + 1
+            identity = "\x1f".join(
+                (
+                    task_id,
+                    str(line.get("ocr_line_id") or ""),
+                    str(source_start),
+                    str(source_end),
+                    matched_text,
+                )
+            )
+            matched_character = matched_text if len(matched_text) == 1 else None
+            row = {
+                "occurrence_id": f"occ_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]}",
+                "document_id": str(line.get("document_id") or ""),
+                "source_id": source_id,
+                "file_path": str(source.get("file_path") or source.get("display_path") or source_id),
+                "relative_path": str(source.get("display_path") or source.get("file_path") or source_id),
+                "file_name": str(source.get("file_name") or Path(str(source.get("file_path") or source_id)).name),
+                "page_number": page_no,
+                "page_index": int(line.get("page_index") or max(0, page_no - 1)),
+                "page_occurrence_index": page_indexes[page_key],
+                **build_context_fields(raw_text, source_start, source_end, int(task["review_preferences"]["context_radius"])),
+                "matched_character": matched_character,
+                "character_variant": (
+                    self.ocr_search.resolver.classify_script(matched_character)
+                    if matched_character
+                    else None
+                ),
+                "matched_text": matched_text,
+                "match_start": source_start,
+                "match_end": source_end,
+                "unicode_sequence": unicode_sequence(matched_text),
+                "unicode_codepoint": f"U+{ord(matched_character):04X}" if matched_character else None,
+                "bbox_hash": build_bbox_hash(**box_fields),
+                "ocr_confidence": float(hit.get("confidence", line.get("line_confidence", 0.0)) or 0.0),
+                "secondary_ocr_result": None,
+                "verification_status": "needs_review",
+                "location_method": f"ocr_index:{hit.get('match_layer') or 'unknown'}",
+                "source_page_width": width,
+                "source_page_height": height,
+                **box_fields,
+                "page_image_relpath": "",
+                "crop_image_relpath": "",
+                "page_image_width": int(width),
+                "page_image_height": int(height),
+            }
+            rows.append(row)
+        return self.store.add_occurrences(task_id, rows)
+
     def _run_scan(self, task_id: str, worker_generation: int) -> None:
         """在后台线程跑 ReportPipeline 并把结果导入 TaskStore。
 
@@ -687,6 +796,19 @@ class Server:
         try:
             from .report_pipeline import ReportPipeline  # 延迟导入（重依赖）
 
+            reconciled = self._reconcile_task_search_occurrences(task)
+            if reconciled:
+                self.emit_task_event(
+                    "task.occurrences_reconciled",
+                    task_id,
+                    {
+                        "added_occurrences": reconciled,
+                        "source": "persistent_ocr_index",
+                        "reocr": False,
+                    },
+                    worker_generation=worker_generation,
+                )
+
             task_workspace = self.workspace_root / "tasks" / task_id
             scan_workspace = task_workspace / "scan"
             output_html = task_workspace / "report.html"
@@ -697,6 +819,7 @@ class Server:
                 workspace_dir=scan_workspace,
                 config=self.config,
                 search_terms=task["search_terms"],
+                search_script_scope=task["search_script_scope"],
                 review_image_quality=task["review_preferences"]["page_quality"],
                 context_direction=task["review_preferences"]["context_direction"],
                 context_radius=task["review_preferences"]["context_radius"],
@@ -718,6 +841,9 @@ class Server:
                 report = pipeline.run()
             finally:
                 pipeline.close()
+            refreshed_task = self.store.get_task(task_id)
+            if refreshed_task is not None:
+                self._reconcile_task_search_occurrences(refreshed_task)
             final_total_pages = int(report.get("stats", {}).get("document_total_pages", 0) or 0)
             final_occurrence_count = self.store._count_occurrences(task_id)
             report_failures = report.get("failures", [])
@@ -1122,6 +1248,12 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         search_text = normalize_search_text(_require(params, "search_text", str))
     except ValueError as exc:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+    search_script_scope = params.get("search_script_scope", DEFAULT_SEARCH_SCRIPT_SCOPE)
+    if not isinstance(search_script_scope, str) or search_script_scope not in SCRIPT_SCOPES:
+        raise ProtocolError(
+            ErrorCode.VALIDATION_ERROR,
+            "search_script_scope 仅支持 simplified、traditional 或 both",
+        )
     raw_preferences = params.get("review_preferences", DEFAULT_REVIEW_PREFERENCES)
     if not isinstance(raw_preferences, dict):
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "review_preferences 必须是对象")
@@ -1200,6 +1332,7 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         "search_text": search_text,
         "search_terms": [search_text],
         "search_mode": EXACT_LITERAL_SEARCH_MODE,
+        "search_script_scope": search_script_scope,
         "review_preferences": review_preferences,
     }
     if source_kind == "files" and source_files is not None:
@@ -1218,6 +1351,7 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         status="draft",
         search_terms=[search_text],
         search_mode=EXACT_LITERAL_SEARCH_MODE,
+        search_script_scope=search_script_scope,
         review_image_quality=review_preferences["page_quality"],
         context_direction=review_preferences["context_direction"],
         context_radius=review_preferences["context_radius"],

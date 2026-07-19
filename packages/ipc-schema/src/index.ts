@@ -150,6 +150,7 @@ export const SearchTextSchema = z.string().transform((value, context) => {
 
 const TaskCreateCommonSchema = {
   search_text: SearchTextSchema,
+  search_script_scope: SearchScriptScopeSchema.default(DEFAULT_SEARCH_SCRIPT_SCOPE),
   output_dir: z.string().optional(),
   name: z.string().optional(),
   parallel_workers: z.literal(1).optional(),
@@ -389,6 +390,7 @@ export const TaskSummarySchema = z.object({
   search_text: z.string().min(1),
   search_terms: z.array(z.string().min(1)).min(1),
   search_mode: SearchModeSchema,
+  search_script_scope: SearchScriptScopeSchema.default(DEFAULT_SEARCH_SCRIPT_SCOPE),
   processed_pages: z.number().int().nonnegative(),
   total_pages: z.number().int().nonnegative(),
   occurrence_count: z.number().int().nonnegative(),
@@ -420,6 +422,7 @@ export const TaskCreateResultSchema = z.object({
   search_text: z.string().min(1),
   search_terms: z.array(z.string().min(1)).min(1),
   search_mode: SearchModeSchema,
+  search_script_scope: SearchScriptScopeSchema.default(DEFAULT_SEARCH_SCRIPT_SCOPE),
 }).passthrough();
 
 export const TaskDeleteResultSchema = z.object({
