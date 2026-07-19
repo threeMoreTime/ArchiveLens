@@ -188,8 +188,8 @@ class ServerWorkspaceOverrideTests(unittest.TestCase):
         try:
             server = Server()
             try:
-                self.assertEqual(server.workspace_root, Path(tmp))
-                self.assertEqual(server.store.db_path, Path(tmp) / "archivelens.db")
+                self.assertTrue(os.path.samefile(server.workspace_root, tmp))
+                self.assertTrue(os.path.samefile(server.store.db_path, Path(tmp) / "archivelens.db"))
             finally:
                 server.store.close()
         finally:

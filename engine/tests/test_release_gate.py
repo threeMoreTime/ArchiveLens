@@ -16,6 +16,7 @@ GATE_SCRIPT = ROOT / "scripts" / "run-zero-cost-release-gate.ps1"
 CLEANUP_SCRIPT = ROOT / "scripts" / "cleanup-test-artifacts.ps1"
 VERIFY_SCRIPT = ROOT / "scripts" / "verify-release-chain.ps1"
 SMOKE_HELPER = ROOT / "scripts" / "release-smoke-evidence.ps1"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
 def sha256(path: Path) -> str:
@@ -113,6 +114,45 @@ class ReleaseGateTests(unittest.TestCase):
 
         installer_text = (ROOT / "scripts" / "smoke-installer.ps1").read_text(encoding="utf-8-sig")
         self.assertIn('PSObject.Properties["DisplayName"]', installer_text)
+
+    def test_release_hash_helpers_do_not_require_get_file_hash_cmdlet(self) -> None:
+        for script in (
+            ROOT / "scripts" / "prepare-native-runtime.ps1",
+            SMOKE_HELPER,
+            VERIFY_SCRIPT,
+        ):
+            with self.subTest(script=script.name):
+                self.assertNotIn("Get-FileHash", script.read_text(encoding="utf-8-sig"))
+
+    def test_release_tree_hash_helpers_canonicalize_the_root_path(self) -> None:
+        for script in (ROOT / "scripts" / "prepare-native-runtime.ps1", VERIFY_SCRIPT):
+            with self.subTest(script=script.name):
+                text = script.read_text(encoding="utf-8-sig")
+                self.assertIn("(Get-Item -LiteralPath $PathValue -Force).FullName", text)
+                self.assertIn("Substring($resolvedRoot.Length)", text)
+                self.assertNotIn("Substring($PathValue.Length)", text)
+
+    def test_ci_prepares_electron_runtime_serially_before_consumers(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        def job_section(job: str, next_job: str | None) -> str:
+            section = workflow.split(f"  {job}:\n", 1)[1]
+            if next_job is not None:
+                section = section.split(f"\n  {next_job}:\n", 1)[0]
+            return section
+
+        for job, next_job, consumer in (
+            ("desktop-tests", "ipc-contract", "pnpm --filter @archivelens/desktop typecheck"),
+            ("lifecycle-e2e", "package-smoke", "pnpm --filter @archivelens/desktop build"),
+            ("package-smoke", None, "pnpm --filter @archivelens/desktop exec electron-builder --dir"),
+        ):
+            with self.subTest(job=job):
+                section = job_section(job, next_job)
+                install = section.index("pnpm install --frozen-lockfile")
+                prepare = section.index("pnpm --filter @archivelens/desktop exec install-electron")
+                consume = section.index(consumer)
+                self.assertLess(install, prepare)
+                self.assertLess(prepare, consume)
 
     def test_gate_finally_cleans_owned_artifacts_without_masking_original_failure(self) -> None:
         text = GATE_SCRIPT.read_text(encoding="utf-8-sig")
@@ -374,6 +414,9 @@ Write-Output 'PORTABLE_EXTRACTION_CLEANUP_PASS'
             version = "0.1.0-test"
 
             native_root = artifacts / "native"
+            native_alias_parent = artifacts / "native-alias"
+            native_alias_parent.mkdir(parents=True)
+            native_root_input = native_alias_parent / ".." / native_root.name
             clean_tesseract = native_root / "tesseract"
             clean_djvu = native_root / "djvulibre"
             bundled_resources = artifacts / "resources"
@@ -548,7 +591,7 @@ Write-Output 'PORTABLE_EXTRACTION_CLEANUP_PASS'
                 "-BundledEngineExe",
                 str(bundled_engine),
                 "-NativeRoot",
-                str(native_root),
+                str(native_root_input),
                 "-BundledResourcesRoot",
                 str(bundled_resources),
                 "-SetupExe",

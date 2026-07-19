@@ -16,12 +16,25 @@ function Resolve-FromRoot([string]$PathValue) {
 }
 
 function Get-Sha256([string]$PathValue) {
-  return (Get-FileHash -LiteralPath $PathValue -Algorithm SHA256).Hash.ToLowerInvariant()
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($PathValue))
+    try {
+      return ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join ""
+    }
+    finally {
+      $stream.Dispose()
+    }
+  }
+  finally {
+    $sha.Dispose()
+  }
 }
 
 function Get-TreeSha256([string]$PathValue) {
-  $lines = Get-ChildItem -LiteralPath $PathValue -Recurse -File | ForEach-Object {
-    $relative = $_.FullName.Substring($PathValue.Length).TrimStart('\').Replace('\', '/').ToLowerInvariant()
+  $resolvedRoot = (Get-Item -LiteralPath $PathValue -Force).FullName.TrimEnd('\')
+  $lines = Get-ChildItem -LiteralPath $resolvedRoot -Recurse -File | ForEach-Object {
+    $relative = $_.FullName.Substring($resolvedRoot.Length).TrimStart('\').Replace('\', '/').ToLowerInvariant()
     "{0}`t{1}" -f $relative, (Get-Sha256 $_.FullName)
   } | Sort-Object
   $payload = [Text.Encoding]::UTF8.GetBytes(($lines -join "`n") + "`n")
