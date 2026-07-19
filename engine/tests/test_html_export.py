@@ -128,6 +128,54 @@ class HtmlExportTests(unittest.TestCase):
         self.assertIn('"x0":0.1', report)
         self.assertIn('"x0":0.5', report)
 
+    def test_deduplicates_same_page_when_permanent_sequences_are_not_contiguous(self) -> None:
+        Image.new("RGB", (1200, 1600), "white").save(self.root / "pages" / "page-13.png")
+        first_page_late_hit = occurrence(
+            occurrence_id="hit-3",
+            page_relpath="pages/page-12.png",
+            matched_text="约",
+            x0=0.7,
+            global_sequence=3,
+        )
+        second_page_hit = occurrence(
+            occurrence_id="hit-page-13",
+            page_relpath="pages/page-13.png",
+            matched_text="約",
+            x0=0.3,
+            global_sequence=2,
+        )
+        second_page_hit["page_number"] = 13
+
+        output = self.root / "non-contiguous-report.html"
+        resolver = mock.Mock(side_effect=lambda item: {
+            "asset_relpath": item["page_image_relpath"],
+            "pixel_width": 1200,
+            "pixel_height": 1600,
+        })
+        write_offline_review_report(
+            output_path=output,
+            task=self.task,
+            items=iter([self.items[0], second_page_hit, first_page_late_hit]),
+            integrity=integrity(),
+            workspace_dir=self.root,
+            exported_at="2026-07-14T12:00:00+00:00",
+            expected_page_count=2,
+            page_image_resolver=resolver,
+        )
+        report = output.read_text(encoding="utf-8")
+
+        script_match = re.search(r"const DATA=(.*?);\nconst STATUS_RANK=", report, re.DOTALL)
+        self.assertIsNotNone(script_match)
+        data = json.loads(script_match.group(1))
+        self.assertEqual(data["pageCount"], 2)
+        self.assertEqual(len(data["pages"]), 2)
+        self.assertEqual(resolver.call_count, 2)
+        self.assertEqual(report.count("data:image/png;base64,"), 2)
+        self.assertEqual(
+            [record["hit"]["globalSequence"] for record in data["records"]],
+            [1, 2, 3],
+        )
+
     def test_includes_filters_paging_modal_and_a4_print_contract(self) -> None:
         report = self.build()
 
@@ -162,7 +210,7 @@ class HtmlExportTests(unittest.TestCase):
         data = json.loads(script_match.group(1))
 
         self.assertEqual(
-            [hit["globalSequence"] for page in data["pages"] for hit in page["hits"]],
+            [record["hit"]["globalSequence"] for record in data["records"]],
             [1, 2],
         )
         self.assertIn('sort:"sequence"', report)

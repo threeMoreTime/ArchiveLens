@@ -192,6 +192,7 @@ def _stream_page_data(
     *,
     items: Iterable[dict[str, Any]],
     pages_path: Path,
+    records_path: Path,
     workspace_dir: Path | None,
     expected_page_count: int | None,
     progress: Callable[[str, int, int], None] | None,
@@ -199,26 +200,16 @@ def _stream_page_data(
 ) -> tuple[list[dict[str, Any]], int, int]:
     files_by_identity: dict[str, dict[str, Any]] = {}
     used_paths: set[str] = set()
+    page_ids: dict[tuple[str, int, str] | tuple[str, int], str] = {}
     page_count = 0
     hit_count = 0
-    current_key: tuple[str, int, str] | tuple[str, int] | None = None
-    current_page: dict[str, Any] | None = None
     first_page = True
+    first_record = True
 
-    with pages_path.open("w", encoding="utf-8", newline="") as output:
-        def flush_page() -> None:
-            nonlocal current_page, first_page, page_count
-            if current_page is None:
-                return
-            if not first_page:
-                output.write(",")
-            output.write(_serialize_script_value(current_page))
-            first_page = False
-            page_count += 1
-            if progress is not None:
-                progress("images", page_count, expected_page_count or page_count)
-            current_page = None
-
+    with (
+        pages_path.open("w", encoding="utf-8", newline="") as pages_output,
+        records_path.open("w", encoding="utf-8", newline="") as records_output,
+    ):
         for item in items:
             source = _register_source(item, files_by_identity, used_paths)
             page_number = max(1, int(_number(item.get("page_number"), 1)))
@@ -228,8 +219,8 @@ def _stream_page_data(
                 if page_image_resolver is not None
                 else (_source_identity(item), page_number, image_relpath)
             )
-            if key != current_key:
-                flush_page()
+            page_id = page_ids.get(key)
+            if page_id is None:
                 page_asset = page_image_resolver(item) if page_image_resolver is not None else None
                 if page_asset is not None:
                     image_relpath = str(page_asset.get("asset_relpath") or "")
@@ -237,9 +228,11 @@ def _stream_page_data(
                     _safe_asset_path(workspace_dir, image_relpath),
                     required=page_image_resolver is not None,
                 )
-                current_key = key
-                current_page = {
-                    "id": f"page-{page_count + 1}",
+                page_count += 1
+                page_id = f"page-{page_count}"
+                page_ids[key] = page_id
+                page = {
+                    "id": page_id,
                     "sourceId": source["value"],
                     "fileName": source["label"],
                     "relativePath": source["relativePath"],
@@ -249,12 +242,20 @@ def _stream_page_data(
                     "imageError": image_error,
                     "pixelWidth": int((page_asset or {}).get("pixel_width") or item.get("page_image_width") or 0),
                     "pixelHeight": int((page_asset or {}).get("pixel_height") or item.get("page_image_height") or 0),
-                    "hits": [],
                 }
+                if not first_page:
+                    pages_output.write(",")
+                pages_output.write(_serialize_script_value(page))
+                first_page = False
+                if progress is not None:
+                    progress("images", page_count, expected_page_count or page_count)
             hit_count += 1
-            assert current_page is not None
-            current_page["hits"].append(_hit_data(item, hit_count))
-        flush_page()
+            if not first_record:
+                records_output.write(",")
+            records_output.write(
+                _serialize_script_value({"pageId": page_id, "hit": _hit_data(item, hit_count)})
+            )
+            first_record = False
 
     files = [
         {"value": source["value"], "label": source["label"], "relativePath": source["relativePath"]}
@@ -281,9 +282,10 @@ const el=(tag,className,text)=>{const node=document.createElement(tag);if(classN
 const normalized=(value)=>String(value??"").toLocaleLowerCase();
 const sequenceLabel=(value)=>`#${String(value).padStart(4,"0")}`;
 const prefersReducedMotion=()=>window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const PAGE_BY_ID=new Map(DATA.pages.map((page)=>[page.id,page]));
 const ALL_RECORDS=[];
 let fallbackSequence=0;
-DATA.pages.forEach((page)=>page.hits.forEach((hit)=>{fallbackSequence+=1;const candidate=Number(hit.globalSequence);ALL_RECORDS.push({page,hit,sequence:Number.isSafeInteger(candidate)&&candidate>0?candidate:fallbackSequence,ordinal:fallbackSequence})}));
+DATA.records.forEach((entry)=>{const page=PAGE_BY_ID.get(entry.pageId);const hit=entry.hit;if(!page||!hit)return;fallbackSequence+=1;const candidate=Number(hit.globalSequence);ALL_RECORDS.push({page,hit,sequence:Number.isSafeInteger(candidate)&&candidate>0?candidate:fallbackSequence,ordinal:fallbackSequence})});
 function hitSearchText(page,hit){return normalized([page.fileName,page.relativePath,hit.matchedText,hit.contextBefore,hit.contextAfter,hit.contextFull,hit.note].join(" "))}
 function recordId(record){return `record-${record.sequence}-${record.ordinal}`}
 function recordContext(hit){return hit.contextFull||`${hit.contextBefore||""}${hit.matchedText||""}${hit.contextAfter||""}`||hit.matchedText||"无 OCR 上下文"}
@@ -378,7 +380,12 @@ def _report_metadata(
     }
 
 
-def _write_script(script_path: Path, pages_path: Path, data: dict[str, Any]) -> None:
+def _write_script(
+    script_path: Path,
+    pages_path: Path,
+    records_path: Path,
+    data: dict[str, Any],
+) -> None:
     serialized = _serialize_script_value(data)
     if not serialized.endswith("}"):
         raise ValueError("report metadata must serialize as an object")
@@ -386,6 +393,9 @@ def _write_script(script_path: Path, pages_path: Path, data: dict[str, Any]) -> 
         output.write(("const DATA=" + serialized[:-1] + ',"pages":[').encode("utf-8"))
         with pages_path.open("rb") as pages:
             shutil.copyfileobj(pages, output, length=1024 * 1024)
+        output.write(b'],"records":[')
+        with records_path.open("rb") as records:
+            shutil.copyfileobj(records, output, length=1024 * 1024)
         output.write(("]};\n" + REPORT_SCRIPT).encode("utf-8"))
 
 
@@ -433,11 +443,13 @@ def write_offline_review_report(
     with tempfile.TemporaryDirectory(prefix=".archivelens-export-", dir=output_path.parent) as temporary:
         temporary_dir = Path(temporary)
         pages_path = temporary_dir / "pages.json"
+        records_path = temporary_dir / "records.json"
         script_path = temporary_dir / "report.js"
         partial_path = temporary_dir / "report.partial.html"
         files, page_count, hit_count = _stream_page_data(
             items=items,
             pages_path=pages_path,
+            records_path=records_path,
             workspace_dir=workspace_dir,
             expected_page_count=expected_page_count,
             progress=progress,
@@ -451,7 +463,7 @@ def write_offline_review_report(
             page_count=page_count,
             hit_count=hit_count,
         )
-        _write_script(script_path, pages_path, data)
+        _write_script(script_path, pages_path, records_path, data)
         if progress is not None:
             progress("building", page_count, page_count)
         script_hash = _csp_hash_file(script_path)
