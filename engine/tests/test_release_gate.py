@@ -124,6 +124,14 @@ class ReleaseGateTests(unittest.TestCase):
             with self.subTest(script=script.name):
                 self.assertNotIn("Get-FileHash", script.read_text(encoding="utf-8-sig"))
 
+    def test_release_tree_hash_helpers_canonicalize_the_root_path(self) -> None:
+        for script in (ROOT / "scripts" / "prepare-native-runtime.ps1", VERIFY_SCRIPT):
+            with self.subTest(script=script.name):
+                text = script.read_text(encoding="utf-8-sig")
+                self.assertIn("(Get-Item -LiteralPath $PathValue -Force).FullName", text)
+                self.assertIn("Substring($resolvedRoot.Length)", text)
+                self.assertNotIn("Substring($PathValue.Length)", text)
+
     def test_ci_prepares_electron_runtime_serially_before_consumers(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
@@ -406,6 +414,9 @@ Write-Output 'PORTABLE_EXTRACTION_CLEANUP_PASS'
             version = "0.1.0-test"
 
             native_root = artifacts / "native"
+            native_alias_parent = artifacts / "native-alias"
+            native_alias_parent.mkdir(parents=True)
+            native_root_input = native_alias_parent / ".." / native_root.name
             clean_tesseract = native_root / "tesseract"
             clean_djvu = native_root / "djvulibre"
             bundled_resources = artifacts / "resources"
@@ -580,7 +591,7 @@ Write-Output 'PORTABLE_EXTRACTION_CLEANUP_PASS'
                 "-BundledEngineExe",
                 str(bundled_engine),
                 "-NativeRoot",
-                str(native_root),
+                str(native_root_input),
                 "-BundledResourcesRoot",
                 str(bundled_resources),
                 "-SetupExe",

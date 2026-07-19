@@ -32,8 +32,9 @@ function Get-Sha256([string]$PathValue) {
 }
 
 function Get-TreeSha256([string]$PathValue) {
-  $lines = Get-ChildItem -LiteralPath $PathValue -Recurse -File | ForEach-Object {
-    $relative = $_.FullName.Substring($PathValue.Length).TrimStart('\').Replace('\', '/').ToLowerInvariant()
+  $resolvedRoot = (Get-Item -LiteralPath $PathValue -Force).FullName.TrimEnd('\')
+  $lines = Get-ChildItem -LiteralPath $resolvedRoot -Recurse -File | ForEach-Object {
+    $relative = $_.FullName.Substring($resolvedRoot.Length).TrimStart('\').Replace('\', '/').ToLowerInvariant()
     "{0}`t{1}" -f $relative, (Get-Sha256 $_.FullName)
   } | Sort-Object
   $payload = [Text.Encoding]::UTF8.GetBytes(($lines -join "`n") + "`n")
