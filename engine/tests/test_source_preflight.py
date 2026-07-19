@@ -136,7 +136,7 @@ class SourcePreflightHandlerTests(unittest.TestCase):
         self.assertNotIn("source_files", created)
         sources = self.server.store.list_task_sources(created["task_id"])
         self.assertEqual(len(sources), 1)
-        self.assertEqual(Path(sources[0]["file_path"]), self.source / "page.png")
+        self.assertTrue(os.path.samefile(sources[0]["file_path"], self.source / "page.png"))
 
     def test_changed_folder_rejects_stale_token(self) -> None:
         report, _ = preflight_folder(self.source, self.server.workspace_root, self.server.config)

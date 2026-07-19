@@ -16,7 +16,19 @@ function Resolve-FromRoot([string]$PathValue) {
 }
 
 function Get-Sha256([string]$PathValue) {
-  return (Get-FileHash -LiteralPath $PathValue -Algorithm SHA256).Hash.ToLowerInvariant()
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($PathValue))
+    try {
+      return ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join ""
+    }
+    finally {
+      $stream.Dispose()
+    }
+  }
+  finally {
+    $sha.Dispose()
+  }
 }
 
 function Get-TreeSha256([string]$PathValue) {

@@ -80,6 +80,9 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare Electron runtime serially
+        run: pnpm --filter @archivelens/desktop exec install-electron
+
       - name: Desktop typecheck
         run: pnpm --filter @archivelens/desktop typecheck
 
@@ -188,6 +191,9 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare Electron runtime serially
+        run: pnpm --filter @archivelens/desktop exec install-electron
+
       - name: Prepare locked unified OCR model
         run: powershell -ExecutionPolicy Bypass -File scripts/prepare-native-runtime.ps1 -OcrOnly
 
@@ -246,6 +252,9 @@ jobs:
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Prepare Electron runtime serially
+        run: pnpm --filter @archivelens/desktop exec install-electron
 
       - name: Validate PowerShell release scripts (Windows PowerShell)
         shell: powershell

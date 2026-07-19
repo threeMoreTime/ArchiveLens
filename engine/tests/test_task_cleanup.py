@@ -373,7 +373,7 @@ class TaskCleanupDeleteTests(unittest.TestCase):
         tid, task_dir, _original = _seed_completed_task(self.server, self.tmp)
         result = self.server.handlers["tasks.cleanupTarget"](self.server, {"task_id": tid})
         self.assertEqual(result["task_id"], tid)
-        self.assertEqual(result["path"], str(task_dir))
+        self.assertTrue(os.path.samefile(result["path"], task_dir))
         # 非法 task_id → VALIDATION_ERROR
         with self.assertRaises(ProtocolError) as ctx:
             self.server.handlers["tasks.cleanupTarget"](self.server, {"task_id": "../evil"})
