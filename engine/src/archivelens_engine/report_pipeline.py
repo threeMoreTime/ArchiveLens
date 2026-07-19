@@ -105,6 +105,7 @@ class ReportPipeline:
         ocr_engine: Any = None,
         on_page_completed: Callable[..., None] | None = None,
         search_terms: tuple[str, ...] | list[str] | None = None,
+        search_script_scope: str = "both",
         resume_state_by_source: dict[str, dict[str, Any]] | None = None,
         review_image_quality: str = "standard",
         context_direction: str = "ltr",
@@ -118,6 +119,9 @@ class ReportPipeline:
         self.resume_state_by_source = resume_state_by_source
         if not self.search_terms or any(not isinstance(term, str) or not term for term in self.search_terms):
             raise ValueError("search_terms must contain at least one non-empty term")
+        if search_script_scope not in {"simplified", "traditional", "both"}:
+            raise ValueError("search_script_scope must be simplified, traditional, or both")
+        self.search_script_scope = search_script_scope
         if review_image_quality not in REVIEW_IMAGE_QUALITY_SETTINGS:
             raise ValueError("invalid review image quality")
         if context_direction not in {"ltr", "rtl", "ttb", "btt"}:
@@ -488,7 +492,9 @@ class ReportPipeline:
                 confidence = float(result[2])
                 page_lines.append(
                     {
-                        "text": text,
+                        # 任务命中与校对上下文始终忠实使用 OCR 原文；
+                        # resolved_text 只进入独立检索层，绝不覆盖来源字形。
+                        "text": raw_text,
                         "bbox": self._line_rect(polygon),
                         "confidence": confidence,
                     }
@@ -538,36 +544,35 @@ class ReportPipeline:
                 render_path.unlink(missing_ok=True)
                 return None, [], ocr_page
             for line_index, line in enumerate(page_lines):
-                text = line["text"]
+                text = str(line["text"])
                 confidence = line["confidence"]
                 line_box = line["bbox"]
                 char_boxes = split_line_bbox(text, line_box)
-                for search_text in self.search_terms:
-                    for match_start, match_end in find_literal_matches(text, search_text):
-                        context_fields = build_spatial_context_fields(
-                            page_lines,
-                            line_index,
-                            match_start,
-                            match_end,
-                            direction=self.context_direction,
-                            radius=self.context_radius,
-                        )
-                        occurrence = self._build_occurrence(
-                            document=document,
-                            page_index=page_index,
-                            page_image_id=page_image_id,
-                            line_index=line_index,
-                            line_text=text,
-                            line_confidence=float(confidence),
-                            image=image,
-                            match_start=match_start,
-                            match_end=match_end,
-                            match_box=union_bboxes(char_boxes[match_start:match_end]),
-                            page_width=width,
-                            page_height=height,
-                            context_fields=context_fields,
-                        )
-                        page_occurrences.append(occurrence)
+                for match_start, match_end in self._find_search_matches(text):
+                    context_fields = build_spatial_context_fields(
+                        page_lines,
+                        line_index,
+                        match_start,
+                        match_end,
+                        direction=self.context_direction,
+                        radius=self.context_radius,
+                    )
+                    occurrence = self._build_occurrence(
+                        document=document,
+                        page_index=page_index,
+                        page_image_id=page_image_id,
+                        line_index=line_index,
+                        line_text=text,
+                        line_confidence=float(confidence),
+                        image=image,
+                        match_start=match_start,
+                        match_end=match_end,
+                        match_box=union_bboxes(char_boxes[match_start:match_end]),
+                        page_width=width,
+                        page_height=height,
+                        context_fields=context_fields,
+                    )
+                    page_occurrences.append(occurrence)
             if not page_occurrences:
                 render_path.unlink(missing_ok=True)
                 return None, [], ocr_page
@@ -605,6 +610,39 @@ class ReportPipeline:
         ys = [float(point[1]) for point in polygon]
         return min(xs), min(ys), max(xs), max(ys)
 
+    def _find_search_matches(self, text: str) -> list[tuple[int, int]]:
+        """在不改写 OCR 文本的前提下，把简繁索引位置映射回原字形。"""
+        line_forms = self.script_variants.forms(text)
+        indexed_forms = {
+            "original": line_forms.original,
+            "simplified": line_forms.simplified,
+            "traditional": line_forms.traditional,
+            "taiwan": line_forms.taiwan,
+            "hong_kong": line_forms.hong_kong,
+        }
+        matches: set[tuple[int, int]] = set()
+        for search_text in self.search_terms:
+            query_forms = self.script_variants.forms(search_text)
+            query_by_kind = {
+                "original": query_forms.original,
+                "simplified": query_forms.simplified,
+                "traditional": query_forms.traditional,
+                "taiwan": query_forms.taiwan,
+                "hong_kong": query_forms.hong_kong,
+            }
+            for kind in ("original", "simplified", "traditional", "taiwan", "hong_kong"):
+                indexed_text = indexed_forms[kind]
+                # OpenCC 极少数词组可能改变字符长度；这种情况交给持久化索引
+                # 检索展示，扫描结果不伪造无法可靠映射的字符坐标。
+                if len(indexed_text) != len(text):
+                    continue
+                for match_start, match_end in find_literal_matches(indexed_text, query_by_kind[kind]):
+                    source_text = text[match_start:match_end]
+                    source_script = self.script_variants.classify_script(source_text)
+                    if self.script_variants.script_matches_scope(source_script, self.search_script_scope):
+                        matches.add((match_start, match_end))
+        return sorted(matches)
+
     def _build_occurrence(
         self,
         document: DocumentRecord,
@@ -623,7 +661,11 @@ class ReportPipeline:
     ) -> dict[str, Any]:
         matched_text = line_text[match_start:match_end]
         matched_character = matched_text if len(matched_text) == 1 else None
-        character_variant = "simplified" if matched_character == "约" else "traditional" if matched_character == "約" else None
+        character_variant = (
+            self.script_variants.classify_script(matched_character)
+            if matched_character
+            else None
+        )
         unicode_codepoint = f"U+{ord(matched_character):04X}" if matched_character else None
         context_fields = context_fields or build_context_fields(line_text, match_start, match_end)
         box_fields = normalize_bbox(*match_box, page_width, page_height)
@@ -973,7 +1015,11 @@ class ReportPipeline:
                 raise ValueError(f"duplicate occurrence_id: {item['occurrence_id']}")
             seen_ids.add(item["occurrence_id"])
             matched_text = item.get("matched_text") or item.get("matched_character")
-            if matched_text not in self.search_terms:
+            if not any(
+                self.script_variants.forms(str(matched_text)).simplified
+                == self.script_variants.forms(search_text).simplified
+                for search_text in self.search_terms
+            ):
                 raise ValueError(f"invalid matched_text: {matched_text}")
             if not item.get("matched_text"):
                 item["matched_text"] = matched_text

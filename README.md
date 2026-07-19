@@ -19,10 +19,11 @@
 | Worker/Task 真实状态机（修复残留 checkpoint 误判） | ✅ | checkpoint / sequence / migration 回归 |
 | Engine PyInstaller one-folder 打包 | ✅ | 355MB exe 独立 serve 通过 |
 | 生命周期关闭/恢复自动化 | ✅ | 14 个 Playwright lifecycle/recovery E2E |
-| HTML 离线审阅报告 | ✅ | 单文件整页图片、命中标注、筛选分页、A4 打印与真实 OCR fixture 离线回归 |
+| HTML 离线审阅报告 | ✅ | 永久序号、出处→文字→原图、全量导航、筛选分页、单命中标注与 A4 打印离线回归 |
 | electron-builder 安装包/portable | ✅ 配置完成 | 仅接受同一候选 SHA 的 clean rebuild 产物 |
 | 正式发布证据链 | ✅ 自动校验 | manifest / SHA256SUMS / release-chain |
-| 任务中心与任务上下文 | ✅ | 服务端搜索/分页 + URL/本地持久化上下文 |
+| 任务中心与任务上下文 | ✅ | 服务端搜索/分页 + 最多 20 条顺序批量暂停/取消/删除 + URL/本地持久化上下文 |
+| 可折叠全局导航 | ✅ | 220px 展开栏 / 64px 图标栏 + 本地状态记忆 + 无障碍提示 |
 | 原文件级高清校对与古籍阅读方向 | ✅ | 源文件无损页面证据 + PDF 动态重渲染 + 横排/竖排上下文 |
 | 失败恢复与诊断 | ✅ | 结构化失败明细 + 影响/建议 + 日志入口 |
 | 校对与导出保护 | ✅ | 备注自动保存 + 系统/人工状态分离 + 应用内阶段性导出确认 |

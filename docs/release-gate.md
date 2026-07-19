@@ -115,8 +115,9 @@ Windows 测试账户或虚拟机中完成：
 
 当前仓库没有可据此执行的上一可信发布制品，因此自动门禁必须保留
 `NOT_VERIFIED`，不能用同版本覆盖安装或 Mock 数据冒充跨版本验证。本轮已从历史
-`alpha.10` 提交重建 Setup/Portable，并完成打包 Engine 创建数据后向当前 schema 的
-数据库升级演练；该结果证明源码级升级兼容，但不能把 2026-07-18 重建制品冒充历史发布
+`alpha.10` 提交重建 Setup/Portable，并完成打包 Engine 创建数据后向当时 schema v10
+候选的数据库升级演练；该结果只直接证明 v2 → v10 的源码级兼容，当前 v12 仍缺少上一
+可信发布安装器的真实跨版本安装验证，不能把 2026-07-18 重建制品冒充历史发布
 provenance。历史 `alpha.10` 还会改写未来 schema，因此降级必须恢复升级前备份，禁止旧版
 直接打开当前数据库。证据见
 [`reviews/2026-07-18-upgrade-rollback-evidence.md`](reviews/2026-07-18-upgrade-rollback-evidence.md)。

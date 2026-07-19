@@ -57,8 +57,10 @@ rollback。
 
 ## 桌面端操作与 IPC
 
-设置页保存全局默认 `search_script_scope`，初始为 `both`。任务内检索页可为每次
-检索临时切换范围，不反向修改全局默认。页面读取 `search.corpusStatus` 和
+设置页保存全局默认 `search_script_scope`，初始为 `both`。新建扫描会把当时的值
+固化到任务：扫描过程按原始图片字形生成简体、繁体或双向命中；恢复历史未完成任务时，
+已扫描页从持久化 OCR 索引幂等补齐，不重新 OCR、不修改 OCR 原文或 checkpoint。
+任务内检索页仍可为每次检索临时切换范围，不反向修改任务范围或全局默认。页面读取 `search.corpusStatus` 和
 `search.sessions`，执行 `search.execute`，通过 `search.hits` 分页，并用
 `search.preparePageImage` 依据 `search_hit_id` 打开经来源指纹验证的整页证据。
 

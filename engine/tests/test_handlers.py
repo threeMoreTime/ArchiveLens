@@ -42,6 +42,10 @@ class HandlersTests(unittest.TestCase):
         tid = demo["task_id"]
         q = self.server.handlers["results.query"](self.server, {"task_id": tid})
         self.assertEqual(q["total"], 6)
+        self.assertEqual(
+            [item["global_sequence"] for item in q["items"]],
+            list(range(1, 7)),
+        )
         occ_id = q["items"][0]["occurrence_id"]
         r = self.server.handlers["review.updateDecision"](
             self.server, {"task_id": tid, "occurrence_id": occ_id, "decision": "rejected"}

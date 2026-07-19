@@ -4,11 +4,13 @@ import { Button, Card, Checkbox, Input, Spinner, Text } from "@fluentui/react-co
 import {
   MAX_SOURCE_FILES,
   DEFAULT_REVIEW_DISPLAY_PREFERENCES,
+  DEFAULT_SEARCH_SCRIPT_SCOPE,
   SUPPORTED_SOURCE_FORMAT_LABEL,
   SearchTextSchema,
   TaskCreateParamsSchema,
   type ReviewDisplayPreferences,
   type ReviewHighlightSettingsResult,
+  type SearchScriptScope,
   type SourcePreflightJob,
   type SourcePreflightResult,
 } from "@archivelens/ipc-schema";
@@ -103,6 +105,7 @@ export default function NewScan() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reviewPreferences, setReviewPreferences] = useState<ReviewDisplayPreferences>(DEFAULT_REVIEW_DISPLAY_PREFERENCES);
+  const [searchScriptScope, setSearchScriptScope] = useState<SearchScriptScope>(DEFAULT_SEARCH_SCRIPT_SCOPE);
   const [preferencesLoading, setPreferencesLoading] = useState(true);
   const [preferencesError, setPreferencesError] = useState<string | null>(null);
   const [preflightJob, setPreflightJob] = useState<SourcePreflightJob | null>(null);
@@ -114,7 +117,10 @@ export default function NewScan() {
     setPreferencesLoading(true);
     setPreferencesError(null);
     window.archiveLens.settings.get(sourceTaskId).then((settings: ReviewHighlightSettingsResult) => {
-      if (active) setReviewPreferences(settings.effective_preferences);
+      if (active) {
+        setReviewPreferences(settings.effective_preferences);
+        setSearchScriptScope(settings.search_script_scope);
+      }
     }).catch((nextError: unknown) => {
       if (active) setPreferencesError(nextError instanceof Error ? nextError.message : "无法读取校对显示设置");
     }).finally(() => {
@@ -137,13 +143,14 @@ export default function NewScan() {
       source_type: "folder" as const,
       source_dir: dir,
       search_text: searchText,
+      search_script_scope: searchScriptScope,
       review_preferences: reviewPreferences,
       ...(preflightResult ? {
         preflight_token: preflightResult.scan_token,
         preflight_confirmed: preflightConfirmed,
       } : {}),
     }
-    : { source_type: "files" as const, source_files: files, search_text: searchText, review_preferences: reviewPreferences };
+    : { source_type: "files" as const, source_files: files, search_text: searchText, search_script_scope: searchScriptScope, review_preferences: reviewPreferences };
   const parsedTask = TaskCreateParamsSchema.safeParse(taskInput);
   const folderPreflightReady = sourceType !== "folder" || Boolean(
     preflightResult

@@ -410,8 +410,6 @@ async function restartAndResumeTask(userDataDir: string, taskId: string, previou
   let win: Page | undefined;
   try {
     win = await firstWindow(app);
-    await expect(win.getByText(/发现 1 个未完成任务/)).toBeVisible();
-    await win.getByRole("button", { name: "查看", exact: true }).click();
     await navigateToTask(win, taskId);
     await expect(win.getByRole("button", { name: "继续" })).toBeVisible();
 
@@ -696,8 +694,6 @@ test("Lifecycle: restart recover resumes from checkpoint without duplicates or m
   let secondWin: Page | undefined;
   try {
     secondWin = await firstWindow(secondApp);
-    await expect(secondWin.getByText(/发现 1 个未完成任务/)).toBeVisible();
-    await secondWin.getByRole("button", { name: "查看", exact: true }).click();
     await navigateToTask(secondWin, taskId);
     await expect(secondWin.getByRole("button", { name: "继续" })).toBeVisible();
 
@@ -816,8 +812,6 @@ test("Lifecycle: sidecar crash is recoverable after relaunch and resume preserve
   let secondWin: Page | undefined;
   try {
     secondWin = await firstWindow(secondApp);
-    await expect(secondWin.getByText(/发现 1 个未完成任务/)).toBeVisible();
-    await secondWin.getByRole("button", { name: "查看", exact: true }).click();
     await navigateToTask(secondWin, taskId);
     await secondWin.getByRole("button", { name: "继续" }).click();
     await waitForTaskCompletion(secondWin, taskId);

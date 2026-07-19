@@ -290,21 +290,16 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     expect(workbenchLayout.reviewHeight).toBeLessThanOrEqual(workbenchLayout.viewportHeight + 1);
     expect(workbenchLayout.mainOverflowY).toBe("hidden");
     expect(workbenchLayout.resultOverflowY).toBe("hidden");
-    expect(workbenchLayout.detailOverflowY).toBe("hidden");
+    expect(workbenchLayout.detailOverflowY).toBe("auto");
     expect(workbenchLayout.asideOverflowY).toBe("hidden");
-
-    await page.getByRole("button", { name: "收起校对摘要" }).click();
-    await expect(page.getByRole("button", { name: "展开校对摘要" })).toBeVisible();
-    await expect.poll(() => page.locator(".al-review-aside").evaluate((element) => element.getBoundingClientRect().width)).toBeLessThan(80);
-    expect(await page.evaluate(() => localStorage.getItem("archivelens.reviewSummaryCollapsed"))).toBe("true");
+    expect(workbenchLayout.asideWidth).toBeGreaterThanOrEqual(54);
+    expect(workbenchLayout.asideWidth).toBeLessThanOrEqual(58);
+    await expect(page.locator(".al-review-summary, .al-review-aside-toggle")).toHaveCount(0);
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1080, 680));
     await expect(page.getByRole("button", { name: "立即保存 (Ctrl+Enter)" })).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)).toBeLessThanOrEqual(1);
     await expect(page.locator(".al-page-wrap")).toBeVisible();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 820));
-    await page.getByRole("button", { name: "展开校对摘要" }).click();
-    await expect(page.getByRole("button", { name: "收起校对摘要" })).toBeVisible();
-    expect(await page.evaluate(() => localStorage.getItem("archivelens.reviewSummaryCollapsed"))).toBe("false");
 
     await page.getByRole("button", { name: "100%" }).click();
     for (let index = 0; index < 7; index += 1) {
@@ -393,10 +388,20 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
       externalReferences: [...document.querySelectorAll("[src], [href]")]
         .flatMap((element) => [element.getAttribute("src"), element.getAttribute("href")])
         .filter((value): value is string => Boolean(value && /^https?:/i.test(value))),
-      imagesLoaded: [...document.images].every((image) => image.complete && image.naturalWidth > 0),
+      imagesEmbedded: document.images.length > 0
+        && [...document.images].every((image) => /^data:image\/(?:png|jpeg);base64,/i.test(image.src)),
       imagesUnrotated: [...document.querySelectorAll<HTMLImageElement>(".image-stage img")]
         .every((image) => getComputedStyle(image).transform === "none"),
       pageCards: document.querySelectorAll(".page-card").length,
+      navItems: document.querySelectorAll(".record-nav-item").length,
+      navigationPresent: Boolean(document.getElementById("record-nav")),
+      defaultSort: (document.getElementById("sort-order") as HTMLSelectElement | null)?.value,
+      cardOrder: [...document.querySelectorAll<HTMLElement>(".occurrence-card")].every((card) =>
+        [...card.children].map((child) => child.className).join("|")
+          .startsWith("card-head|record-text|image-button"),
+      ),
+      sequenceLabels: [...document.querySelectorAll<HTMLElement>(".source-sequence")]
+        .map((element) => element.textContent ?? ""),
       overlays: document.querySelectorAll(".hit-overlay-svg rect").length,
       controls: ["file-filter", "status-filter", "report-search", "sort-order", "page-size", "print-report"]
         .every((id) => Boolean(document.getElementById(id))),
@@ -406,9 +411,14 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     expect(offlineReport.scriptCount).toBe(1);
     expect(offlineReport.eventHandlerCount).toBe(0);
     expect(offlineReport.externalReferences).toEqual([]);
-    expect(offlineReport.imagesLoaded).toBe(true);
+    expect(offlineReport.imagesEmbedded).toBe(true);
     expect(offlineReport.imagesUnrotated).toBe(true);
     expect(offlineReport.pageCards).toBeGreaterThan(0);
+    expect(offlineReport.navItems).toBeGreaterThanOrEqual(offlineReport.pageCards);
+    expect(offlineReport.navigationPresent).toBe(true);
+    expect(offlineReport.defaultSort).toBe("sequence");
+    expect(offlineReport.cardOrder).toBe(true);
+    expect(offlineReport.sequenceLabels.every((label) => /^#\d{4,} · /.test(label))).toBe(true);
     expect(offlineReport.overlays).toBeGreaterThan(0);
     expect(offlineReport.controls).toBe(true);
     expect(pageErrors).toEqual([]);
