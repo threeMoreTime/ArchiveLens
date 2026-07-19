@@ -25,6 +25,7 @@
     "prepare:native": "powershell -ExecutionPolicy Bypass -File scripts/prepare-native-runtime.ps1",
     "build:engine": "powershell -ExecutionPolicy Bypass -File scripts/build-engine.ps1",
     "build:installer": "pnpm run prepare:native && pnpm run build:engine && pnpm --filter @archivelens/desktop dist:prepared",
+    "build:exe": "pnpm run build:installer",
     "smoke:unpacked": "powershell -ExecutionPolicy Bypass -File scripts/smoke-unpacked.ps1"
   },
   "devDependencies": {
