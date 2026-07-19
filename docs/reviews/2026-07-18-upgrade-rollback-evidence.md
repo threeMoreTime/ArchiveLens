@@ -4,8 +4,8 @@
 
 总体状态：**PARTIAL**。
 
-- 当前 schema v10 的迁移前备份、失败自动恢复、future schema 拒绝：VERIFIED。
-- 历史 `alpha.10` schema v2 数据向当前 v10 迁移：VERIFIED。
+- 本报告冻结时的候选 schema v10 迁移前备份、失败自动恢复、future schema 拒绝：VERIFIED。
+- 历史 `alpha.10` schema v2 数据向该 v10 候选迁移：VERIFIED。
 - 历史 `alpha.10` 直接打开未来 schema 的安全性：FAIL；它会改写新库。
 - 当年可信发布安装器 provenance：`BLOCKED_BY_MISSING_TRUSTED_PREVIOUS_ARTIFACT`。
 - 正式发布、push、PR、merge、真实用户数据操作：NOT PERFORMED。
