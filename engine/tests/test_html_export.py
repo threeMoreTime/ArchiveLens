@@ -140,6 +140,11 @@ class HtmlExportTests(unittest.TestCase):
         self.assertIn('<option value="sequence" selected>序号升序</option>', report)
         self.assertIn('id="record-nav"', report)
         self.assertIn('id="record-nav-toggle"', report)
+        self.assertIn('id="record-nav-reveal"', report)
+        self.assertIn('id="record-nav-mobile-toggle"', report)
+        self.assertIn('id="record-nav-count"', report)
+        self.assertIn('id="record-nav-reveal-count"', report)
+        self.assertIn('id="record-nav-mobile-count"', report)
         self.assertIn('aria-label="全部筛选结果导航"', report)
         self.assertIn('id="image-modal"', report)
         self.assertIn('id="back-top"', report)
@@ -168,6 +173,28 @@ class HtmlExportTests(unittest.TestCase):
         self.assertIn('target.scrollIntoView', report)
         self.assertIn('button.title=record.page.relativePath', report)
         self.assertIn('.occurrence-card.print-break{break-before:page}', report)
+
+    def test_navigation_fully_releases_desktop_width_and_tracks_current_record(self) -> None:
+        report = self.build()
+
+        self.assertIn(
+            '.review-layout.nav-collapsed{grid-template-columns:0 minmax(0,1fr);gap:0}',
+            report,
+        )
+        self.assertIn('.nav-collapsed .record-nav-reveal{display:inline-grid}', report)
+        self.assertIn('@media(max-width:900px)', report)
+        self.assertIn('.record-nav-mobile-toggle{display:flex}', report)
+        self.assertIn('@media(prefers-reduced-motion:reduce)', report)
+        self.assertIn('.nav-collapsed .record-nav{transition:none}', report)
+        self.assertIn('button.setAttribute("aria-current","location")', report)
+        self.assertIn('scheduleActiveSync()', report)
+        self.assertIn('setCountBadge("record-nav-reveal-count",count)', report)
+        self.assertIn(
+            'state={file:"",status:"",query:"",sort:"sequence",pageSize:20,page:1,'
+            'printMode:false,printSnapshot:null,filtered:[],modalIndex:-1,navCollapsed:false',
+            report,
+        )
+        self.assertNotIn('localStorage', report)
 
     def test_uses_hashed_csp_and_serializes_untrusted_content_without_dom_html_injection(self) -> None:
         self.task["name"] = '<script>alert("task")</script>'

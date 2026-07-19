@@ -141,6 +141,12 @@ app.on("window-all-closed", () => app.quit());
     });
     await page.goto(pathToFileURL(reportPath).href, { waitUntil: "load" });
     await expect(page.locator(".record-nav-item")).toHaveCount(25);
+    await expect(page.locator("#record-nav-count")).toHaveText("25");
+    await expect(page.locator("#record-nav-reveal-count")).toHaveText("25");
+    await expect(page.locator("#record-nav-mobile-count")).toHaveText("25");
+    await expect(page.locator("#record-nav-reveal")).toBeHidden();
+    await expect(page.locator(".record-nav-item").first()).toHaveClass(/is-current/);
+    await expect(page.locator(".record-nav-item").first()).toHaveAttribute("aria-current", "location");
     await expect(page.locator(".occurrence-card")).toHaveCount(20);
     await expect(page.locator(".source-sequence").first()).toContainText("#0001 · 合成档案.pdf · 第 1 页");
     await expect(page.locator("#sort-order")).toHaveValue("sequence");
@@ -152,16 +158,35 @@ app.on("window-all-closed", () => app.quit());
     expect(cardOrder).toEqual(["card-head", "record-text", "image-button"]);
     await expect(page.locator(".occurrence-card").first().locator(".hit-overlay-svg rect")).toHaveCount(1);
 
+    const normalTransition = await page.locator("#review-layout").evaluate((element) =>
+      getComputedStyle(element).transitionDuration,
+    );
+    expect(normalTransition).toContain("0.18s");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(page.locator("#review-layout")).toHaveCSS("transition-duration", "0s");
+
+    await page.locator(".occurrence-card").nth(1).evaluate((card) => card.scrollIntoView({ block: "start" }));
+    await expect(page.locator(".record-nav-item").nth(1)).toHaveAttribute("aria-current", "location");
+    expect(await page.locator("#record-nav-list").evaluate((element) => element.scrollTop)).toBe(0);
+
     await page.locator(".record-nav-item").nth(24).click();
     await expect(page.locator("#page-indicator")).toHaveText("第 2 / 2 页");
     await expect(page.locator(".source-sequence")).toHaveText(["#0021 · 合成档案.pdf · 第 1 页", "#0022 · 合成档案.pdf · 第 1 页", "#0023 · 合成档案.pdf · 第 1 页", "#0024 · 合成档案.pdf · 第 1 页", "#0025 · 合成档案.pdf · 第 1 页"]);
     await expect(page.locator(".occurrence-card").last()).toHaveClass(/targeted/);
+    await expect(page.locator(".record-nav-item").last()).toHaveAttribute("aria-current", "location");
+    expect(await page.locator("#record-nav-list").evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 
     await page.locator("#report-search").fill("完整上下文，包含亏空");
     await expect(page.locator(".record-nav-item")).toHaveCount(25);
     await page.locator("#report-search").fill("第 07 条");
     await expect(page.locator(".record-nav-item")).toHaveCount(1);
     await expect(page.locator(".source-sequence")).toContainText("#0007");
+    await expect(page.locator("#record-nav-count")).toHaveText("1");
+    await expect(page.locator(".record-nav-item")).toHaveAttribute("aria-current", "location");
+    await page.locator("#report-search").fill("不存在的命中内容");
+    await expect(page.locator(".record-nav-item")).toHaveCount(0);
+    await expect(page.locator("#record-nav-count")).toBeHidden();
+    await expect(page.locator("#record-nav-reveal-count")).toBeHidden();
     await page.locator("#reset-filters").click();
 
     await page.locator(".image-button").first().click();
@@ -175,20 +200,56 @@ app.on("window-all-closed", () => app.quit());
       getComputedStyle(element).gridTemplateColumns,
     );
     expect(expandedColumns.startsWith("320px ")).toBe(true);
+    const expandedPaneWidth = await page.locator(".result-pane").evaluate((element) =>
+      element.getBoundingClientRect().width,
+    );
     await page.locator("#record-nav-toggle").click();
     await expect(page.locator("#record-nav-toggle")).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#record-nav-reveal")).toBeVisible();
+    await expect(page.locator("#record-nav-reveal")).toHaveAttribute("aria-expanded", "false");
     const collapsedColumns = await page.locator("#review-layout").evaluate((element) =>
       getComputedStyle(element).gridTemplateColumns,
     );
-    expect(collapsedColumns.startsWith("56px ")).toBe(true);
+    expect(collapsedColumns.startsWith("0px ")).toBe(true);
+    const collapsedPaneWidth = await page.locator(".result-pane").evaluate((element) =>
+      element.getBoundingClientRect().width,
+    );
+    expect(collapsedPaneWidth).toBeGreaterThan(expandedPaneWidth + 250);
+    const revealAndText = await page.evaluate(() => {
+      const reveal = document.querySelector<HTMLElement>("#record-nav-reveal")!.getBoundingClientRect();
+      const text = document.querySelector<HTMLElement>(".source-sequence")!.getBoundingClientRect();
+      return { revealRight: reveal.right, textLeft: text.left };
+    });
+    expect(revealAndText.revealRight).toBeLessThanOrEqual(revealAndText.textLeft);
 
-    await page.locator("#record-nav-toggle").click();
+    await page.locator("#record-nav-reveal").press("Enter");
+    await expect(page.locator("#record-nav-reveal")).toBeHidden();
     await page.setViewportSize({ width: 800, height: 900 });
     await expect(page.locator("#record-nav")).toHaveCSS("position", "static");
+    await expect(page.locator("#record-nav-mobile-toggle")).toBeVisible();
+    await expect(page.locator("#record-nav-toggle")).toBeHidden();
+    await expect(page.locator("#record-nav-reveal")).toBeHidden();
     const mobileColumns = await page.locator("#review-layout").evaluate((element) =>
       getComputedStyle(element).gridTemplateColumns.split(" ").length,
     );
     expect(mobileColumns).toBe(1);
+    await page.locator("#record-nav-mobile-toggle").click();
+    await expect(page.locator("#record-nav-mobile-toggle")).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#record-nav-list")).toBeHidden();
+    await page.locator("#record-nav-mobile-toggle").press("Enter");
+    await expect(page.locator("#record-nav-list")).toBeVisible();
+
+    await page.emulateMedia({ media: "print", reducedMotion: "reduce" });
+    await expect(page.locator("#record-nav")).toBeHidden();
+    await expect(page.locator("#record-nav-mobile-toggle")).toBeHidden();
+    await page.emulateMedia({ media: "screen", reducedMotion: "reduce" });
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.locator("#record-nav-toggle").click();
+    await expect(page.locator("#record-nav-reveal")).toBeVisible();
+    await page.reload({ waitUntil: "load" });
+    await expect(page.locator("#review-layout")).not.toHaveClass(/nav-collapsed/);
+    await expect(page.locator("#record-nav-reveal")).toBeHidden();
 
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
