@@ -149,6 +149,9 @@ app.on("window-all-closed", () => app.quit());
     await expect(page.locator(".record-nav-item").first()).toHaveAttribute("aria-current", "location");
     await expect(page.locator(".occurrence-card")).toHaveCount(20);
     await expect(page.locator(".source-sequence").first()).toContainText("#0001 · 合成档案.pdf · 第 1 页");
+    const firstPageImage = page.locator(".occurrence-card").first().locator(".image-stage img");
+    await expect(firstPageImage).toHaveAttribute("src", /^data:image\/png;base64,/);
+    await expect.poll(() => firstPageImage.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
     await expect(page.locator("#sort-order")).toHaveValue("sequence");
     await expect(page.locator("#page-indicator")).toHaveText("第 1 / 2 页");
 
