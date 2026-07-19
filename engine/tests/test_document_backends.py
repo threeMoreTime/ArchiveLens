@@ -1,13 +1,209 @@
 from __future__ import annotations
 
+import sys
+import threading
+import types
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
 from archivelens_engine.documents import backends
-from archivelens_engine.documents.backends import DjvuLibreBackend, DocumentBackendError, RasterImageBackend
+from archivelens_engine.documents.backends import (
+    DjvuLibreBackend,
+    DocumentBackendError,
+    PdfiumBackend,
+    RasterImageBackend,
+)
 from archivelens_engine.report_pipeline import ReportPipeline
+
+
+@pytest.mark.parametrize("second_operation", ["page_size_points", "render_page"])
+def test_pdfium_backend_serializes_calls_across_instances(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    second_operation: str,
+) -> None:
+    state_lock = threading.Lock()
+    first_entered = threading.Event()
+    allow_first_exit = threading.Event()
+    overlapping_call = threading.Event()
+    active_documents = 0
+    document_count = 0
+    max_active_documents = 0
+
+    class ObservableLock:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self._state_lock = threading.Lock()
+            self._attempt_count = 0
+            self.second_attempted = threading.Event()
+
+        def __enter__(self) -> ObservableLock:
+            with self._state_lock:
+                self._attempt_count += 1
+                if self._attempt_count == 2:
+                    self.second_attempted.set()
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+            self._lock.release()
+
+    observable_lock = ObservableLock()
+    monkeypatch.setattr(backends, "_PDFIUM_LOCK", observable_lock)
+
+    class FakeImage:
+        def save(self, path: Path, _format: str) -> None:
+            path.write_bytes(b"synthetic-png")
+
+        def close(self) -> None:
+            return None
+
+    class FakeBitmap:
+        def to_pil(self) -> FakeImage:
+            return FakeImage()
+
+        def close(self) -> None:
+            return None
+
+    class FakePage:
+        def get_size(self) -> tuple[float, float]:
+            return 612.0, 792.0
+
+        def render(self, *, scale: float) -> FakeBitmap:
+            assert scale == 2.0
+            return FakeBitmap()
+
+        def close(self) -> None:
+            return None
+
+    class FakePdfDocument:
+        def __init__(self, _path: str) -> None:
+            nonlocal active_documents, document_count, max_active_documents
+            with state_lock:
+                document_count += 1
+                call_number = document_count
+                active_documents += 1
+                max_active_documents = max(max_active_documents, active_documents)
+                if active_documents > 1:
+                    overlapping_call.set()
+            if call_number == 1:
+                first_entered.set()
+                if not allow_first_exit.wait(timeout=2):
+                    raise TimeoutError("test did not release the first PDFium call")
+
+        def __len__(self) -> int:
+            return 1
+
+        def __getitem__(self, _page_index: int) -> FakePage:
+            return FakePage()
+
+        def close(self) -> None:
+            nonlocal active_documents
+            with state_lock:
+                active_documents -= 1
+
+    monkeypatch.setitem(sys.modules, "pypdfium2", types.SimpleNamespace(PdfDocument=FakePdfDocument))
+    source = tmp_path / "archive.pdf"
+    source.write_bytes(b"synthetic")
+    first_backend = PdfiumBackend()
+    second_backend = PdfiumBackend()
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def run_first() -> None:
+        try:
+            results.append(first_backend.page_count(source))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def run_second() -> None:
+        try:
+            if second_operation == "page_size_points":
+                results.append(second_backend.page_size_points(source, 0))
+            else:
+                results.append(second_backend.render_page(source, 0, 144))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    first_thread = threading.Thread(target=run_first)
+    second_thread = threading.Thread(target=run_second)
+    first_thread.start()
+    assert first_entered.wait(timeout=1)
+    second_thread.start()
+
+    try:
+        assert observable_lock.second_attempted.wait(timeout=1)
+        assert document_count == 1
+        assert not overlapping_call.is_set()
+    finally:
+        allow_first_exit.set()
+        first_thread.join(timeout=2)
+        second_thread.join(timeout=2)
+
+    try:
+        assert not first_thread.is_alive()
+        assert not second_thread.is_alive()
+        assert errors == []
+        assert max_active_documents == 1
+        assert document_count == 2
+    finally:
+        for result in results:
+            if isinstance(result, Path):
+                result.unlink(missing_ok=True)
+
+
+def test_pdfium_backend_releases_render_resources_after_png_encoding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_order: list[str] = []
+
+    class FakeImage:
+        def save(self, path: Path, _format: str) -> None:
+            close_order.append("save")
+            path.write_bytes(b"synthetic-png")
+
+        def close(self) -> None:
+            close_order.append("image")
+
+    class FakeBitmap:
+        def to_pil(self) -> FakeImage:
+            return FakeImage()
+
+        def close(self) -> None:
+            close_order.append("bitmap")
+
+    class FakePage:
+        def render(self, *, scale: float) -> FakeBitmap:
+            assert scale == 2.0
+            return FakeBitmap()
+
+        def close(self) -> None:
+            close_order.append("page")
+
+    class FakePdfDocument:
+        def __init__(self, _path: str) -> None:
+            return None
+
+        def __getitem__(self, _page_index: int) -> FakePage:
+            return FakePage()
+
+        def close(self) -> None:
+            close_order.append("document")
+
+    monkeypatch.setitem(sys.modules, "pypdfium2", types.SimpleNamespace(PdfDocument=FakePdfDocument))
+    source = tmp_path / "archive.pdf"
+    source.write_bytes(b"synthetic")
+
+    rendered = PdfiumBackend().render_page(source, 0, 144)
+
+    try:
+        assert rendered.read_bytes() == b"synthetic-png"
+        assert close_order == ["save", "image", "bitmap", "page", "document"]
+    finally:
+        rendered.unlink(missing_ok=True)
 
 
 @pytest.mark.parametrize("suffix", [".tif", ".tiff", ".jpg", ".jpeg", ".png"])

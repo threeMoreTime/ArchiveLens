@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -32,6 +34,13 @@ MAX_TIFF_PAGES = 5_000
 # Pillow 默认阈值低于产品允许的 2 亿像素。后端在解码前执行更严格的
 # 宽高与总像素校验，因此把全局炸弹阈值对齐为产品上限。
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
+
+# PDFium does not support concurrent calls from multiple threads, even when
+# those calls use different PdfDocument/PdfiumBackend instances.  Scanning and
+# evidence export run on separate worker threads, so every process-local
+# PDFium operation must share this lock.
+_PDFIUM_LOCK = threading.RLock()
 
 
 class DocumentBackendError(Exception):
@@ -52,11 +61,10 @@ class PdfiumBackend:
         import pypdfium2 as pdfium
 
         try:
-            pdf = pdfium.PdfDocument(str(path))
-            try:
+            with _PDFIUM_LOCK, ExitStack() as resources:
+                pdf = pdfium.PdfDocument(str(path))
+                resources.callback(pdf.close)
                 return len(pdf)
-            finally:
-                pdf.close()
         except Exception as exc:  # noqa: BLE001
             raise DocumentBackendError("DOCUMENT_OPEN_FAILED", f"PDF 打开失败：{exc}", {"path": str(path)}) from exc
 
@@ -66,13 +74,13 @@ class PdfiumBackend:
         import pypdfium2 as pdfium
 
         try:
-            pdf = pdfium.PdfDocument(str(path))
-            try:
+            with _PDFIUM_LOCK, ExitStack() as resources:
+                pdf = pdfium.PdfDocument(str(path))
+                resources.callback(pdf.close)
                 page = pdf[page_index]
+                resources.callback(page.close)
                 width, height = page.get_size()
                 return float(width), float(height)
-            finally:
-                pdf.close()
         except Exception as exc:  # noqa: BLE001
             raise DocumentBackendError(
                 "PAGE_RENDER_FAILED",
@@ -82,23 +90,38 @@ class PdfiumBackend:
 
     def render_page(self, path: Path, page_index: int, dpi: int) -> Path:
         import pypdfium2 as pdfium
-
-        try:
-            pdf = pdfium.PdfDocument(str(path))
-            try:
-                page = pdf[page_index]
-                scale = dpi / 72.0
-                pil_image = page.render(scale=scale).to_pil()
-            finally:
-                pdf.close()
-        except Exception as exc:  # noqa: BLE001
-            raise DocumentBackendError("PAGE_RENDER_FAILED", f"PDF 渲染失败：{exc}", {"page": page_index}) from exc
-
         import os
-        fd, name = tempfile.mkstemp(suffix=".png", prefix="al-pdf-")
-        os.close(fd)  # 必须关闭 fd，否则 Windows 下后续 unlink 触发 WinError 32
-        pil_image.save(name, "PNG")
-        return Path(name)
+
+        output_path: Path | None = None
+        try:
+            with _PDFIUM_LOCK, ExitStack() as resources:
+                pdf = pdfium.PdfDocument(str(path))
+                resources.callback(pdf.close)
+                page = pdf[page_index]
+                resources.callback(page.close)
+                scale = dpi / 72.0
+                bitmap = page.render(scale=scale)
+                resources.callback(bitmap.close)
+                pil_image = bitmap.to_pil()
+                resources.callback(pil_image.close)
+
+                fd, name = tempfile.mkstemp(suffix=".png", prefix="al-pdf-")
+                output_path = Path(name)
+                os.close(fd)  # 必须关闭 fd，否则 Windows 下后续 unlink 触发 WinError 32
+                # to_pil() may share the PDFium bitmap buffer, so encode the PNG
+                # before releasing the bitmap/page/document resources.
+                pil_image.save(output_path, "PNG")
+        except Exception as exc:  # noqa: BLE001
+            details: dict[str, object] = {"page": page_index}
+            if output_path is not None:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError as cleanup_exc:
+                    details["temporary_cleanup_error"] = str(cleanup_exc)
+            raise DocumentBackendError("PAGE_RENDER_FAILED", f"PDF 渲染失败：{exc}", details) from exc
+
+        assert output_path is not None
+        return output_path
 
 
 class DjvuLibreBackend:
