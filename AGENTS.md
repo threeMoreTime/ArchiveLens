@@ -34,7 +34,7 @@ TypeScript/TSX 使用 2 空格缩进，Python 使用 4 空格。保持 TypeScrip
 
 ## 提交与 Pull Request 规范
 
-提交信息使用 `类型: 中文说明`，例如 `fix: 修复任务恢复状态`。类型可选 `feat`、`fix`、`test`、`docs`、`refactor`、`build` 或 `chore`，每个提交只聚焦一类改动。Pull Request 必须说明改动内容、验证结果、风险与兼容性影响；有相关 Issue 时应关联。界面改动需附修改前后截图，不得将跳过或失败的检查描述为已通过。
+提交信息使用 `类型: 详细中文说明`，例如 `fix: 修复任务恢复状态`。类型可选 `feat`、`fix`、`test`、`docs`、`refactor`、`build` 或 `chore`，每个提交只聚焦一类改动。Pull Request 必须说明改动内容、验证结果、风险与兼容性影响；有相关 Issue 时应关联。界面改动需附修改前后截图，不得将跳过或失败的检查描述为已通过。
 
 ## 安全与配置
 
