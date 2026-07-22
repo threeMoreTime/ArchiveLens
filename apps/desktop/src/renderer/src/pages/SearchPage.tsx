@@ -17,6 +17,7 @@ import {
 } from "@shared/index";
 import type { TaskSummary } from "../../../preload/api";
 import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
+import { LayoutContextCanvas, layoutContextSubtitle } from "../components/LayoutContextCanvas";
 import { formatDateTime, taskDisplayName } from "../utils/presentation";
 
 const PAGE_SIZE = 50;
@@ -484,6 +485,18 @@ export default function SearchPage() {
                     )}
                   </div>
                 </div>
+                <section className="al-search-layout-context" aria-label="版面 OCR 上下文">
+                  <div>
+                    <strong>版面 OCR 上下文</strong>
+                    <span>{layoutContextSubtitle(selected.layout_context)}</span>
+                  </div>
+                  {selected.layout_context?.status === "uncertain" && (
+                    <InlineFeedback tone="warning">版面结构待确认，当前只显示命中{selected.layout_context.orientation === "vertical" ? "列" : "行"}。</InlineFeedback>
+                  )}
+                  {selected.layout_context
+                    ? <LayoutContextCanvas context={selected.layout_context} />
+                    : <Text className="al-muted">当前命中无法建立可靠的版面上下文，请以出处页与不可变 OCR 原文为准。</Text>}
+                </section>
                 <div className="al-search-evidence">
                   <div className="al-search-raw-evidence"><span>OCR 原文（不可变）</span><strong>{selected.raw_text || "（空）"}</strong></div>
                   <div><span>上下文识别文本</span><strong>{selected.resolved_text || "（空）"}</strong></div>
@@ -497,7 +510,7 @@ export default function SearchPage() {
                 {(payloadText(selected.payload, "semantic_label") || semanticLabel) && (
                   <Text className="al-search-semantic-note">索引说明：{payloadText(selected.payload, "semantic_label") ?? semanticLabel}。字形关联不等同于语义确认，请以原图和上下文为准。</Text>
                 )}
-                <Text className="al-muted">本页只用于检索与人工核查，不修改 OCR 原文；校正层和正式校正界面留待后续批准的独立批次。</Text>
+                <Text className="al-muted">本页只用于检索与人工核查，不修改 OCR 原文；需要修正版面分组时，请回到校对工作台按页处理。</Text>
               </>
             )}
           </section>

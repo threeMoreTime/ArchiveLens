@@ -343,6 +343,7 @@ class ReportPipelineLiteralMatchTests(unittest.TestCase):
                 output_html=root / "out.html",
                 workspace_dir=Path(tmp) / "work",
                 search_terms=["档案"],
+                task_id="task-stable-line",
                 ocr_engine=lambda _path: ([([[0, 0], [160, 0], [160, 40], [0, 40]], "档案档案", 0.98)], None),
             )
             pipeline._render_page = lambda _document, _page_index: render_path  # type: ignore[method-assign]
@@ -355,6 +356,7 @@ class ReportPipelineLiteralMatchTests(unittest.TestCase):
                 file_hash_sha256="abc",
                 modified_time=0.0,
                 page_count=1,
+                source_id="source-stable-line",
             )
             try:
                 _page, occurrences, ocr_page = pipeline._process_page(document, 0)
@@ -365,6 +367,11 @@ class ReportPipelineLiteralMatchTests(unittest.TestCase):
             self.assertEqual(occurrences[0]["source_x0"], 0.0)
             self.assertEqual(occurrences[0]["source_x1"], 80.0)
             self.assertIsNone(occurrences[0]["matched_character"])
+            self.assertTrue(ocr_page["lines"][0]["ocr_line_id"].startswith("line_"))
+            self.assertEqual(
+                occurrences[0]["layout_context_json"]["target_ocr_line_id"],
+                ocr_page["lines"][0]["ocr_line_id"],
+            )
             self.assertEqual(ocr_page["lines"][0]["raw_text"], "档案档案")
             self.assertEqual(
                 ocr_page["lines"][0]["search_forms"]["traditional"],

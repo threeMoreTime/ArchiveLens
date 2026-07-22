@@ -8,11 +8,23 @@ import type {
   OcrSearchPreparePageImageParams,
   OcrSearchSession,
   OcrSearchSessionsResult,
+  LayoutContext,
+  LayoutRebuildProgress,
   ReviewDisplayPreferences,
   ReviewHighlightSettingsResult,
   ReviewHighlightSettingsUpdateParams,
   ReviewPageImageResult,
   ReviewPreparePageImageParams,
+  ReviewLayoutContextParams,
+  ReviewLayoutContextResult,
+  ReviewPreviewLayoutContextParams,
+  ReviewRebuildLayoutContextsParams,
+  ReviewUpdateLayoutOverrideParams,
+  ReviewUpdateLayoutOverrideResult,
+  ReviewUpdateDecisionParams,
+  ReviewUpdateDecisionResult,
+  ReviewUpdateDecisionsParams,
+  ReviewUpdateDecisionsResult,
   SearchScriptScope,
   SourcePreflightJob,
   StorageCleanupResult,
@@ -183,6 +195,12 @@ export interface OccurrenceItem {
   context_before: string;
   context_after: string;
   context_full: string;
+  ocr_line_id?: string;
+  layout_context?: LayoutContext | null;
+  layout_context_text?: string;
+  layout_context_version?: number;
+  layout_context_status?: "pending" | "ready" | "uncertain" | "failed";
+  layout_context_error?: string;
   ocr_confidence: number;
   verification_status: string;
   review_decision: string | null;
@@ -217,6 +235,7 @@ export interface ResultsPage {
   task_status: string;
   scan_complete: boolean;
   review_complete: boolean;
+  layout_rebuild: LayoutRebuildProgress;
   items: OccurrenceItem[];
 }
 
@@ -322,11 +341,12 @@ export interface ArchiveLensApi {
   };
   review: {
     preparePageImage(p: ReviewPreparePageImageParams): Promise<ReviewPageImageResult>;
-    updateDecision(p: {
-      task_id: string;
-      occurrence_id: string;
-      decision: "confirmed" | "needs_review" | "rejected";
-    }): Promise<{ occurrence_id: string; decision: string; updated_at: string }>;
+    getLayoutContext(p: ReviewLayoutContextParams): Promise<ReviewLayoutContextResult>;
+    previewLayoutContext(p: ReviewPreviewLayoutContextParams): Promise<ReviewLayoutContextResult>;
+    updateLayoutOverride(p: ReviewUpdateLayoutOverrideParams): Promise<ReviewUpdateLayoutOverrideResult>;
+    rebuildLayoutContexts(p: ReviewRebuildLayoutContextsParams): Promise<LayoutRebuildProgress>;
+    updateDecision(p: ReviewUpdateDecisionParams): Promise<ReviewUpdateDecisionResult>;
+    updateDecisions(p: ReviewUpdateDecisionsParams): Promise<ReviewUpdateDecisionsResult>;
     updateNote(p: {
       task_id: string;
       occurrence_id: string;

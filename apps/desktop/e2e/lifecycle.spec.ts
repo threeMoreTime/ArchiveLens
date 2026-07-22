@@ -721,7 +721,7 @@ test("Lifecycle: restart recover resumes from checkpoint without duplicates or m
     const appInfo = await secondWin.evaluate(async () => {
       return (window as any).archiveLens.app.getInfo();
     });
-    expect(appInfo.protocol_version).toBe(3);
+    expect(appInfo.protocol_version).toBe(4);
 
     const snapshot = await readPersistedTaskSnapshot(userDataDir, taskId);
     assertIntegrity(snapshot);

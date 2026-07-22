@@ -336,7 +336,7 @@ export default function TaskCenter() {
         <Card className="al-card al-task-table-card">
           <div className="al-task-table al-task-center-table" role="table" aria-label="全部任务">
             <div className="al-task-table-head" role="row">
-              <span className="al-task-select-cell">
+              <span className="al-task-select-cell" role="columnheader">
                 <Checkbox
                   label="选择当前页"
                   checked={allCurrentPageSelected ? true : selectedTasks.length > 0 ? "mixed" : false}
@@ -346,7 +346,7 @@ export default function TaskCenter() {
                     : new Set())}
                 />
               </span>
-              <span>任务</span><span>状态</span><span>进度与结果</span><span>更新时间</span><span>操作</span>
+              <span role="columnheader">任务</span><span role="columnheader">状态</span><span role="columnheader">进度与结果</span><span role="columnheader">更新时间</span><span role="columnheader">操作</span>
             </div>
             {items.map((task) => {
               const statusView = taskStatusView(task);
@@ -380,7 +380,7 @@ export default function TaskCenter() {
                 : `${task.processed_pages} 页（${taskIsRunning ? "总数统计中" : "总数未记录"}）`;
               return (
                 <div className={`al-task-table-row${selectedTaskIds.has(task.task_id) ? " selected" : ""}`} role="row" key={task.task_id}>
-                  <span className="al-task-select-cell">
+                  <span className="al-task-select-cell" role="cell">
                     <Checkbox
                       aria-label={`选择任务 ${taskDisplayName(task)}`}
                       checked={selectedTaskIds.has(task.task_id)}
@@ -396,17 +396,17 @@ export default function TaskCenter() {
                       })}
                     />
                   </span>
-                  <span className="al-task-name-cell"><strong title={taskDisplayName(task)}>{taskDisplayName(task)}</strong><small title={task.source_dir}>{taskSourceLabel(task)}</small><small>检索词：{task.search_text}</small></span>
-                  <span>
+                  <span className="al-task-name-cell" role="cell"><strong title={taskDisplayName(task)}>{taskDisplayName(task)}</strong><small title={task.source_dir}>{taskSourceLabel(task)}</small><small>检索词：{task.search_text}</small></span>
+                  <span className="al-task-status-cell" role="cell">
                     <span className={`al-badge al-badge-${statusView.tone}`}>{statusView.label}</span>
                     {cleanupView && <span className={`al-badge al-badge-${cleanupView.tone}`}>{cleanupView.label}</span>}
                     {task.cleanup_status === "cleanup_failed" && task.cleanup_error_summary && (
                       <small className="al-task-cleanup-error" title={task.cleanup_error_summary}>{task.cleanup_error_summary}</small>
                     )}
                   </span>
-                  <span className="al-task-result-cell"><strong>{task.occurrence_count} 条命中</strong><small>{progress}</small></span>
-                  <span title={updatedAt || undefined}>{formatDateTime(updatedAt)}</span>
-                  <span className="al-task-row-actions">{primaryAction && <Button size="small" appearance="primary" disabled={batchBusy || primaryAction.disabled} onClick={primaryAction.onSelect}>{primaryAction.label}</Button>}{menuActions.length > 0 && (<Menu><MenuTrigger disableButtonEnhancement><Button size="small" disabled={batchBusy} aria-label={`${taskDisplayName(task)}更多操作`}>更多</Button></MenuTrigger><MenuPopover><MenuList>{TASK_ACTION_GROUPS.map((group, groupIndex) => { const groupActions = menuActions.filter((action) => action.group === group); if (groupActions.length === 0) return null; return <div key={group}>{groupIndex > 0 && menuActions.some((action) => TASK_ACTION_GROUPS.indexOf(action.group) < groupIndex) && <MenuDivider />}{groupActions.map((action) => <MenuItem key={action.id} disabled={action.disabled} className={action.danger ? "al-task-delete-menu-item" : undefined} onClick={action.onSelect}>{action.label}</MenuItem>)}</div>; })}</MenuList></MenuPopover></Menu>)}{task.cleanup_status === "cleanup_failed" && (<><Button size="small" disabled={batchBusy || deletingTaskId !== null} onClick={() => void retryCleanup(task.task_id)}>{deletingTaskId === task.task_id ? "正在重试…" : "重试清理"}</Button><Button size="small" disabled={batchBusy} onClick={() => void openCleanupDir(task.task_id)}>打开残留目录</Button></>)}</span>
+                  <span className="al-task-result-cell" role="cell"><strong>{task.occurrence_count} 条命中</strong><small>{progress}</small></span>
+                  <span className="al-task-updated-cell" role="cell" title={updatedAt || undefined}>{formatDateTime(updatedAt)}</span>
+                  <span className="al-task-row-actions" role="cell">{primaryAction && <Button size="small" appearance="primary" disabled={batchBusy || primaryAction.disabled} onClick={primaryAction.onSelect}>{primaryAction.label}</Button>}{menuActions.length > 0 && (<Menu><MenuTrigger disableButtonEnhancement><Button size="small" disabled={batchBusy} aria-label={`${taskDisplayName(task)}更多操作`}>更多</Button></MenuTrigger><MenuPopover><MenuList>{TASK_ACTION_GROUPS.map((group, groupIndex) => { const groupActions = menuActions.filter((action) => action.group === group); if (groupActions.length === 0) return null; return <div key={group}>{groupIndex > 0 && menuActions.some((action) => TASK_ACTION_GROUPS.indexOf(action.group) < groupIndex) && <MenuDivider />}{groupActions.map((action) => <MenuItem key={action.id} disabled={action.disabled} className={action.danger ? "al-task-delete-menu-item" : undefined} onClick={action.onSelect}>{action.label}</MenuItem>)}</div>; })}</MenuList></MenuPopover></Menu>)}{task.cleanup_status === "cleanup_failed" && (<><Button size="small" disabled={batchBusy || deletingTaskId !== null} onClick={() => void retryCleanup(task.task_id)}>{deletingTaskId === task.task_id ? "正在重试…" : "重试清理"}</Button><Button size="small" disabled={batchBusy} onClick={() => void openCleanupDir(task.task_id)}>打开残留目录</Button></>)}</span>
                 </div>
               );
             })}

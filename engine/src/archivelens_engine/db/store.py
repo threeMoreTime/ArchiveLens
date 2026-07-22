@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 import threading
 import uuid
@@ -33,6 +34,7 @@ from .migration_backup import (
     MigrationBackupRecord,
     MigrationRecoveryError,
 )
+from ..layout_context import LAYOUT_CONTEXT_VERSION, LAYOUT_MODES, stable_ocr_line_id
 from ..search_terms import (
     EXACT_LITERAL_SEARCH_MODE,
     LEGACY_SEARCH_MODE,
@@ -40,7 +42,7 @@ from ..search_terms import (
     unicode_sequence,
 )
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 14
 OCR_CORPUS_VERSION = 1
 OCR_INDEX_NOT_BUILT = "not_built"
 OCR_INDEX_BUILDING = "building"
@@ -52,8 +54,10 @@ LEGACY_TASK_REQUIRES_REVIEW = "LEGACY_TASK_REQUIRES_REVIEW"
 DEFAULT_REVIEW_IMAGE_QUALITY = "maximum"
 DEFAULT_CONTEXT_DIRECTION = "ltr"
 DEFAULT_CONTEXT_RADIUS = 15
+DEFAULT_LAYOUT_MODE = "auto"
 DEFAULT_SEARCH_SCRIPT_SCOPE = "both"
 SEARCH_SCRIPT_SCOPES = {"simplified", "traditional", "both"}
+MAX_REVIEW_DECISION_OPERATION_RECORDS = 10_000
 
 EXPORT_JOB_ACTIVE_STATUSES = (
     "queued",
@@ -134,6 +138,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     review_image_quality TEXT NOT NULL DEFAULT 'maximum',
     context_direction TEXT NOT NULL DEFAULT 'ltr',
     context_radius INTEGER NOT NULL DEFAULT 15,
+    layout_mode TEXT NOT NULL DEFAULT 'auto',
     ocr_corpus_version INTEGER NOT NULL DEFAULT 0,
     ocr_index_status TEXT NOT NULL DEFAULT 'not_built',
     ocr_model_id TEXT,
@@ -163,6 +168,12 @@ CREATE TABLE IF NOT EXISTS occurrences (
     context_before TEXT,
     context_after TEXT,
     context_full TEXT,
+    ocr_line_id TEXT NOT NULL DEFAULT '',
+    layout_context_json TEXT NOT NULL DEFAULT '',
+    layout_context_text TEXT NOT NULL DEFAULT '',
+    layout_context_version INTEGER NOT NULL DEFAULT 0,
+    layout_context_status TEXT NOT NULL DEFAULT 'pending',
+    layout_context_error TEXT NOT NULL DEFAULT '',
     ocr_confidence REAL,
     secondary_ocr_result TEXT,
     verification_status TEXT,
@@ -177,6 +188,19 @@ CREATE TABLE IF NOT EXISTS occurrences (
     page_image_height INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_occ_task ON occurrences(task_id);
+CREATE TABLE IF NOT EXISTS layout_context_page_overrides (
+    task_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    page_no INTEGER NOT NULL,
+    layout_mode TEXT NOT NULL DEFAULT 'auto',
+    block_x0 REAL,
+    block_y0 REAL,
+    block_x1 REAL,
+    block_y1 REAL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, source_id, page_no)
+);
 CREATE TABLE IF NOT EXISTS task_processed_pages (
     task_id TEXT NOT NULL,
     source_id TEXT NOT NULL,
@@ -214,6 +238,16 @@ CREATE TABLE IF NOT EXISTS review_records (
     updated_at TEXT,
     PRIMARY KEY (task_id, occurrence_id)
 );
+CREATE TABLE IF NOT EXISTS review_decision_operations (
+    task_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    response_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_review_decision_operations_created
+ON review_decision_operations(task_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS exports (
     export_id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
@@ -450,6 +484,7 @@ class TaskStore:
             else:
                 self._create_occurrence_business_indexes()
             self._ensure_occurrence_sequence_contract()
+            self._ensure_layout_context_contract()
             self._ensure_export_job_contract()
             self.conn.execute(
                 "INSERT INTO schema_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -628,6 +663,7 @@ class TaskStore:
         self._ensure_column("tasks", "review_image_quality", "TEXT NOT NULL DEFAULT 'standard'")
         self._ensure_column("tasks", "context_direction", "TEXT NOT NULL DEFAULT 'ltr'")
         self._ensure_column("tasks", "context_radius", "INTEGER NOT NULL DEFAULT 15")
+        self._ensure_column("tasks", "layout_mode", "TEXT NOT NULL DEFAULT 'auto'")
         self._ensure_column("tasks", "ocr_corpus_version", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(
             "tasks",
@@ -643,6 +679,24 @@ class TaskStore:
         self._ensure_column("occurrences", "match_start", "INTEGER")
         self._ensure_column("occurrences", "match_end", "INTEGER")
         self._ensure_column("occurrences", "unicode_sequence", "TEXT")
+        self._ensure_column("occurrences", "ocr_line_id", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("occurrences", "layout_context_json", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("occurrences", "layout_context_text", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("occurrences", "layout_context_version", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(
+            "occurrences",
+            "layout_context_status",
+            "TEXT NOT NULL DEFAULT 'pending'",
+        )
+        self._ensure_column("occurrences", "layout_context_error", "TEXT NOT NULL DEFAULT ''")
+        self.conn.execute(
+            "UPDATE tasks SET layout_mode='auto' "
+            "WHERE layout_mode IS NULL OR layout_mode NOT IN ('auto','horizontal','vertical')"
+        )
+        self.conn.execute(
+            "UPDATE occurrences SET layout_context_status='pending', layout_context_version=0 "
+            "WHERE layout_context_json IS NULL OR TRIM(layout_context_json)=''"
+        )
         legacy_terms_json = json.dumps(list(LEGACY_SEARCH_TERMS), ensure_ascii=False, separators=(",", ":"))
         self.conn.execute(
             "UPDATE tasks SET search_terms_json=? WHERE search_terms_json IS NULL OR TRIM(search_terms_json)=''",
@@ -816,6 +870,12 @@ class TaskStore:
             self._ensure_column("export_jobs", "cleanup_error_message", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column("export_jobs", "cleanup_attempt_count", "INTEGER NOT NULL DEFAULT 0")
 
+    def _ensure_layout_context_contract(self) -> None:
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_occ_layout_rebuild "
+            "ON occurrences(task_id, layout_context_version, layout_context_status, global_sequence)"
+        )
+
     def _ensure_export_job_contract(self) -> None:
         """建立 v10 导出约束；迁移时把重复活动作业安全标记为 interrupted。"""
         active_sql = ",".join(f"'{status}'" for status in EXPORT_JOB_ACTIVE_STATUSES)
@@ -932,6 +992,7 @@ class TaskStore:
         review_image_quality: str = DEFAULT_REVIEW_IMAGE_QUALITY,
         context_direction: str = DEFAULT_CONTEXT_DIRECTION,
         context_radius: int = DEFAULT_CONTEXT_RADIUS,
+        layout_mode: str = DEFAULT_LAYOUT_MODE,
     ) -> str:
         task_id = new_id("task_")
         created = now_iso()
@@ -958,6 +1019,7 @@ class TaskStore:
                     review_image_quality=review_image_quality,
                     context_direction=context_direction,
                     context_radius=context_radius,
+                    layout_mode=layout_mode,
                 )
                 self._insert_task_sources_locked(task_id, source_files, created)
         return task_id
@@ -984,6 +1046,7 @@ class TaskStore:
         review_image_quality: str = DEFAULT_REVIEW_IMAGE_QUALITY,
         context_direction: str = DEFAULT_CONTEXT_DIRECTION,
         context_radius: int = DEFAULT_CONTEXT_RADIUS,
+        layout_mode: str = DEFAULT_LAYOUT_MODE,
     ) -> tuple[str, dict[str, Any]]:
         task_id = new_id("task_")
         created = now_iso()
@@ -1011,6 +1074,7 @@ class TaskStore:
                         review_image_quality=review_image_quality,
                         context_direction=context_direction,
                         context_radius=context_radius,
+                        layout_mode=layout_mode,
                     )
                     self._insert_task_sources_locked(task_id, source_files, created)
                     event = self._append_task_event_locked(
@@ -1062,18 +1126,21 @@ class TaskStore:
         review_image_quality: str,
         context_direction: str,
         context_radius: int,
+        layout_mode: str,
     ) -> None:
+        if layout_mode not in LAYOUT_MODES:
+            raise ValueError("layout_mode must be auto, horizontal, or vertical")
         self.conn.execute(
             """INSERT INTO tasks
                (task_id, name, source_dir, source_kind, source_label, output_dir, workspace_dir, status,
                 is_demo, file_count, total_pages, created_at, updated_at, search_terms_json, search_mode,
-                search_script_scope, review_image_quality, context_direction, context_radius)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                search_script_scope, review_image_quality, context_direction, context_radius, layout_mode)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 task_id, name, source_dir, source_kind, source_label or source_dir, output_dir, workspace_dir, status,
                 1 if is_demo else 0, file_count, total_pages, created_at, created_at,
                 json.dumps(search_terms, ensure_ascii=False, separators=(",", ":")), search_mode, search_script_scope,
-                review_image_quality, context_direction, context_radius,
+                review_image_quality, context_direction, context_radius, layout_mode,
             ),
         )
 
@@ -1205,8 +1272,11 @@ class TaskStore:
             # Legacy database column remains readable for rollback, but page
             # image rendering no longer has selectable quality tiers.
             "page_quality": "maximum",
-            "context_direction": task.get("context_direction") or DEFAULT_CONTEXT_DIRECTION,
-            "context_radius": int(task.get("context_radius") or DEFAULT_CONTEXT_RADIUS),
+            "layout_mode": (
+                str(task.get("layout_mode") or DEFAULT_LAYOUT_MODE)
+                if str(task.get("layout_mode") or DEFAULT_LAYOUT_MODE) in LAYOUT_MODES
+                else DEFAULT_LAYOUT_MODE
+            ),
         }
         if task["source_kind"] == "files":
             task["source_files"] = [str(source["file_path"]) for source in (sources or [])]
@@ -1236,6 +1306,8 @@ class TaskStore:
             with self.conn:
                 for table in (
                     "review_records",
+                    "review_decision_operations",
+                    "layout_context_page_overrides",
                     "occurrences",
                     "ocr_search_hits",
                     "ocr_search_sessions",
@@ -1730,6 +1802,8 @@ class TaskStore:
             "unicode_sequence", "unicode_codepoint",
             "bbox_hash",
             "context_before", "context_after", "context_full", "ocr_confidence",
+            "ocr_line_id", "layout_context_json", "layout_context_text",
+            "layout_context_version", "layout_context_status", "layout_context_error",
             "secondary_ocr_result", "verification_status", "location_method",
             "source_page_width", "source_page_height",
             "source_x0", "source_y0", "source_x1", "source_y1",
@@ -1742,6 +1816,12 @@ class TaskStore:
             "task_id": task_id,
             "source_id": "",
             "bbox_hash": "",
+            "ocr_line_id": "",
+            "layout_context_json": "",
+            "layout_context_text": "",
+            "layout_context_version": 0,
+            "layout_context_status": "pending",
+            "layout_context_error": "",
         }
         record.update(
             {k: v for k, v in occ.items() if k in cols and k not in ("occurrence_id", "task_id")}
@@ -1751,6 +1831,24 @@ class TaskStore:
             record["unicode_sequence"] = unicode_sequence(str(record["matched_text"]))
         if record.get("matched_text") and len(str(record["matched_text"])) == 1 and not record.get("matched_character"):
             record["matched_character"] = record["matched_text"]
+        if isinstance(record.get("layout_context_json"), dict):
+            record["layout_context_json"] = json.dumps(
+                record["layout_context_json"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        if record.get("layout_context_text"):
+            record["context_full"] = str(record["layout_context_text"])
+        if not record.get("ocr_line_id") and isinstance(occ.get("line_index"), int):
+            source_id = str(record.get("source_id") or "")
+            page_number = int(record.get("page_number") or 0)
+            if source_id and page_number > 0:
+                record["ocr_line_id"] = self._ocr_line_id(
+                    task_id,
+                    source_id,
+                    page_number,
+                    int(occ["line_index"]),
+                )
         placeholders = ", ".join("?" for _ in cols)
         # RLock 可重入：add_occurrences 持锁时本方法同线程可再进入
         with self._lock:
@@ -2133,8 +2231,7 @@ class TaskStore:
 
     @staticmethod
     def _ocr_line_id(task_id: str, source_id: str, page_no: int, line_index: int) -> str:
-        payload = f"{task_id}\x1f{source_id}\x1f{page_no}\x1f{line_index}".encode("utf-8")
-        return f"line_{hashlib.sha256(payload).hexdigest()[:32]}"
+        return stable_ocr_line_id(task_id, source_id, page_no, line_index)
 
     def _insert_ocr_corpus_page_locked(
         self,
@@ -2394,6 +2491,10 @@ class TaskStore:
                 """,
                 (task_id, limit, offset),
             ).fetchall()
+        return [self._decode_ocr_line_row(row) for row in rows]
+
+    @staticmethod
+    def _decode_ocr_line_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         json_fields = (
             "bbox_json",
             "word_boxes_json",
@@ -2403,16 +2504,31 @@ class TaskStore:
             "script_reconciliations_json",
             "correction_provenance_json",
         )
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            item = dict(row)
-            for field in json_fields:
-                value = item.get(field)
-                item[field.removesuffix("_json")] = (
-                    json.loads(value) if isinstance(value, str) and value else None
-                )
-            result.append(item)
-        return result
+        item = dict(row)
+        for field in json_fields:
+            value = item.get(field)
+            item[field.removesuffix("_json")] = (
+                json.loads(value) if isinstance(value, str) and value else None
+            )
+        return item
+
+    def list_ocr_lines_for_page(
+        self,
+        *,
+        task_id: str,
+        source_id: str,
+        page_no: int,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM ocr_lines
+                WHERE task_id=? AND source_id=? AND page_no=?
+                ORDER BY line_index
+                """,
+                (task_id, source_id, page_no),
+            ).fetchall()
+        return [self._decode_ocr_line_row(row) for row in rows]
 
     def list_ocr_search_candidate_lines(
         self,
@@ -3035,7 +3151,7 @@ class TaskStore:
             where.append("o.character_variant=?")
             params.append(character)
         if search:
-            where.append("o.context_full LIKE ?")
+            where.append("COALESCE(NULLIF(o.layout_context_text, ''), o.context_full) LIKE ?")
             params.append(f"%{search}%")
         return " AND ".join(where), params
 
@@ -3093,6 +3209,235 @@ class TaskStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def list_stale_layout_occurrences(
+        self,
+        *,
+        task_id: str,
+        limit: int = 25,
+        priority_source_id: str = "",
+        priority_page_no: int = 0,
+    ) -> list[dict[str, Any]]:
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("layout rebuild limit must be between 1 and 200")
+        with self._lock:
+            priority_enabled = bool(priority_source_id and priority_page_no > 0)
+            rows = self.conn.execute(
+                f"""
+                SELECT * FROM occurrences
+                WHERE task_id=?
+                  AND (layout_context_version<>?
+                       OR layout_context_status NOT IN ('ready','uncertain'))
+                  AND layout_context_status<>'failed'
+                ORDER BY {
+                    "CASE WHEN source_id=? AND page_number=? THEN 0 ELSE 1 END, "
+                    if priority_enabled else ""
+                }global_sequence
+                LIMIT ?
+                """,
+                (
+                    (task_id, LAYOUT_CONTEXT_VERSION, priority_source_id, priority_page_no, limit)
+                    if priority_enabled
+                    else (task_id, LAYOUT_CONTEXT_VERSION, limit)
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_layout_rebuild_progress(self, task_id: str) -> dict[str, int | str]:
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN layout_context_version=?
+                                      AND layout_context_status IN ('ready','uncertain')
+                                THEN 1 ELSE 0 END) AS completed,
+                       SUM(CASE WHEN layout_context_status='failed' THEN 1 ELSE 0 END) AS failed
+                FROM occurrences WHERE task_id=?
+                """,
+                (LAYOUT_CONTEXT_VERSION, task_id),
+            ).fetchone()
+        total = int(row["total"] or 0) if row else 0
+        completed = int(row["completed"] or 0) if row else 0
+        failed = int(row["failed"] or 0) if row else 0
+        return {
+            "task_id": task_id,
+            "version": LAYOUT_CONTEXT_VERSION,
+            "total": total,
+            "completed": completed,
+            "failed": failed,
+            "remaining": max(0, total - completed - failed),
+        }
+
+    def save_occurrence_layout_context(
+        self,
+        *,
+        task_id: str,
+        occurrence_id: str,
+        context: dict[str, Any],
+        expected_override_updated_at: str | None,
+    ) -> bool:
+        status = str(context.get("status") or "failed")
+        if status not in {"ready", "uncertain"}:
+            raise ValueError("layout context status must be ready or uncertain")
+        payload = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        plain_text = str(context.get("plain_text") or "")
+        target_line_id = str(context.get("target_ocr_line_id") or "")
+        with self._lock:
+            cursor = self.conn.execute(
+                """
+                UPDATE occurrences
+                SET ocr_line_id=?, layout_context_json=?, layout_context_text=?,
+                    layout_context_version=?, layout_context_status=?, layout_context_error='',
+                    context_full=CASE WHEN ?<>'' THEN ? ELSE context_full END
+                 WHERE task_id=? AND occurrence_id=?
+                   AND (
+                     (? IS NULL AND NOT EXISTS (
+                       SELECT 1 FROM layout_context_page_overrides page_override
+                       WHERE page_override.task_id=occurrences.task_id
+                         AND page_override.source_id=occurrences.source_id
+                         AND page_override.page_no=occurrences.page_number
+                     ))
+                     OR
+                     (? IS NOT NULL AND EXISTS (
+                       SELECT 1 FROM layout_context_page_overrides page_override
+                       WHERE page_override.task_id=occurrences.task_id
+                         AND page_override.source_id=occurrences.source_id
+                         AND page_override.page_no=occurrences.page_number
+                         AND page_override.updated_at=?
+                     ))
+                   )
+                 """,
+                (
+                    target_line_id,
+                    payload,
+                    plain_text,
+                    LAYOUT_CONTEXT_VERSION,
+                    status,
+                    target_line_id,
+                    plain_text,
+                    task_id,
+                    occurrence_id,
+                    expected_override_updated_at,
+                    expected_override_updated_at,
+                    expected_override_updated_at,
+                ),
+            )
+            exists = self.conn.execute(
+                "SELECT 1 FROM occurrences WHERE task_id=? AND occurrence_id=?",
+                (task_id, occurrence_id),
+            ).fetchone()
+            self.conn.commit()
+        if exists is None:
+            raise KeyError(occurrence_id)
+        return cursor.rowcount == 1
+
+    def mark_occurrence_layout_failed(
+        self,
+        *,
+        task_id: str,
+        occurrence_id: str,
+        error: str,
+    ) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE occurrences
+                SET layout_context_status='failed', layout_context_error=?, layout_context_version=0
+                WHERE task_id=? AND occurrence_id=?
+                """,
+                (error[:500], task_id, occurrence_id),
+            )
+            self.conn.commit()
+
+    def get_page_layout_override(
+        self,
+        *,
+        task_id: str,
+        source_id: str,
+        page_no: int,
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT * FROM layout_context_page_overrides
+                WHERE task_id=? AND source_id=? AND page_no=?
+                """,
+                (task_id, source_id, page_no),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_page_layout_override(
+        self,
+        *,
+        task_id: str,
+        source_id: str,
+        page_no: int,
+        layout_mode: str,
+        block_bbox: dict[str, float] | None,
+    ) -> None:
+        if layout_mode not in LAYOUT_MODES:
+            raise ValueError("layout_mode must be auto, horizontal, or vertical")
+        values: tuple[float | None, float | None, float | None, float | None]
+        if block_bbox is None:
+            values = (None, None, None, None)
+        else:
+            values = tuple(float(block_bbox[key]) for key in ("x0", "y0", "x1", "y1"))
+            if not all(math.isfinite(value) for value in values) or values[2] <= values[0] or values[3] <= values[1]:
+                raise ValueError("block_bbox must be a finite positive rectangle")
+        updated = now_iso()
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT INTO layout_context_page_overrides(
+                        task_id, source_id, page_no, layout_mode,
+                        block_x0, block_y0, block_x1, block_y1, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id, source_id, page_no) DO UPDATE SET
+                        layout_mode=excluded.layout_mode,
+                        block_x0=excluded.block_x0,
+                        block_y0=excluded.block_y0,
+                        block_x1=excluded.block_x1,
+                        block_y1=excluded.block_y1,
+                        updated_at=excluded.updated_at
+                    """,
+                    (task_id, source_id, page_no, layout_mode, *values, updated, updated),
+                )
+                self.conn.execute(
+                    """
+                    UPDATE occurrences
+                    SET layout_context_version=0, layout_context_status='pending',
+                        layout_context_error=''
+                    WHERE task_id=? AND source_id=? AND page_number=?
+                    """,
+                    (task_id, source_id, page_no),
+                )
+
+    def clear_page_layout_override(
+        self,
+        *,
+        task_id: str,
+        source_id: str,
+        page_no: int,
+    ) -> None:
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    DELETE FROM layout_context_page_overrides
+                    WHERE task_id=? AND source_id=? AND page_no=?
+                    """,
+                    (task_id, source_id, page_no),
+                )
+                self.conn.execute(
+                    """
+                    UPDATE occurrences
+                    SET layout_context_version=0, layout_context_status='pending',
+                        layout_context_error=''
+                    WHERE task_id=? AND source_id=? AND page_number=?
+                    """,
+                    (task_id, source_id, page_no),
+                )
+
     # ---- review ----
     def upsert_review(
         self,
@@ -3135,6 +3480,135 @@ class TaskStore:
                 self.conn.rollback()
                 raise
         return updated
+
+    def set_review_decision(
+        self,
+        *,
+        task_id: str,
+        occurrence_id: str,
+        decision: str | None,
+    ) -> str:
+        """Set or clear a decision while preserving any existing review note."""
+        updated, _items = self.set_review_decisions(
+            task_id=task_id,
+            changes=[(occurrence_id, decision)],
+        )
+        return updated
+
+    def set_review_decisions(
+        self,
+        *,
+        task_id: str,
+        changes: list[tuple[str, str | None]],
+        operation_id: str | None = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Atomically set decisions and return the persisted previous state."""
+        if not changes:
+            raise ValueError("at least one review decision change is required")
+        occurrence_ids = [occurrence_id for occurrence_id, _decision in changes]
+        if len(set(occurrence_ids)) != len(occurrence_ids):
+            raise ValueError("review decision changes contain duplicate occurrence IDs")
+        if operation_id is not None and not operation_id:
+            raise ValueError("review decision operation ID must not be empty")
+        request_payload = json.dumps(changes, ensure_ascii=False, separators=(",", ":"))
+        request_hash = hashlib.sha256(request_payload.encode("utf-8")).hexdigest()
+        updated = now_iso()
+        with self._lock:
+            try:
+                if operation_id is not None:
+                    stored_operation = self.conn.execute(
+                        """
+                        SELECT request_hash, response_json
+                        FROM review_decision_operations
+                        WHERE task_id=? AND operation_id=?
+                        """,
+                        (task_id, operation_id),
+                    ).fetchone()
+                    if stored_operation is not None:
+                        if stored_operation["request_hash"] != request_hash:
+                            raise ValueError("review decision operation ID was reused with different changes")
+                        stored_response = json.loads(stored_operation["response_json"])
+                        return str(stored_response["updated_at"]), list(stored_response["items"])
+                previous: dict[str, str | None] = {}
+                for start in range(0, len(occurrence_ids), 500):
+                    chunk = occurrence_ids[start : start + 500]
+                    placeholders = ",".join("?" for _item in chunk)
+                    rows = self.conn.execute(
+                        f"""SELECT o.occurrence_id, r.decision
+                            FROM occurrences o
+                            LEFT JOIN review_records r
+                              ON r.task_id=o.task_id AND r.occurrence_id=o.occurrence_id
+                            WHERE o.task_id=? AND o.occurrence_id IN ({placeholders})""",
+                        (task_id, *chunk),
+                    ).fetchall()
+                    previous.update({str(row["occurrence_id"]): row["decision"] for row in rows})
+                missing = next((occurrence_id for occurrence_id in occurrence_ids if occurrence_id not in previous), None)
+                if missing is not None:
+                    raise KeyError(missing)
+                self.conn.executemany(
+                    """INSERT INTO review_records
+                       (task_id, occurrence_id, decision, note, reviewed_at, updated_at)
+                       VALUES (?,?,?,?,?,?)
+                       ON CONFLICT(task_id, occurrence_id) DO UPDATE SET
+                         decision=excluded.decision,
+                         reviewed_at=excluded.reviewed_at,
+                         updated_at=excluded.updated_at""",
+                    [
+                        (
+                            task_id,
+                            occurrence_id,
+                            decision,
+                            "",
+                            updated if decision is not None else None,
+                            updated,
+                        )
+                        for occurrence_id, decision in changes
+                    ],
+                )
+                items = [
+                    {
+                        "occurrence_id": occurrence_id,
+                        "previous_decision": previous[occurrence_id],
+                        "decision": decision,
+                    }
+                    for occurrence_id, decision in changes
+                ]
+                if operation_id is not None:
+                    self.conn.execute(
+                        """
+                        INSERT INTO review_decision_operations(
+                            task_id, operation_id, request_hash, response_json, created_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            task_id,
+                            operation_id,
+                            request_hash,
+                            json.dumps(
+                                {"updated_at": updated, "items": items},
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                            updated,
+                        ),
+                    )
+                    self.conn.execute(
+                        """
+                        DELETE FROM review_decision_operations
+                        WHERE rowid IN (
+                            SELECT rowid FROM review_decision_operations
+                            WHERE task_id=?
+                            ORDER BY created_at DESC, operation_id DESC
+                            LIMIT -1 OFFSET ?
+                        )
+                        """,
+                        (task_id, MAX_REVIEW_DECISION_OPERATION_RECORDS),
+                    )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+        return updated, items
 
     def list_reviews(self, task_id: str) -> list[dict[str, Any]]:
         with self._lock:

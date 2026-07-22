@@ -13,7 +13,7 @@
 | 能力 | 状态 | 证据 |
 | --- | --- | --- |
 | Python Engine 项目化（`engine/`） | ✅ | 正式包 + pyproject + lock |
-| JSONL Sidecar IPC（TS↔Python） | ✅ | Protocol v3 + Python/TS 共享契约 |
+| JSONL Sidecar IPC（TS↔Python） | ✅ | Protocol v4 + Python/TS 共享契约 |
 | Electron Main/Preload/Renderer 安全骨架 | ✅ | typecheck + build + 生命周期 E2E |
 | Sidecar 端到端握手 | ✅ | `engine.ready` + `app.info` + 主窗口 |
 | Worker/Task 真实状态机（修复残留 checkpoint 误判） | ✅ | checkpoint / sequence / migration 回归 |
@@ -24,7 +24,7 @@
 | 正式发布证据链 | ✅ 自动校验 | manifest / SHA256SUMS / release-chain |
 | 任务中心与任务上下文 | ✅ | 服务端搜索/分页 + 最多 20 条顺序批量暂停/取消/删除 + URL/本地持久化上下文 |
 | 可折叠全局导航 | ✅ | 220px 展开栏 / 64px 图标栏 + 本地状态记忆 + 无障碍提示 |
-| 原文件级高清校对与古籍阅读方向 | ✅ | 源文件无损页面证据 + PDF 动态重渲染 + 横排/竖排上下文 |
+| 原文件级高清校对与古籍版面上下文 | ✅ | 源文件无损页面证据 + PDF 动态重渲染 + 横排/竖排版块识别与按页修正 |
 | 失败恢复与诊断 | ✅ | 结构化失败明细 + 影响/建议 + 日志入口 |
 | 校对与导出保护 | ✅ | 备注自动保存 + 系统/人工状态分离 + 应用内阶段性导出确认 |
 | 图片档案扫描 | ✅ | TIFF（含多页）/ JPEG / PNG，支持混合任务与创建期安全校验 |

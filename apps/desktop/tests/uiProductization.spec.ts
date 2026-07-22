@@ -13,11 +13,13 @@ const taskPage = source("pages/TaskPage.tsx");
 const reviewPage = source("pages/ReviewPage.tsx");
 const searchPage = source("pages/SearchPage.tsx");
 const reviewHighlightSettings = source("components/ReviewHighlightSettings.tsx");
+const layoutContextCanvas = source("components/LayoutContextCanvas.tsx");
 const exportPage = source("pages/ExportPage.tsx");
 const taskCenter = source("pages/TaskCenter.tsx");
 const diagnosticsPage = source("pages/DiagnosticsPage.tsx");
 const settingsPage = source("pages/SettingsPage.tsx");
 const scriptSearchSettings = source("components/ScriptSearchSettings.tsx");
+const reviewShortcutSettings = source("components/ReviewShortcutSettings.tsx");
 const styles = source("styles.css");
 
 describe("桌面端产品化 UI contract", () => {
@@ -34,6 +36,16 @@ describe("桌面端产品化 UI contract", () => {
     expect(app).toContain("routeTaskId ?? rememberedTaskId");
     expect(app).toContain('const exportPath = currentTaskId ? `/export/${currentTaskId}` : "/export"');
     expect(app).toContain("<NavLink to={exportPath}");
+  });
+
+  it("侧栏把全局入口与当前任务工作区分成独立语义区域", () => {
+    expect(app).toContain('aria-label="全局导航"');
+    expect(app).toContain('aria-label="当前任务工作区"');
+    expect(app).toContain('aria-label="当前任务导航"');
+    expect(app).toContain("activeTaskDisplayName");
+    expect(app).toContain("从任务中心选择任务");
+    expect(styles).toContain(".al-task-nav-section");
+    expect(styles).toContain(".al-task-nav-context");
   });
 
   it("全局菜单可折叠并记忆状态，同时移除任务提示卡片", () => {
@@ -56,7 +68,8 @@ describe("桌面端产品化 UI contract", () => {
     expect(app).toContain("main.scrollTop = 0");
     expect(app).toContain("main.scrollLeft = 0");
     expect(app).toContain("[location.pathname]");
-    expect(app).toContain("<main ref={mainRef}");
+    expect(app).toContain('<main id="main-content" tabIndex={-1} ref={mainRef}');
+    expect(app).toContain('className="al-skip-link"');
   });
 
   it("新建扫描支持文件夹、单文件和多文件来源", () => {
@@ -72,7 +85,8 @@ describe("桌面端产品化 UI contract", () => {
     expect(newScan).toContain("effective_preferences");
     expect(newScan).toContain("review_preferences: reviewPreferences");
     expect(newScan).toContain("出处页显示<strong>源文件无损</strong>");
-    expect(newScan).toContain("每侧 {reviewPreferences.context_radius} 字");
+    expect(newScan).toContain("LAYOUT_MODE_LABELS[reviewPreferences.layout_mode]");
+    expect(newScan).toContain("可在校对工作台按页修正");
     expect(newScan).toContain("图片会校验真实格式、尺寸和页数");
     expect(newScan).toContain('aria-label="检索文字或词语"');
     expect(newScan).toContain("startError");
@@ -88,27 +102,35 @@ describe("桌面端产品化 UI contract", () => {
     expect(taskPage).toContain("正在取消…");
   });
 
-  it("校对页使用永久序号、三列工作区和固定进度窄栏", () => {
-    expect(reviewPage).toContain("al-review-aside");
+  it("校对页使用永久序号、可调三列工作区和顶部任务进度", () => {
+    expect(reviewPage).toContain("al-review-taskbar");
+    expect(reviewPage).toContain("al-review-progress-track");
     expect(reviewPage).toContain("reviewSummary.reviewed_count");
     expect(reviewPage).toContain("reviewSummary.unreviewed_count");
     expect(reviewPage).toContain("confidenceLabel(selected.ocr_confidence)");
-    expect(reviewPage).toContain("导出中心");
+    expect(reviewPage).toContain("void goToExport()");
     expect(reviewPage).toContain("系统判断");
     expect(reviewPage).toContain("人工结论");
-    expect(reviewPage).toContain("完整 OCR 上下文");
-    expect(reviewPage).toContain("selected.context_full");
+    expect(reviewPage).toContain("版面 OCR 上下文");
+    expect(reviewPage).toContain("LayoutContextCanvas");
+    expect(reviewPage).toContain("window.archiveLens.review.getLayoutContext");
+    expect(reviewPage).toContain("window.archiveLens.review.previewLayoutContext");
+    expect(reviewPage).toContain("window.archiveLens.review.updateLayoutOverride");
+    expect(reviewPage).toContain("window.archiveLens.review.rebuildLayoutContexts");
+    expect(reviewPage).toContain("版面结构待确认");
     expect(reviewPage).toContain("global_sequence");
     expect(reviewPage).toContain("sequenceLabel(item.global_sequence)");
     expect(reviewPage).toContain("al-review-image-pane");
+    expect(reviewPage).toContain("al-review-resizer");
+    expect(reviewPage).toContain("useVirtualizer");
     expect(reviewPage).toContain("al-result-filters");
-    expect(reviewPage).not.toContain("校对工作台");
+    expect(reviewPage).not.toContain("al-review-aside");
     expect(reviewPage).not.toContain("al-review-summary");
     expect(reviewPage).not.toContain("summaryCollapsed");
     expect(reviewPage).not.toContain("PanelRightExpandRegular");
     expect(reviewPage).toContain('role="listbox"');
     expect(reviewPage).toContain("NOTE_DRAFT_PREFIX");
-    expect(reviewPage).toContain("if (!(await flushCurrentNote())) return");
+    expect(reviewPage).toContain("if (!(await flushCurrentNote()) || reviewContextRef.current !== operationContext) return");
     expect(reviewPage).toContain("--al-review-highlight");
     expect(reviewPage).toContain("window.archiveLens.settings.get(taskId)");
     expect(reviewPage).not.toContain("<ReviewHighlightSettings");
@@ -120,17 +142,17 @@ describe("桌面端产品化 UI contract", () => {
     expect(reviewHighlightSettings).toContain('type="color"');
     expect(reviewHighlightSettings).toContain('type="range"');
     expect(reviewHighlightSettings).not.toContain("QUALITY_OPTIONS");
-    expect(reviewHighlightSettings).toContain("DIRECTION_OPTIONS");
+    expect(reviewHighlightSettings).toContain("LAYOUT_MODE_OPTIONS");
     expect(reviewHighlightSettings).not.toContain("ArchiveQualitySample");
-    expect(reviewHighlightSettings).toContain("ArchiveDirectionSample");
-    expect(reviewHighlightSettings).toContain("<span>本馆清册</span>");
-    expect(reviewHighlightSettings).toContain("<span>依次编号</span>");
-    expect(reviewHighlightSettings).toContain("al-horizontal-segment");
-    expect(styles).not.toContain(".direction-rtl .al-horizontal-archive-line { direction:rtl; }");
-    expect(reviewHighlightSettings).toContain("关键词前后每侧字数");
-    expect(reviewHighlightSettings).toContain("context_radius");
+    expect(reviewHighlightSettings).toContain("ArchiveLayoutSample");
+    expect(reviewHighlightSettings).toContain("命中列居中");
+    expect(reviewHighlightSettings).toContain("命中行居中");
+    expect(reviewHighlightSettings).toContain("layout_mode");
+    expect(reviewHighlightSettings).not.toContain("context_radius");
+    expect(reviewHighlightSettings).not.toContain("context_direction");
     expect(reviewHighlightSettings).toContain("出处页始终按源文件无损显示");
-    expect(styles).toContain("grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) 56px");
+    expect(styles).toContain("grid-template-columns:minmax(320px,calc(var(--al-image-pane) - 4px))");
+    expect(styles).toContain("@media (max-width:1180px)");
     expect(styles).toContain("white-space:pre-wrap");
   });
 
@@ -148,30 +170,35 @@ describe("桌面端产品化 UI contract", () => {
     expect(searchPage).toContain("简体和繁体");
     expect(searchPage).toContain("OCR 原文（不可变）");
     expect(searchPage).toContain("OCR Top-K 候选");
+    expect(searchPage).toContain("版面 OCR 上下文");
+    expect(searchPage).toContain("LayoutContextCanvas");
     expect(searchPage).toContain("不能静默迁移");
     expect(searchPage).toContain("不修改 OCR 原文");
     expect(styles).toContain(".al-search-highlight");
     expect(styles).toContain(".al-search-layer-ocr-top-k");
   });
 
-  it("移除清晰度档位并保留可折叠、可联动的阅读方向档案样例", () => {
+  it("移除清晰度档位并保留可折叠、可联动的版面模式样例", () => {
     expect(reviewHighlightSettings).not.toContain("qualityExpanded");
-    expect(reviewHighlightSettings).toContain("directionExpanded");
+    expect(reviewHighlightSettings).toContain("layoutExpanded");
     expect(reviewHighlightSettings).not.toContain("aria-expanded={qualityExpanded}");
-    expect(reviewHighlightSettings).toContain("aria-expanded={directionExpanded}");
+    expect(reviewHighlightSettings).toContain("aria-expanded={layoutExpanded}");
     expect(reviewHighlightSettings).not.toContain("以下为清晰度示意");
     expect(reviewHighlightSettings).not.toContain("al-quality-magnifier");
     expect(styles).not.toContain("al-archive-quality-sample");
     expect(styles).not.toContain(".quality-standard");
-    expect(reviewHighlightSettings).toContain("contextRadius={activePreferences.context_radius}");
-    expect(reviewHighlightSettings).toContain("al-context-range-caption");
-    expect(reviewHighlightSettings).toContain("al-vertical-column-connector");
-    expect(reviewHighlightSettings).toContain("continuation");
+    expect(reviewHighlightSettings).toContain("ArchiveLayoutSample mode={option.value}");
+    expect(reviewHighlightSettings).toContain("自动识别不确定时不会拼接可疑内容");
+    expect(reviewHighlightSettings).toContain("可在校对工作台按页修正版块");
     expect(styles).toContain(".al-review-option-grid label:focus-within");
     expect(styles).toContain(".al-review-preference-toggle:focus-visible");
-    expect(styles).toContain(".al-horizontal-archive-line { position:relative; z-index:1; display:flex; align-items:center; justify-content:center; gap:0;");
-    expect(styles).toContain(".direction-ttb .al-vertical-archive-column.continuation");
-    expect(styles).toContain(".direction-btt .al-vertical-archive-column.continuation");
+    expect(styles).toContain(".al-layout-mode-sample.horizontal");
+    expect(styles).toContain(".al-layout-mode-sample.vertical");
+    expect(styles).toContain(".al-layout-mode-sample.auto");
+    expect(layoutContextCanvas).toContain("context.items.map");
+    expect(layoutContextCanvas).toContain("<mark>{item.text.slice(start, end)}</mark>");
+    expect(styles).toContain("writing-mode:vertical-rl");
+    expect(styles).toContain("overflow:auto");
   });
 
   it("设置页集中承载显示偏好，并从设置进入独立环境诊断页", () => {
@@ -245,6 +272,30 @@ describe("桌面端产品化 UI contract", () => {
     expect(taskCenter).toContain("window.archiveLens.tasks.get(target.taskId)");
     expect(taskCenter).toContain("重试失败项");
     expect(taskCenter).toContain("不会删除任何原始 PDF、DjVu、TIFF、JPEG 或 PNG 文件");
+    expect(taskCenter).toContain('className="al-task-status-cell"');
+    expect(taskCenter).toContain('className="al-task-updated-cell"');
+    expect(styles).toContain('grid-template-areas:"select task actions"');
+    expect(styles).toContain("@media (max-width: 1180px)");
+  });
+
+  it("检索历史按词语和字形范围折叠，并复用同一语料版本", () => {
+    expect(searchPage).toContain("dedupeSearchSessions(history.items)");
+    expect(searchPage).toContain("findReusableSearchSession");
+    expect(searchPage).toContain("prependSearchSession");
+    expect(searchPage).toContain("没有新增重复历史");
+    expect(searchPage).toContain("{sessions.length} 组");
+  });
+
+  it("设置页允许无冲突地改写校对单键，并声明固定组合键", () => {
+    expect(settingsPage).toContain("ReviewShortcutSettings");
+    expect(reviewShortcutSettings).toContain("normalizeReviewShortcutKey");
+    expect(reviewShortcutSettings).toContain("storeReviewShortcutBindings");
+    expect(reviewShortcutSettings).toContain("已用于");
+    expect(reviewShortcutSettings).toContain("Ctrl+Shift+Z");
+    expect(reviewPage).toContain("readReviewShortcutBindings");
+    expect(reviewPage).toContain("getReviewShortcutAction(event, shortcutBindings)");
+    expect(styles).toContain("@media (prefers-reduced-motion:reduce)");
+    expect(styles).toContain("@media (forced-colors:active)");
   });
 
   it("环境诊断展示影响、处理建议、重试和日志入口", () => {

@@ -110,7 +110,7 @@ def send(method: str, params: dict | None = None) -> str:
     rid = f"{method}-{_counter[0]}"
     assert proc.stdin is not None
     proc.stdin.write(json.dumps(
-        {"protocol_version": 3, "request_id": rid, "method": method, "params": params or {}},
+        {"protocol_version": 4, "request_id": rid, "method": method, "params": params or {}},
         ensure_ascii=False) + "\n")
     proc.stdin.flush()
     return rid

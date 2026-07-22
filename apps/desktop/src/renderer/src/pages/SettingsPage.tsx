@@ -4,6 +4,7 @@ import { Button, Card, Text } from "@fluentui/react-components";
 import type { LocalDataSummary, TaskSummary } from "../../../preload/api";
 import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
 import { ReviewHighlightSettings, type HighlightTaskOption } from "../components/ReviewHighlightSettings";
+import { ReviewShortcutSettings } from "../components/ReviewShortcutSettings";
 import { ScriptSearchSettings } from "../components/ScriptSearchSettings";
 import { taskDisplayName } from "../utils/presentation";
 
@@ -154,6 +155,12 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
             </div>
             {taskError && <InlineFeedback tone="warning">{taskError}。全局设置仍可正常修改。</InlineFeedback>}
             {loadingTasks ? <LoadingState label="正在加载任务配置范围…" /> : <ReviewHighlightSettings tasks={tasks} initialTaskId={currentTaskId} />}
+          </Card>
+          <Card className="al-card al-settings-section">
+            <div className="al-settings-section-heading">
+              <div><Text weight="semibold" size={500}>校对快捷键</Text><Text className="al-muted">为高频判断、结果导航和图像操作设置单键快捷方式，不影响输入框、备注或系统组合键。</Text></div>
+            </div>
+            <ReviewShortcutSettings />
           </Card>
           <Card className="al-card al-settings-section al-local-data-section">
             <div className="al-settings-section-heading">

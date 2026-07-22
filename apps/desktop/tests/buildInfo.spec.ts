@@ -23,7 +23,7 @@ describe("desktop build metadata loader", () => {
           python_version: "3.11.9",
           node_version: "v24.3.0",
           electron_version: "31.4.0",
-          protocol_version: 3,
+          protocol_version: 4,
         }),
         "utf-8",
       );

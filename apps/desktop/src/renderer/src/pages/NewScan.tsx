@@ -25,11 +25,10 @@ const SOURCE_OPTIONS: Array<{ id: SourceType; title: string; detail: string }> =
   { id: "multiple", title: "多个文件", detail: `将 1–${MAX_SOURCE_FILES} 个指定文件放进同一个任务，可跨目录选择。` },
 ];
 
-const DIRECTION_LABELS: Record<ReviewDisplayPreferences["context_direction"], string> = {
-  ltr: "从左到右",
-  rtl: "从右到左",
-  ttb: "从上到下",
-  btt: "从下到上",
+const LAYOUT_MODE_LABELS: Record<ReviewDisplayPreferences["layout_mode"], string> = {
+  auto: "自动识别版面",
+  horizontal: "横排三行",
+  vertical: "竖排三列",
 };
 
 function dedupeFiles(paths: string[]): { files: string[]; removed: number } {
@@ -328,7 +327,7 @@ export default function NewScan() {
           <Card className="al-card"><Text weight="semibold">步骤 3：设置检索词</Text><div className="al-search-input-wrap"><Input value={searchText} onChange={(_, data) => { setSearchText(data.value); setError(null); }} placeholder="输入 1～32 个文字，按 OCR 结果进行精确匹配" aria-label="检索文字或词语" /><span>{Array.from(searchText).length}/32</span></div><Text className="al-muted">支持 1–32 个 Unicode 字符。精确匹配、区分大小写；不支持正则、通配符或跨 OCR 行匹配。</Text>{searchError && <InlineFeedback>{searchError}</InlineFeedback>}</Card>
           {error && <InlineFeedback>创建任务失败：{error}</InlineFeedback>}
         </section>
-        <aside className="al-new-scan-aside"><Card className="al-card"><Text weight="semibold">扫描摘要</Text><div className="al-config-summary"><span>来源方式<strong>{SOURCE_OPTIONS.find((option) => option.id === sourceType)?.title}</strong></span><span>扫描范围<strong title={sourceType === "folder" ? dir : undefined}>{sourceLabel}</strong></span>{isFileSource && <span>文件数量<strong>{files.length}/{MAX_SOURCE_FILES}</strong></span>}{sourceType === "folder" && preflightResult && <><span>有效档案<strong>{preflightResult.supported_file_count} 个</strong></span><span>已知页数<strong>{preflightResult.known_pages} 页</strong></span><span>预计任务空间<strong>{formatBytes(preflightResult.estimated_required_disk_bytes)}</strong></span></>}<span>检索词<strong>{searchText || "尚未输入"}</strong></span><span>匹配方式<strong>精确字面匹配</strong></span><span>出处页显示<strong>源文件无损</strong></span><span>上下文<strong>{DIRECTION_LABELS[reviewPreferences.context_direction]} · 每侧 {reviewPreferences.context_radius} 字</strong></span></div><Text className="al-muted">出处页会按源文件无损显示；上下文配置来自“设置”，创建任务后固化。</Text></Card><Card className="al-card al-local-card"><Text weight="semibold">本地处理</Text><Text className="al-muted">扫描文件、OCR 结果、校对备注和导出报告都将保存到本地任务工作区。</Text></Card></aside>
+        <aside className="al-new-scan-aside"><Card className="al-card"><Text weight="semibold">扫描摘要</Text><div className="al-config-summary"><span>来源方式<strong>{SOURCE_OPTIONS.find((option) => option.id === sourceType)?.title}</strong></span><span>扫描范围<strong title={sourceType === "folder" ? dir : undefined}>{sourceLabel}</strong></span>{isFileSource && <span>文件数量<strong>{files.length}/{MAX_SOURCE_FILES}</strong></span>}{sourceType === "folder" && preflightResult && <><span>有效档案<strong>{preflightResult.supported_file_count} 个</strong></span><span>已知页数<strong>{preflightResult.known_pages} 页</strong></span><span>预计任务空间<strong>{formatBytes(preflightResult.estimated_required_disk_bytes)}</strong></span></>}<span>检索词<strong>{searchText || "尚未输入"}</strong></span><span>匹配方式<strong>精确字面匹配</strong></span><span>出处页显示<strong>源文件无损</strong></span><span>版面上下文<strong>{LAYOUT_MODE_LABELS[reviewPreferences.layout_mode]}</strong></span></div><Text className="al-muted">出处页会按源文件无损显示；版面上下文配置来自“设置”，创建任务后固化，并可在校对工作台按页修正。</Text></Card><Card className="al-card al-local-card"><Text weight="semibold">本地处理</Text><Text className="al-muted">扫描文件、OCR 结果、校对备注和导出报告都将保存到本地任务工作区。</Text></Card></aside>
       </div>
       <div className="al-new-scan-footer"><div>{!canStart && <Text id="scan-disabled-reason" className="al-muted">{disabledReason}</Text>}</div><Button appearance="primary" size="large" onClick={() => void start()} disabled={busy || !canStart} aria-describedby={!canStart ? "scan-disabled-reason" : undefined}>{busy ? "正在创建任务…" : "开始扫描"}</Button></div>
     </div>

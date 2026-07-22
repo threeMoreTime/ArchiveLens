@@ -129,7 +129,7 @@ def main() -> int:
         counter[0] += 1
         rid = f"r{counter[0]}"
         line = json.dumps(
-            {"protocol_version": 3, "request_id": rid, "method": method, "params": params or {}},
+            {"protocol_version": 4, "request_id": rid, "method": method, "params": params or {}},
             # Match Electron's JSON.stringify output: raw UTF-8 reaches the frozen
             # sidecar, which must not depend on the host console code page.
             ensure_ascii=False,

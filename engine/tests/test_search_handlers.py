@@ -120,6 +120,9 @@ class SearchHandlerTests(unittest.TestCase):
         self.assertEqual(hit["match_bbox"][0], [100.0, 200.0])
         self.assertAlmostEqual(hit["normalized_x0"], 0.1)
         self.assertAlmostEqual(hit["normalized_y1"], 260 / 1400)
+        self.assertEqual(hit["layout_context"]["status"], "uncertain")
+        self.assertEqual(hit["layout_context"]["plain_text"], "虧空")
+        self.assertEqual(hit["layout_context"]["items"][0]["role"], "target")
 
     def test_prepare_page_image_uses_search_hit_without_exposing_source_path(self) -> None:
         session = _h_search_execute(

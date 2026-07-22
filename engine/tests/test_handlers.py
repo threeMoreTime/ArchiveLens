@@ -51,10 +51,24 @@ class HandlersTests(unittest.TestCase):
             self.server, {"task_id": tid, "occurrence_id": occ_id, "decision": "rejected"}
         )
         self.assertEqual(r["decision"], "rejected")
+        self.server.handlers["review.updateNote"](
+            self.server, {"task_id": tid, "occurrence_id": occ_id, "note": "保留这条备注"}
+        )
         detail = self.server.handlers["results.getDetail"](
             self.server, {"task_id": tid, "occurrence_id": occ_id}
         )
         self.assertEqual(detail["review_decision"], "rejected")
+        self.assertEqual(detail["review_note"], "保留这条备注")
+
+        cleared = self.server.handlers["review.updateDecision"](
+            self.server, {"task_id": tid, "occurrence_id": occ_id, "decision": None}
+        )
+        self.assertIsNone(cleared["decision"])
+        detail = self.server.handlers["results.getDetail"](
+            self.server, {"task_id": tid, "occurrence_id": occ_id}
+        )
+        self.assertIsNone(detail["review_decision"])
+        self.assertEqual(detail["review_note"], "保留这条备注")
 
     def test_review_prepare_page_image_returns_versioned_demo_asset(self) -> None:
         demo = self.server.handlers["demo.create"](self.server, {})
@@ -73,6 +87,87 @@ class HandlersTests(unittest.TestCase):
         self.assertEqual(result["fidelity"], "generated_demo")
         self.assertTrue(result["asset_version"])
         self.assertGreater(result["pixel_width"], 0)
+
+    def test_review_batch_decisions_are_atomic_and_report_previous_state(self) -> None:
+        demo = self.server.handlers["demo.create"](self.server, {})
+        task_id = demo["task_id"]
+        query = self.server.handlers["results.query"](self.server, {"task_id": task_id})
+        first_id = query["items"][0]["occurrence_id"]
+        second_id = query["items"][1]["occurrence_id"]
+        self.server.handlers["review.updateNote"](
+            self.server,
+            {"task_id": task_id, "occurrence_id": first_id, "note": "批量后仍保留"},
+        )
+
+        batch_params = {
+            "task_id": task_id,
+            "operation_id": "00000000-0000-4000-8000-000000000001",
+            "changes": [
+                {"occurrence_id": first_id, "decision": "confirmed"},
+                {"occurrence_id": second_id, "decision": "rejected"},
+            ],
+        }
+        result = self.server.handlers["review.updateDecisions"](self.server, batch_params)
+        replayed = self.server.handlers["review.updateDecisions"](self.server, batch_params)
+        self.assertEqual(replayed, result)
+        self.assertEqual(result["operation_id"], batch_params["operation_id"])
+        with self.assertRaises(ProtocolError) as reused:
+            self.server.handlers["review.updateDecisions"](
+                self.server,
+                {
+                    "task_id": task_id,
+                    "operation_id": batch_params["operation_id"],
+                    "changes": [{"occurrence_id": first_id, "decision": "needs_review"}],
+                },
+            )
+        self.assertEqual(reused.exception.code, ErrorCode.VALIDATION_ERROR)
+        self.assertEqual(
+            result["items"],
+            [
+                {"occurrence_id": first_id, "previous_decision": None, "decision": "confirmed"},
+                {"occurrence_id": second_id, "previous_decision": None, "decision": "rejected"},
+            ],
+        )
+        first_detail = self.server.handlers["results.getDetail"](
+            self.server, {"task_id": task_id, "occurrence_id": first_id}
+        )
+        self.assertEqual(first_detail["review_note"], "批量后仍保留")
+
+        with self.assertRaises(ProtocolError) as failed:
+            self.server.handlers["review.updateDecisions"](
+                self.server,
+                {
+                    "task_id": task_id,
+                    "operation_id": "00000000-0000-4000-8000-000000000002",
+                    "changes": [
+                        {"occurrence_id": first_id, "decision": "needs_review"},
+                        {"occurrence_id": "missing-occurrence", "decision": "confirmed"},
+                    ],
+                },
+            )
+        self.assertEqual(failed.exception.code, ErrorCode.TASK_NOT_FOUND)
+        first_after_failure = self.server.handlers["results.getDetail"](
+            self.server, {"task_id": task_id, "occurrence_id": first_id}
+        )
+        self.assertEqual(first_after_failure["review_decision"], "confirmed")
+
+        cleared = self.server.handlers["review.updateDecisions"](
+            self.server,
+            {
+                "task_id": task_id,
+                "operation_id": "00000000-0000-4000-8000-000000000003",
+                "changes": [
+                    {"occurrence_id": first_id, "decision": None},
+                    {"occurrence_id": second_id, "decision": None},
+                ],
+            },
+        )
+        self.assertEqual([item["previous_decision"] for item in cleared["items"]], ["confirmed", "rejected"])
+        first_cleared = self.server.handlers["results.getDetail"](
+            self.server, {"task_id": task_id, "occurrence_id": first_id}
+        )
+        self.assertIsNone(first_cleared["review_decision"])
+        self.assertEqual(first_cleared["review_note"], "批量后仍保留")
 
     def test_review_prepare_page_image_rejects_non_finite_dimensions(self) -> None:
         demo = self.server.handlers["demo.create"](self.server, {})
@@ -103,11 +198,21 @@ class HandlersTests(unittest.TestCase):
     def test_review_invalid_decision_raises(self) -> None:
         demo = self.server.handlers["demo.create"](self.server, {})
         tid = demo["task_id"]
+        with self.assertRaises(ProtocolError) as missing:
+            self.server.handlers["review.updateDecision"](
+                self.server, {"task_id": tid, "occurrence_id": "x"}
+            )
+        self.assertEqual(missing.exception.code, ErrorCode.VALIDATION_ERROR)
         with self.assertRaises(ProtocolError) as cm:
             self.server.handlers["review.updateDecision"](
                 self.server, {"task_id": tid, "occurrence_id": "x", "decision": "bogus"}
             )
         self.assertEqual(cm.exception.code, ErrorCode.VALIDATION_ERROR)
+        with self.assertRaises(ProtocolError) as missing_occurrence:
+            self.server.handlers["review.updateDecision"](
+                self.server, {"task_id": tid, "occurrence_id": "x", "decision": "confirmed"}
+            )
+        self.assertEqual(missing_occurrence.exception.code, ErrorCode.TASK_NOT_FOUND)
 
     def test_tasks_get_not_found(self) -> None:
         with self.assertRaises(ProtocolError) as cm:
@@ -147,14 +252,14 @@ class HandlersTests(unittest.TestCase):
         self.assertEqual(result["search_text"], "档案")
         self.assertEqual(
             result["review_preferences"],
-            {"page_quality": "maximum", "context_direction": "ltr", "context_radius": 15},
+            {"page_quality": "maximum", "layout_mode": "auto"},
         )
 
     def test_tasks_create_persists_review_preferences(self) -> None:
         src = Path(self.tmp) / "preferences"
         src.mkdir()
         Image.new("RGB", (8, 8), color="white").save(src / "a.png")
-        preferences = {"page_quality": "high", "context_direction": "ttb", "context_radius": 28}
+        preferences = {"page_quality": "high", "layout_mode": "vertical"}
         result = self.server.handlers["tasks.create"](
             self.server,
             {"source_dir": str(src), "search_text": "档案", "review_preferences": preferences},
@@ -169,10 +274,8 @@ class HandlersTests(unittest.TestCase):
         src.mkdir()
         (src / "a.pdf").write_bytes(b"%PDF-1.4")
         invalid_values = [
-            {"page_quality": "lossless", "context_direction": "ltr", "context_radius": 15},
-            {"page_quality": "maximum", "context_direction": "diagonal", "context_radius": 15},
-            {"page_quality": "maximum", "context_direction": "ltr", "context_radius": 0},
-            {"page_quality": "maximum", "context_direction": "ltr", "context_radius": 51},
+            {"page_quality": "lossless", "layout_mode": "auto"},
+            {"page_quality": "maximum", "layout_mode": "diagonal"},
         ]
         for preferences in invalid_values:
             with self.subTest(preferences=preferences), self.assertRaises(ProtocolError) as cm:
@@ -378,7 +481,7 @@ class HandlersTests(unittest.TestCase):
         self.assertIn("约", content)
         progress_events = [json.loads(line) for line in progress_output.getvalue().splitlines()]
         progress_stages = [event["payload"]["stage"] for event in progress_events]
-        self.assertEqual(progress_stages[0], "preparing")
+        self.assertEqual(progress_stages[:2], ["layout_context", "preparing"])
         self.assertEqual(progress_stages[-3:], ["building", "writing", "completed"])
         self.assertEqual(
             progress_stages.count("images"),

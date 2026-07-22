@@ -64,7 +64,12 @@ const api: ArchiveLensApi = {
   },
   review: {
     preparePageImage: (p) => ipcRenderer.invoke("review.preparePageImage", p),
+    getLayoutContext: (p) => ipcRenderer.invoke("review.layoutContext", p),
+    previewLayoutContext: (p) => ipcRenderer.invoke("review.previewLayoutContext", p),
+    updateLayoutOverride: (p) => ipcRenderer.invoke("review.updateLayoutOverride", p),
+    rebuildLayoutContexts: (p) => ipcRenderer.invoke("review.rebuildLayoutContexts", p),
     updateDecision: (p) => ipcRenderer.invoke("review.updateDecision", p),
+    updateDecisions: (p) => ipcRenderer.invoke("review.updateDecisions", p),
     updateNote: (p) => ipcRenderer.invoke("review.updateNote", p),
   },
   export: {

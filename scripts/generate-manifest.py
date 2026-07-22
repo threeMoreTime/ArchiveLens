@@ -179,7 +179,7 @@ def main() -> int:
             "electron_version": json.loads((ROOT / "apps" / "desktop" / "package.json").read_text(encoding="utf-8"))[
                 "devDependencies"
             ]["electron"].lstrip("^"),
-            "protocol_version": 3,
+            "protocol_version": 4,
         },
         "test_summary": test_summary,
         "native_lock_sha256": native_lock_sha256,

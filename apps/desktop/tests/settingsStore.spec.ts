@@ -73,9 +73,9 @@ describe("SettingsStore", () => {
 
   it("保存全局与任务级出处页及上下文设置", async () => {
     const { store } = await createStore();
-    const globalInput = { page_quality: "high" as const, context_direction: "ltr" as const, context_radius: 20 };
+    const globalInput = { page_quality: "high" as const, layout_mode: "auto" as const };
     const global = { ...globalInput, page_quality: "maximum" as const };
-    const task = { page_quality: "maximum" as const, context_direction: "ttb" as const, context_radius: 35 };
+    const task = { page_quality: "maximum" as const, layout_mode: "vertical" as const };
     await store.update({ scope: "global", preferences: globalInput });
     await expect(store.update({ scope: "task", task_id: "task-1", preferences: task })).resolves.toMatchObject({
       global_preferences: global,
@@ -106,7 +106,29 @@ describe("SettingsStore", () => {
     });
   });
 
-  it("简繁检索范围默认全部并以版本 3 跨实例保存", async () => {
+  it("旧方向与半径设置迁移为自动版面模式", async () => {
+    const { filePath } = await createStore();
+    await writeFile(filePath, JSON.stringify({
+      version: 3,
+      appearance: {
+        review_preferences: { page_quality: "high", context_direction: "ttb", context_radius: 28 },
+      },
+      task_overrides: {
+        "task-1": {
+          review_preferences: { page_quality: "maximum", context_direction: "rtl", context_radius: 12 },
+        },
+      },
+    }), "utf-8");
+
+    const restored = new SettingsStore(filePath);
+    await expect(restored.get("task-1")).resolves.toMatchObject({
+      global_preferences: { page_quality: "maximum", layout_mode: "auto" },
+      task_preferences_override: { page_quality: "maximum", layout_mode: "auto" },
+      effective_preferences: { page_quality: "maximum", layout_mode: "auto" },
+    });
+  });
+
+  it("简繁检索范围默认全部并以版本 4 跨实例保存", async () => {
     const { filePath, store } = await createStore();
     await expect(store.get()).resolves.toMatchObject({
       search_script_scope: "both",
@@ -120,7 +142,7 @@ describe("SettingsStore", () => {
 
     const saved = JSON.parse(await readFile(filePath, "utf-8"));
     expect(saved).toMatchObject({
-      version: 3,
+      version: 4,
       appearance: { search_script_scope: "traditional" },
     });
     const restored = new SettingsStore(filePath);

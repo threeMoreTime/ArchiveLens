@@ -30,7 +30,7 @@ threading.Thread(target=drain_stderr, daemon=True).start()
 def send(method: str, params: dict) -> None:
     assert proc.stdin is not None
     proc.stdin.write(json.dumps(
-        {"protocol_version": 3, "request_id": method, "method": method, "params": params},
+        {"protocol_version": 4, "request_id": method, "method": method, "params": params},
         ensure_ascii=False) + "\n")
     proc.stdin.flush()
 

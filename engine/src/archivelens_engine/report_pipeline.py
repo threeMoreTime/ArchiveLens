@@ -31,12 +31,17 @@ from .ocr_core import (
     assign_occurrence_indexes,
     build_bbox_hash,
     build_context_fields,
-    build_spatial_context_fields,
     classify_verification_status,
     dedupe_occurrences,
     normalize_bbox,
     split_line_bbox,
     union_bboxes,
+)
+from .layout_context import (
+    LAYOUT_CONTEXT_VERSION,
+    LAYOUT_MODES,
+    build_layout_context,
+    stable_ocr_line_id,
 )
 from .ocr_engine import ArchiveLensOCR
 from .script_variants import ScriptVariantResolver
@@ -110,6 +115,8 @@ class ReportPipeline:
         review_image_quality: str = "standard",
         context_direction: str = "ltr",
         context_radius: int = 15,
+        layout_mode: str = "auto",
+        task_id: str = "",
     ) -> None:
         # Phase 1 预留实例配置入口；Phase 3 起 Sidecar 将按任务注入打包内路径。
         self.config = config or DEFAULT_CONFIG
@@ -128,9 +135,13 @@ class ReportPipeline:
             raise ValueError("invalid context reading direction")
         if type(context_radius) is not int or not 1 <= context_radius <= 50:
             raise ValueError("context radius must be between 1 and 50")
+        if layout_mode not in LAYOUT_MODES:
+            raise ValueError("layout mode must be auto, horizontal, or vertical")
         self.review_image_quality = review_image_quality
         self.context_direction = context_direction
         self.context_radius = context_radius
+        self.layout_mode = layout_mode
+        self.task_id = task_id
         self.backend_registry = DocumentBackendRegistry(self.config)
         self.root_dir = root_dir
         self.output_html = output_html
@@ -490,11 +501,23 @@ class ReportPipeline:
                     for point in result[0]
                 ]
                 confidence = float(result[2])
+                ocr_line_id = (
+                    stable_ocr_line_id(
+                        self.task_id,
+                        document.source_id,
+                        page_index + 1,
+                        line_index,
+                    )
+                    if self.task_id and document.source_id
+                    else ""
+                )
                 page_lines.append(
                     {
                         # 任务命中与校对上下文始终忠实使用 OCR 原文；
                         # resolved_text 只进入独立检索层，绝不覆盖来源字形。
                         "text": raw_text,
+                        "ocr_line_id": ocr_line_id,
+                        "line_index": line_index,
                         "bbox": self._line_rect(polygon),
                         "confidence": confidence,
                     }
@@ -507,6 +530,7 @@ class ReportPipeline:
                 forms = self.script_variants.forms(text)
                 corpus_lines.append(
                     {
+                        "ocr_line_id": ocr_line_id,
                         "line_index": line_index,
                         "raw_text": raw_text,
                         "resolved_text": text,
@@ -549,14 +573,18 @@ class ReportPipeline:
                 line_box = line["bbox"]
                 char_boxes = split_line_bbox(text, line_box)
                 for match_start, match_end in self._find_search_matches(text):
-                    context_fields = build_spatial_context_fields(
+                    layout_context = build_layout_context(
                         page_lines,
-                        line_index,
-                        match_start,
-                        match_end,
-                        direction=self.context_direction,
-                        radius=self.context_radius,
+                        target_line_index=line_index,
+                        match_start=match_start,
+                        match_end=match_end,
+                        layout_mode=self.layout_mode,
+                        page_width=width,
+                        page_height=height,
                     )
+                    context_fields = build_context_fields(text, match_start, match_end)
+                    context_fields["context_full"] = str(layout_context["plain_text"])
+                    context_fields["text_block"] = str(layout_context["plain_text"])
                     occurrence = self._build_occurrence(
                         document=document,
                         page_index=page_index,
@@ -571,6 +599,7 @@ class ReportPipeline:
                         page_width=width,
                         page_height=height,
                         context_fields=context_fields,
+                        layout_context=layout_context,
                     )
                     page_occurrences.append(occurrence)
             if not page_occurrences:
@@ -658,6 +687,7 @@ class ReportPipeline:
         page_width: int,
         page_height: int,
         context_fields: dict[str, str | int] | None = None,
+        layout_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         matched_text = line_text[match_start:match_end]
         matched_character = matched_text if len(matched_text) == 1 else None
@@ -668,6 +698,15 @@ class ReportPipeline:
         )
         unicode_codepoint = f"U+{ord(matched_character):04X}" if matched_character else None
         context_fields = context_fields or build_context_fields(line_text, match_start, match_end)
+        layout_context = layout_context or {
+            "version": LAYOUT_CONTEXT_VERSION,
+            "status": "uncertain",
+            "reason": "layout_unavailable",
+            "orientation": "vertical" if self.layout_mode == "vertical" else "horizontal",
+            "plain_text": str(context_fields["context_full"]),
+            "items": [],
+            "candidate_blocks": [],
+        }
         box_fields = normalize_bbox(*match_box, page_width, page_height)
         crop_image, crop_bounds = self._crop_with_padding(image, match_box)
         secondary_result, secondary_confidence = self._secondary_verify(crop_image, matched_text)
@@ -716,6 +755,11 @@ class ReportPipeline:
             "context_before": context_fields["context_before"],
             "context_after": context_fields["context_after"],
             "context_full": context_fields["context_full"],
+            "layout_context_json": layout_context,
+            "layout_context_text": str(layout_context.get("plain_text") or context_fields["context_full"]),
+            "layout_context_version": LAYOUT_CONTEXT_VERSION,
+            "layout_context_status": str(layout_context.get("status") or "uncertain"),
+            "layout_context_error": "",
             "text_line": context_fields["text_line"],
             "text_block": context_fields["text_block"],
             "location_method": (

@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import traceback
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -43,6 +44,11 @@ from .documents.formats import (
     count_key,
 )
 from .html_export import write_offline_review_report
+from .layout_context import (
+    LAYOUT_CONTEXT_VERSION,
+    LAYOUT_MODES,
+    build_occurrence_layout_context,
+)
 from .ocr_core import (
     build_bbox_hash,
     build_context_fields,
@@ -72,11 +78,9 @@ SLOWFAKE_SOURCE_ID = "source-main"
 MAX_SOURCE_FILES = 200
 RASTER_IMAGE_BACKEND = RasterImageBackend()
 REVIEW_IMAGE_QUALITIES = {"standard", "clear", "high", "maximum"}
-CONTEXT_READING_DIRECTIONS = {"ltr", "rtl", "ttb", "btt"}
 DEFAULT_REVIEW_PREFERENCES = {
     "page_quality": "maximum",
-    "context_direction": "ltr",
-    "context_radius": 15,
+    "layout_mode": "auto",
 }
 DEFAULT_SEARCH_SCRIPT_SCOPE = "both"
 
@@ -409,7 +413,12 @@ class Server:
                 "search.hits": _h_search_hits,
                 "search.preparePageImage": _h_search_prepare_page_image,
                 "review.preparePageImage": _h_review_prepare_page_image,
+                "review.layoutContext": _h_review_layout_context,
+                "review.previewLayoutContext": _h_review_preview_layout_context,
+                "review.updateLayoutOverride": _h_review_update_layout_override,
+                "review.rebuildLayoutContexts": _h_review_rebuild_layout_contexts,
                 "review.updateDecision": _h_review_decision,
+                "review.updateDecisions": _h_review_decisions,
                 "review.updateNote": _h_review_note,
                 "export.json": _h_export_json,
                 "export.review": _h_export_review,
@@ -750,7 +759,7 @@ class Server:
                 "page_number": page_no,
                 "page_index": int(line.get("page_index") or max(0, page_no - 1)),
                 "page_occurrence_index": page_indexes[page_key],
-                **build_context_fields(raw_text, source_start, source_end, int(task["review_preferences"]["context_radius"])),
+                **build_context_fields(raw_text, source_start, source_end, 15),
                 "matched_character": matched_character,
                 "character_variant": (
                     self.ocr_search.resolver.classify_script(matched_character)
@@ -821,8 +830,8 @@ class Server:
                 search_terms=task["search_terms"],
                 search_script_scope=task["search_script_scope"],
                 review_image_quality=task["review_preferences"]["page_quality"],
-                context_direction=task["review_preferences"]["context_direction"],
-                context_radius=task["review_preferences"]["context_radius"],
+                layout_mode=task["review_preferences"]["layout_mode"],
+                task_id=task_id,
                 # B3 folder tasks also persist the safe preflight manifest.  This
                 # prevents the scanner from re-enumerating skipped junctions.
                 source_files=self.store.list_task_sources(task_id) or None,
@@ -1259,16 +1268,13 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "review_preferences 必须是对象")
     review_preferences = {
         "page_quality": raw_preferences.get("page_quality", DEFAULT_REVIEW_PREFERENCES["page_quality"]),
-        "context_direction": raw_preferences.get("context_direction", DEFAULT_REVIEW_PREFERENCES["context_direction"]),
-        "context_radius": raw_preferences.get("context_radius", DEFAULT_REVIEW_PREFERENCES["context_radius"]),
+        "layout_mode": raw_preferences.get("layout_mode", DEFAULT_REVIEW_PREFERENCES["layout_mode"]),
     }
     if review_preferences["page_quality"] not in REVIEW_IMAGE_QUALITIES:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "page_quality 仅支持 standard、clear、high 或 maximum")
     review_preferences["page_quality"] = "maximum"
-    if review_preferences["context_direction"] not in CONTEXT_READING_DIRECTIONS:
-        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "context_direction 仅支持 ltr、rtl、ttb 或 btt")
-    if type(review_preferences["context_radius"]) is not int or not 1 <= review_preferences["context_radius"] <= 50:
-        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "context_radius 必须是 1 到 50 的整数")
+    if review_preferences["layout_mode"] not in LAYOUT_MODES:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "layout_mode 仅支持 auto、horizontal 或 vertical")
     source_type = params.get("source_type") or ("files" if "source_files" in params else "folder")
     if source_type not in {"folder", "files"}:
         raise ProtocolError(ErrorCode.VALIDATION_ERROR, "source_type 仅支持 folder 或 files")
@@ -1353,8 +1359,7 @@ def _h_tasks_create(server: Server, params: dict) -> dict:
         search_mode=EXACT_LITERAL_SEARCH_MODE,
         search_script_scope=search_script_scope,
         review_image_quality=review_preferences["page_quality"],
-        context_direction=review_preferences["context_direction"],
-        context_radius=review_preferences["context_radius"],
+        layout_mode=review_preferences["layout_mode"],
         event_type="task.created",
         event_payload=payload,
     )
@@ -1984,6 +1989,352 @@ def _h_demo_create(server: Server, params: dict) -> dict:
     return result
 
 
+def _parse_layout_context(item: dict[str, Any]) -> dict[str, Any] | None:
+    raw = item.get("layout_context_json")
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _with_layout_context(item: dict[str, Any]) -> dict[str, Any]:
+    result = dict(item)
+    result["layout_context"] = (
+        _parse_layout_context(result)
+        if int(result.get("layout_context_version") or 0) == LAYOUT_CONTEXT_VERSION
+        else None
+    )
+    return result
+
+
+def _source_block_bbox(
+    normalized: object,
+    occurrence: dict[str, Any],
+) -> dict[str, float] | None:
+    if normalized is None:
+        return None
+    if not isinstance(normalized, dict):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "normalized_block_bbox 必须是对象")
+    try:
+        values = {key: float(normalized[key]) for key in ("x0", "y0", "x1", "y1")}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "normalized_block_bbox 缺少有效坐标") from exc
+    if (
+        not all(math.isfinite(value) and 0 <= value <= 1 for value in values.values())
+        or values["x1"] <= values["x0"]
+        or values["y1"] <= values["y0"]
+    ):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "normalized_block_bbox 必须位于页面内")
+    width = float(occurrence.get("source_page_width") or 0)
+    height = float(occurrence.get("source_page_height") or 0)
+    if width <= 0 or height <= 0:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "当前页面缺少源尺寸，无法框选版块")
+    return {
+        "x0": values["x0"] * width,
+        "y0": values["y0"] * height,
+        "x1": values["x1"] * width,
+        "y1": values["y1"] * height,
+    }
+
+
+def _stored_page_override(
+    server: Server,
+    occurrence: dict[str, Any],
+) -> tuple[str | None, dict[str, float] | None, str | None]:
+    source_id = str(occurrence.get("source_id") or "")
+    page_no = int(occurrence.get("page_number") or 0)
+    if not source_id or page_no < 1:
+        return None, None, None
+    override = server.store.get_page_layout_override(
+        task_id=str(occurrence["task_id"]),
+        source_id=source_id,
+        page_no=page_no,
+    )
+    if override is None:
+        return None, None, None
+    values = [override.get(key) for key in ("block_x0", "block_y0", "block_x1", "block_y1")]
+    block = None
+    if all(isinstance(value, (int, float)) for value in values):
+        block = dict(zip(("x0", "y0", "x1", "y1"), (float(value) for value in values), strict=True))
+    return (
+        str(override.get("layout_mode") or "auto"),
+        block,
+        str(override.get("updated_at") or ""),
+    )
+
+
+def _fallback_layout_context(occurrence: dict[str, Any], layout_mode: str) -> dict[str, Any]:
+    matched_text = str(occurrence.get("matched_text") or occurrence.get("matched_character") or "")
+    width = float(occurrence.get("source_page_width") or 1)
+    height = float(occurrence.get("source_page_height") or 1)
+    source_bbox = {
+        "x0": float(occurrence.get("source_x0") or 0),
+        "y0": float(occurrence.get("source_y0") or 0),
+        "x1": float(occurrence.get("source_x1") or 0),
+        "y1": float(occurrence.get("source_y1") or 0),
+    }
+    if source_bbox["x1"] <= source_bbox["x0"] or source_bbox["y1"] <= source_bbox["y0"]:
+        stored_normalized = {
+            "x0": float(occurrence.get("normalized_x0") or 0),
+            "y0": float(occurrence.get("normalized_y0") or 0),
+            "x1": float(occurrence.get("normalized_x1") or 0),
+            "y1": float(occurrence.get("normalized_y1") or 0),
+        }
+        if (
+            0 <= stored_normalized["x0"] < stored_normalized["x1"] <= 1
+            and 0 <= stored_normalized["y0"] < stored_normalized["y1"] <= 1
+        ):
+            source_bbox = {
+                "x0": stored_normalized["x0"] * width,
+                "y0": stored_normalized["y0"] * height,
+                "x1": stored_normalized["x1"] * width,
+                "y1": stored_normalized["y1"] * height,
+            }
+    orientation = layout_mode
+    if orientation == "auto":
+        orientation = (
+            "vertical"
+            if source_bbox["y1"] - source_bbox["y0"] >= source_bbox["x1"] - source_bbox["x0"]
+            else "horizontal"
+        )
+    normalized_bbox = {
+        "x0": max(0.0, min(1.0, source_bbox["x0"] / max(width, 1))),
+        "y0": max(0.0, min(1.0, source_bbox["y0"] / max(height, 1))),
+        "x1": max(0.0, min(1.0, source_bbox["x1"] / max(width, 1))),
+        "y1": max(0.0, min(1.0, source_bbox["y1"] / max(height, 1))),
+    }
+    if normalized_bbox["x1"] <= normalized_bbox["x0"] or normalized_bbox["y1"] <= normalized_bbox["y0"]:
+        normalized_bbox = (
+            {"x0": 0.45, "y0": 0.1, "x1": 0.55, "y1": 0.9}
+            if orientation == "vertical"
+            else {"x0": 0.1, "y0": 0.45, "x1": 0.9, "y1": 0.55}
+        )
+        source_bbox = {
+            "x0": normalized_bbox["x0"] * width,
+            "y0": normalized_bbox["y0"] * height,
+            "x1": normalized_bbox["x1"] * width,
+            "y1": normalized_bbox["y1"] * height,
+        }
+    item_match_end = len(matched_text) if matched_text else None
+    return {
+        "version": LAYOUT_CONTEXT_VERSION,
+        "status": "uncertain",
+        "reason": "ocr_evidence_missing",
+        "orientation": orientation,
+        "confidence": 0.0,
+        "target_line_index": -1,
+        "target_ocr_line_id": "",
+        "match_start": 0,
+        "match_end": len(matched_text),
+        "plain_text": matched_text,
+        "bbox": source_bbox,
+        "normalized_bbox": normalized_bbox,
+        "block_bbox": source_bbox,
+        "normalized_block_bbox": normalized_bbox,
+        "items": [{
+            "ocr_line_id": "",
+            "line_index": -1,
+            "role": "target",
+            "text": matched_text,
+            "bbox": source_bbox,
+            "normalized_bbox": normalized_bbox,
+            "match_start": 0 if matched_text else None,
+            "match_end": item_match_end,
+        }],
+        "candidate_blocks": [],
+    }
+
+
+def _build_layout_context_for_occurrence(
+    server: Server,
+    occurrence: dict[str, Any],
+    *,
+    layout_mode: str | None = None,
+    block_bbox: dict[str, float] | None = None,
+    persist: bool,
+) -> dict[str, Any]:
+    task_id = str(occurrence["task_id"])
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    source_id = str(occurrence.get("source_id") or "")
+    page_no = int(occurrence.get("page_number") or 0)
+    for _attempt in range(3 if persist else 1):
+        stored_mode, stored_block, override_updated_at = _stored_page_override(server, occurrence)
+        effective_mode = layout_mode or stored_mode or str(task["review_preferences"]["layout_mode"])
+        if effective_mode not in LAYOUT_MODES:
+            raise ProtocolError(ErrorCode.VALIDATION_ERROR, "layout_mode 仅支持 auto、horizontal 或 vertical")
+        effective_block = block_bbox if block_bbox is not None else stored_block
+        lines = (
+            server.store.list_ocr_lines_for_page(
+                task_id=task_id,
+                source_id=source_id,
+                page_no=page_no,
+            )
+            if source_id and page_no > 0
+            else []
+        )
+        try:
+            context = (
+                build_occurrence_layout_context(
+                    lines,
+                    occurrence,
+                    layout_mode=effective_mode,
+                    block_override=effective_block,
+                )
+                if lines
+                else _fallback_layout_context(occurrence, effective_mode)
+            )
+        except ValueError as exc:
+            context = _fallback_layout_context(occurrence, effective_mode)
+            context["reason"] = "layout_build_failed"
+            context["diagnostic"] = type(exc).__name__
+        context["effective_layout_mode"] = effective_mode
+        context["has_page_override"] = stored_mode is not None
+        context["using_draft_override"] = block_bbox is not None and stored_mode is None
+        if not persist or server.store.save_occurrence_layout_context(
+            task_id=task_id,
+            occurrence_id=str(occurrence["occurrence_id"]),
+            context=context,
+            expected_override_updated_at=override_updated_at,
+        ):
+            return context
+    raise ProtocolError(ErrorCode.TASK_STATE_CONFLICT, "版面修正已更新，请重试")
+
+
+def _layout_occurrence(server: Server, params: dict[str, Any]) -> dict[str, Any]:
+    task_id = _require(params, "task_id", str)
+    occurrence_id = _require(params, "occurrence_id", str)
+    occurrence = server.store.get_occurrence_detail(task_id, occurrence_id)
+    if occurrence is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, "校对结果不存在")
+    return occurrence
+
+
+def _h_review_layout_context(server: Server, params: dict) -> dict:
+    occurrence = _layout_occurrence(server, params)
+    existing = _parse_layout_context(occurrence)
+    if (
+        existing is not None
+        and int(occurrence.get("layout_context_version") or 0) == LAYOUT_CONTEXT_VERSION
+        and str(occurrence.get("layout_context_status") or "") in {"ready", "uncertain"}
+    ):
+        return {"task_id": occurrence["task_id"], "occurrence_id": occurrence["occurrence_id"], "context": existing}
+    context = _build_layout_context_for_occurrence(server, occurrence, persist=True)
+    return {"task_id": occurrence["task_id"], "occurrence_id": occurrence["occurrence_id"], "context": context}
+
+
+def _h_review_preview_layout_context(server: Server, params: dict) -> dict:
+    occurrence = _layout_occurrence(server, params)
+    layout_mode = params.get("layout_mode", "auto")
+    if not isinstance(layout_mode, str) or layout_mode not in LAYOUT_MODES:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "layout_mode 仅支持 auto、horizontal 或 vertical")
+    block_bbox = _source_block_bbox(params.get("normalized_block_bbox"), occurrence)
+    context = _build_layout_context_for_occurrence(
+        server,
+        occurrence,
+        layout_mode=layout_mode,
+        block_bbox=block_bbox,
+        persist=False,
+    )
+    return {"task_id": occurrence["task_id"], "occurrence_id": occurrence["occurrence_id"], "context": context}
+
+
+def _h_review_update_layout_override(server: Server, params: dict) -> dict:
+    occurrence = _layout_occurrence(server, params)
+    task_id = str(occurrence["task_id"])
+    source_id = str(occurrence.get("source_id") or "")
+    page_no = int(occurrence.get("page_number") or 0)
+    if not source_id or page_no < 1:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "当前结果缺少稳定页面身份")
+    clear = params.get("clear", False)
+    if type(clear) is not bool:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "clear 必须是布尔值")
+    if clear:
+        server.store.clear_page_layout_override(task_id=task_id, source_id=source_id, page_no=page_no)
+        context = _build_layout_context_for_occurrence(server, occurrence, persist=True)
+    else:
+        layout_mode = params.get("layout_mode", "auto")
+        if not isinstance(layout_mode, str) or layout_mode not in LAYOUT_MODES:
+            raise ProtocolError(ErrorCode.VALIDATION_ERROR, "layout_mode 仅支持 auto、horizontal 或 vertical")
+        block_bbox = _source_block_bbox(params.get("normalized_block_bbox"), occurrence)
+        server.store.upsert_page_layout_override(
+            task_id=task_id,
+            source_id=source_id,
+            page_no=page_no,
+            layout_mode=layout_mode,
+            block_bbox=block_bbox,
+        )
+        context = _build_layout_context_for_occurrence(
+            server,
+            occurrence,
+            layout_mode=layout_mode,
+            block_bbox=block_bbox,
+            persist=True,
+        )
+    return {
+        "task_id": task_id,
+        "occurrence_id": occurrence["occurrence_id"],
+        "context": context,
+        "progress": server.store.get_layout_rebuild_progress(task_id),
+    }
+
+
+def _h_review_rebuild_layout_contexts(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    if server.store.get_task(task_id) is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    limit = _validate_results_page_parameter(params, "limit", default=25, minimum=1, maximum=100)
+    priority_occurrence_id = params.get("priority_occurrence_id")
+    if priority_occurrence_id is not None and (
+        not isinstance(priority_occurrence_id, str) or not priority_occurrence_id
+    ):
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "priority_occurrence_id 必须是非空字符串")
+    priority = (
+        server.store.get_occurrence_detail(task_id, priority_occurrence_id)
+        if isinstance(priority_occurrence_id, str)
+        else None
+    )
+    rows = server.store.list_stale_layout_occurrences(
+        task_id=task_id,
+        limit=limit,
+        priority_source_id=str(priority.get("source_id") or "") if priority else "",
+        priority_page_no=int(priority.get("page_number") or 0) if priority else 0,
+    )
+    processed = 0
+    failed = 0
+    for occurrence in rows:
+        try:
+            _build_layout_context_for_occurrence(server, occurrence, persist=True)
+            processed += 1
+        except ProtocolError as exc:
+            if exc.code == ErrorCode.TASK_STATE_CONFLICT:
+                continue
+            failed += 1
+            server.store.mark_occurrence_layout_failed(
+                task_id=task_id,
+                occurrence_id=str(occurrence["occurrence_id"]),
+                error=type(exc).__name__,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            server.store.mark_occurrence_layout_failed(
+                task_id=task_id,
+                occurrence_id=str(occurrence["occurrence_id"]),
+                error=type(exc).__name__,
+            )
+    return {
+        **server.store.get_layout_rebuild_progress(task_id),
+        "batch_processed": processed,
+        "batch_failed": failed,
+    }
+
+
 def _h_results_query(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     limit = _validate_results_page_parameter(params, "limit", default=100, minimum=1, maximum=200)
@@ -2010,7 +2361,7 @@ def _h_results_query(server: Server, params: dict) -> dict:
     review_complete = scan_complete and review_summary["unreviewed_count"] == 0
     return {
         "total": total,
-        "items": items,
+        "items": [_with_layout_context(item) for item in items],
         "task_id": task_id,
         "limit": limit,
         "offset": offset,
@@ -2019,6 +2370,7 @@ def _h_results_query(server: Server, params: dict) -> dict:
         "task_status": task["status"],
         "scan_complete": scan_complete,
         "review_complete": review_complete,
+        "layout_rebuild": server.store.get_layout_rebuild_progress(task_id),
     }
 
 
@@ -2045,7 +2397,7 @@ def _h_results_detail(server: Server, params: dict) -> dict:
     detail = server.store.get_occurrence_detail(task_id, occ_id)
     if detail is None:
         raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"结果不存在: {occ_id}")
-    return detail
+    return _with_layout_context(detail)
 
 
 def _h_search_corpus_status(server: Server, params: dict) -> dict:
@@ -2146,6 +2498,81 @@ def _h_search_hits(server: Server, params: dict) -> dict:
             ErrorCode.TASK_NOT_FOUND,
             f"检索会话不存在: {search_session_id}",
         ) from exc
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    page_lines: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    page_overrides: dict[tuple[str, int], dict[str, Any] | None] = {}
+    for item in items:
+        source_id = str(item.get("source_id") or "")
+        page_no = int(item.get("page_no") or 0)
+        cache_key = (source_id, page_no)
+        if cache_key not in page_lines:
+            page_lines[cache_key] = server.store.list_ocr_lines_for_page(
+                task_id=task_id,
+                source_id=source_id,
+                page_no=page_no,
+            )
+        raw_text = str(item.get("raw_text") or "")
+        start = item.get("source_start")
+        end = item.get("source_end")
+        if not (
+            isinstance(start, int)
+            and isinstance(end, int)
+            and 0 <= start < end <= len(raw_text)
+        ):
+            source_text = str(item.get("source_text") or item.get("matched_text") or "")
+            start = raw_text.find(source_text) if source_text else -1
+            end = start + len(source_text) if start >= 0 else -1
+        if cache_key not in page_overrides:
+            page_overrides[cache_key] = server.store.get_page_layout_override(
+                task_id=task_id,
+                source_id=source_id,
+                page_no=page_no,
+            )
+        override = page_overrides[cache_key]
+        mode = str(
+            (override or {}).get("layout_mode")
+            or task["review_preferences"]["layout_mode"]
+        )
+        block_values = [
+            (override or {}).get(key)
+            for key in ("block_x0", "block_y0", "block_x1", "block_y1")
+        ]
+        block = (
+            dict(
+                zip(
+                    ("x0", "y0", "x1", "y1"),
+                    (float(value) for value in block_values),
+                    strict=True,
+                )
+            )
+            if all(isinstance(value, (int, float)) for value in block_values)
+            else None
+        )
+        if isinstance(start, int) and isinstance(end, int) and start >= 0 and end > start:
+            try:
+                context = build_occurrence_layout_context(
+                    page_lines[cache_key],
+                    {
+                        "ocr_line_id": item.get("ocr_line_id"),
+                        "matched_text": raw_text[start:end],
+                        "match_start": start,
+                        "match_end": end,
+                        "source_page_width": item.get("source_page_width"),
+                        "source_page_height": item.get("source_page_height"),
+                    },
+                    layout_mode=mode,
+                    block_override=block,
+                )
+                context["effective_layout_mode"] = mode
+                context["has_page_override"] = override is not None
+                context["using_draft_override"] = False
+                item["layout_context"] = context
+            except ValueError:
+                item["layout_context"] = None
+        else:
+            item["layout_context"] = None
     return {
         "search_session_id": search_session_id,
         "task_id": session["task_id"],
@@ -2253,12 +2680,63 @@ def _validate_decision(decision: str) -> str:
 def _h_review_decision(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
     occ_id = _require(params, "occurrence_id", str)
-    decision = _validate_decision(_require(params, "decision", str))
+    if "decision" not in params:
+        _require(params, "decision", str)
+    raw_decision = params["decision"]
+    decision = None if raw_decision is None else _validate_decision(_require(params, "decision", str))
     _assert_not_cleaning(server, task_id)
-    updated = server.store.upsert_review(
-        task_id=task_id, occurrence_id=occ_id, decision=decision
-    )
+    try:
+        updated = server.store.set_review_decision(
+            task_id=task_id, occurrence_id=occ_id, decision=decision
+        )
+    except KeyError as exc:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"结果不存在: {exc.args[0]}") from exc
     return {"occurrence_id": occ_id, "decision": decision, "updated_at": updated}
+
+
+def _h_review_decisions(server: Server, params: dict) -> dict:
+    task_id = _require(params, "task_id", str)
+    operation_id = _require(params, "operation_id", str)
+    try:
+        parsed_operation_id = uuid.UUID(operation_id)
+    except (ValueError, AttributeError) as exc:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "operation_id 必须是 UUID") from exc
+    if str(parsed_operation_id) != operation_id.lower():
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "operation_id 必须是规范 UUID")
+    raw_changes = _require(params, "changes", list)
+    if not 1 <= len(raw_changes) <= 10_000:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, "changes 数量必须在 1 至 10000 之间")
+    changes: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for index, raw_change in enumerate(raw_changes):
+        if not isinstance(raw_change, dict):
+            raise ProtocolError(ErrorCode.VALIDATION_ERROR, f"changes[{index}] 必须是对象")
+        occurrence_id = _require(raw_change, "occurrence_id", str)
+        if occurrence_id in seen:
+            raise ProtocolError(ErrorCode.VALIDATION_ERROR, f"changes 包含重复结果：{occurrence_id}")
+        seen.add(occurrence_id)
+        if "decision" not in raw_change:
+            _require(raw_change, "decision", str)
+        raw_decision = raw_change["decision"]
+        decision = None if raw_decision is None else _validate_decision(_require(raw_change, "decision", str))
+        changes.append((occurrence_id, decision))
+    _assert_not_cleaning(server, task_id)
+    try:
+        updated, items = server.store.set_review_decisions(
+            task_id=task_id,
+            changes=changes,
+            operation_id=operation_id,
+        )
+    except KeyError as exc:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"结果不存在: {exc.args[0]}") from exc
+    except ValueError as exc:
+        raise ProtocolError(ErrorCode.VALIDATION_ERROR, str(exc)) from exc
+    return {
+        "task_id": task_id,
+        "operation_id": operation_id,
+        "updated_at": updated,
+        "items": items,
+    }
 
 
 def _h_review_note(server: Server, params: dict) -> dict:
@@ -2329,6 +2807,28 @@ def _render_html_export(
     progress: Callable[[str, int, int], None],
 ) -> dict[str, Any]:
     workspace_value = task.get("workspace_dir")
+    while True:
+        stale = server.store.list_stale_layout_occurrences(
+            task_id=task["task_id"],
+            limit=100,
+        )
+        if not stale:
+            break
+        for occurrence in stale:
+            try:
+                _build_layout_context_for_occurrence(server, occurrence, persist=True)
+            except Exception as exc:  # noqa: BLE001
+                server.store.mark_occurrence_layout_failed(
+                    task_id=task["task_id"],
+                    occurrence_id=str(occurrence["occurrence_id"]),
+                    error=type(exc).__name__,
+                )
+        rebuild_progress = server.store.get_layout_rebuild_progress(task["task_id"])
+        progress(
+            "layout_context",
+            int(rebuild_progress["completed"]),
+            int(rebuild_progress["total"]),
+        )
     with server.store.occurrence_export_snapshot(task["task_id"]) as (total, page_count, items):
         integrity = _export_integrity(server, task, total)
         exported_at = integrity["exported_at"]

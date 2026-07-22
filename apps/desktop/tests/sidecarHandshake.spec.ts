@@ -6,8 +6,8 @@ function ready(payload: unknown, outerVersion = PROTOCOL_VERSION): string {
   return JSON.stringify({ protocol_version: outerVersion, event: "engine.ready", task_id: null, payload });
 }
 
-describe("Sidecar protocol v3 handshake", () => {
-  it("marks ready only for a valid v3 payload", () => {
+describe("Sidecar protocol v4 handshake", () => {
+  it("marks ready only for a valid v4 payload", () => {
     const manager = new SidecarManager();
     (manager as any).onLine(ready({ protocol_version: PROTOCOL_VERSION, engine_version: "0.1.0-alpha.11" }));
     expect(manager.isReady).toBe(true);
@@ -17,7 +17,7 @@ describe("Sidecar protocol v3 handshake", () => {
     ["payload v1", ready({ protocol_version: 1, engine_version: "old" })],
     ["outer v2", ready({ protocol_version: PROTOCOL_VERSION, engine_version: "new" }, 2)],
     ["missing payload version", ready({ engine_version: "missing" })],
-    ["string payload version", ready({ protocol_version: "3", engine_version: "bad" })],
+    ["string payload version", ready({ protocol_version: "4", engine_version: "bad" })],
     ["future payload version", ready({ protocol_version: PROTOCOL_VERSION + 1, engine_version: "future" })],
   ] as const) {
     it(`rejects ${name}, clears pending, and terminates the child`, () => {

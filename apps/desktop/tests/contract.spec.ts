@@ -19,6 +19,18 @@ import {
   ReviewHighlightSettingsUpdateParamsSchema,
   ReviewPageImageResultSchema,
   ReviewPreparePageImageParamsSchema,
+  LayoutContextSchema,
+  MAX_LAYOUT_CANDIDATE_BLOCKS,
+  LayoutRebuildProgressSchema,
+  ReviewLayoutContextParamsSchema,
+  ReviewLayoutContextResultSchema,
+  ReviewPreviewLayoutContextParamsSchema,
+  ReviewRebuildLayoutContextsParamsSchema,
+  ReviewUpdateLayoutOverrideParamsSchema,
+  ReviewUpdateLayoutOverrideResultSchema,
+  ReviewUpdateDecisionParamsSchema,
+  ReviewUpdateDecisionsParamsSchema,
+  ReviewUpdateDecisionsResultSchema,
   PROTOCOL_VERSION,
   TaskCleanupTargetResultSchema,
   ExportJobSchema,
@@ -122,7 +134,7 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
   });
 
   it("文件夹预检合同覆盖统计、磁盘、确认与取消生命周期", () => {
-    expect(PROTOCOL_VERSION).toBe(3);
+    expect(PROTOCOL_VERSION).toBe(4);
     for (const method of ["tasks.preflight", "tasks.preflightGet", "tasks.preflightCancel"]) {
       expect(MethodNameSchema.safeParse(method).success, method).toBe(true);
     }
@@ -192,14 +204,15 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(RequestSchema.safeParse(load("review-update.json")).success).toBe(true);
   });
 
-  it("扫描任务校验命中页清晰度与上下文阅读设置", () => {
-    const preferences = { page_quality: "maximum", context_direction: "ttb", context_radius: 50 };
+  it("扫描任务校验命中页清晰度与版面模式，并迁移旧设置", () => {
+    const preferences = { page_quality: "maximum", layout_mode: "vertical" };
     expect(ReviewDisplayPreferencesSchema.safeParse(preferences).success).toBe(true);
     expect(TaskCreateParamsSchema.safeParse({ source_dir: "E:\\OCR", search_text: "档案", review_preferences: preferences }).success).toBe(true);
     expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, page_quality: "lossless" }).success).toBe(false);
-    expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, context_direction: "diagonal" }).success).toBe(false);
-    expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, context_radius: 0 }).success).toBe(false);
-    expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, context_radius: 51 }).success).toBe(false);
+    expect(ReviewDisplayPreferencesSchema.safeParse({ ...preferences, layout_mode: "diagonal" }).success).toBe(false);
+    expect(ReviewDisplayPreferencesSchema.parse({ page_quality: "maximum", context_direction: "ttb", context_radius: 50 })).toEqual({ page_quality: "maximum", layout_mode: "auto" });
+    expect(ReviewDisplayPreferencesSchema.safeParse({ page_quality: "maximum", context_direction: "diagonal", context_radius: 15 }).success).toBe(false);
+    expect(ReviewDisplayPreferencesSchema.safeParse({ page_quality: "maximum", context_direction: "ltr", context_radius: 0 }).success).toBe(false);
     expect(ReviewDisplayPreferencesSchema.parse({ ...preferences, page_quality: "standard" }).page_quality).toBe("maximum");
   });
 
@@ -226,6 +239,162 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     for (const code of ["SOURCE_EVIDENCE_UNAVAILABLE", "SOURCE_FILE_CHANGED", "PAGE_RENDER_LIMIT_EXCEEDED"]) {
       expect(ErrorCodeSchema.safeParse(code).success).toBe(true);
     }
+  });
+
+  it("版面 OCR 上下文、按页修正与后台重建保持强类型", () => {
+    const rect = { x0: 100, y0: 200, x1: 180, y1: 720 };
+    const normalizedRect = { x0: 0.1, y0: 0.1, x1: 0.18, y1: 0.36 };
+    const context = {
+      version: 2,
+      status: "ready",
+      reason: "",
+      orientation: "vertical",
+      confidence: 0.95,
+      target_line_index: 7,
+      target_ocr_line_id: "line-7",
+      match_start: 2,
+      match_end: 4,
+      plain_text: "至其虧空錢粮",
+      bbox: rect,
+      normalized_bbox: normalizedRect,
+      block_bbox: rect,
+      normalized_block_bbox: normalizedRect,
+      items: [{
+        ocr_line_id: "line-7",
+        line_index: 7,
+        role: "target",
+        text: "至其虧空錢粮",
+        bbox: rect,
+        normalized_bbox: normalizedRect,
+        match_start: 2,
+        match_end: 4,
+      }],
+      candidate_blocks: [{
+        id: "block-1",
+        orientation: "vertical",
+        line_count: 3,
+        bbox: rect,
+        normalized_bbox: normalizedRect,
+        contains_target: true,
+      }],
+      effective_layout_mode: "vertical",
+      has_page_override: false,
+      using_draft_override: false,
+    };
+    const progress = {
+      task_id: "task-1",
+      version: 2,
+      total: 10,
+      completed: 4,
+      failed: 0,
+      remaining: 6,
+      batch_processed: 1,
+      batch_failed: 0,
+    };
+
+    expect(LayoutContextSchema.safeParse(context).success).toBe(true);
+    expect(LayoutContextSchema.safeParse({
+      ...context,
+      candidate_blocks: Array.from(
+        { length: MAX_LAYOUT_CANDIDATE_BLOCKS + 1 },
+        (_value, index) => ({ ...context.candidate_blocks[0], id: `block-${index + 1}` }),
+      ),
+    }).success).toBe(false);
+    expect(LayoutRebuildProgressSchema.safeParse(progress).success).toBe(true);
+    for (const method of [
+      "review.layoutContext",
+      "review.previewLayoutContext",
+      "review.updateLayoutOverride",
+      "review.rebuildLayoutContexts",
+    ]) {
+      expect(MethodNameSchema.safeParse(method).success, method).toBe(true);
+    }
+    expect(ReviewLayoutContextParamsSchema.safeParse({ task_id: "task-1", occurrence_id: "occ-1" }).success).toBe(true);
+    expect(ReviewPreviewLayoutContextParamsSchema.safeParse({
+      task_id: "task-1",
+      occurrence_id: "occ-1",
+      layout_mode: "vertical",
+      normalized_block_bbox: normalizedRect,
+    }).success).toBe(true);
+    expect(ReviewUpdateLayoutOverrideParamsSchema.safeParse({
+      task_id: "task-1",
+      occurrence_id: "occ-1",
+      layout_mode: "auto",
+      clear: true,
+    }).success).toBe(true);
+    expect(ReviewRebuildLayoutContextsParamsSchema.safeParse({
+      task_id: "task-1",
+      limit: 25,
+      priority_occurrence_id: "occ-1",
+    }).success).toBe(true);
+
+    const result = { task_id: "task-1", occurrence_id: "occ-1", context };
+    expect(ReviewLayoutContextResultSchema.safeParse(result).success).toBe(true);
+    expect(ReviewUpdateLayoutOverrideResultSchema.safeParse({ ...result, progress }).success).toBe(true);
+    expect(parseMethodResult("review.layoutContext", result)).toEqual(result);
+    expect(parseMethodResult("review.previewLayoutContext", result)).toEqual(result);
+    expect(parseMethodResult("review.updateLayoutOverride", { ...result, progress })).toEqual({ ...result, progress });
+    expect(parseMethodResult("review.rebuildLayoutContexts", progress)).toEqual(progress);
+  });
+
+  it("审核结论支持显式清空与原子批量更新合同", () => {
+    const operationId = "00000000-0000-4000-8000-000000000001";
+    expect(PROTOCOL_VERSION).toBe(4);
+    expect(MethodNameSchema.safeParse("review.updateDecision").success).toBe(true);
+    expect(MethodNameSchema.safeParse("review.updateDecisions").success).toBe(true);
+    expect(ReviewUpdateDecisionParamsSchema.safeParse({
+      task_id: "task-1",
+      occurrence_id: "occ-1",
+      decision: null,
+    }).success).toBe(true);
+    expect(ReviewUpdateDecisionParamsSchema.safeParse({
+      task_id: "task-1",
+      occurrence_id: "occ-1",
+    }).success).toBe(false);
+    expect(parseMethodResult("review.updateDecision", {
+      occurrence_id: "occ-1",
+      decision: null,
+      updated_at: "2026-07-20T00:00:00Z",
+    })).toEqual({
+      occurrence_id: "occ-1",
+      decision: null,
+      updated_at: "2026-07-20T00:00:00Z",
+    });
+    const params = ReviewUpdateDecisionsParamsSchema.parse({
+      task_id: "task-1",
+      operation_id: operationId,
+      changes: [
+        { occurrence_id: "occ-1", decision: "confirmed" },
+        { occurrence_id: "occ-2", decision: null },
+      ],
+    });
+    expect(params.changes).toHaveLength(2);
+    expect(params.operation_id).toBe(operationId);
+    expect(ReviewUpdateDecisionsParamsSchema.safeParse({ task_id: "task-1", changes: [] }).success).toBe(false);
+    expect(ReviewUpdateDecisionsParamsSchema.safeParse({
+      task_id: "task-1",
+      operation_id: operationId,
+      changes: [{ occurrence_id: "occ-1", decision: "invalid" }],
+    }).success).toBe(false);
+    expect(ReviewUpdateDecisionsParamsSchema.safeParse({
+      task_id: "task-1",
+      operation_id: operationId,
+      changes: [
+        { occurrence_id: "occ-1", decision: "confirmed" },
+        { occurrence_id: "occ-1", decision: "rejected" },
+      ],
+    }).success).toBe(false);
+    const result = {
+      task_id: "task-1",
+      operation_id: operationId,
+      updated_at: "2026-07-20T00:00:00Z",
+      items: [
+        { occurrence_id: "occ-1", previous_decision: null, decision: "confirmed" },
+        { occurrence_id: "occ-2", previous_decision: "rejected", decision: null },
+      ],
+    };
+    expect(ReviewUpdateDecisionsResultSchema.safeParse(result).success).toBe(true);
+    expect(parseMethodResult("review.updateDecisions", result)).toEqual(result);
   });
 
   it("任务内简繁检索方法、会话、命中和错误码保持强类型", () => {
@@ -330,6 +499,7 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
       normalized_y0: 0,
       normalized_x1: 0.1,
       normalized_y1: 0.02,
+      layout_context: null,
     };
     expect(OcrSearchHitSchema.safeParse(hit).success).toBe(true);
     expect(OcrSearchHitsParamsSchema.safeParse({
@@ -367,7 +537,7 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(ReviewHighlightStyleSchema.safeParse({ color: "#ABCDEF", opacity: 0.61 }).success).toBe(false);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", highlight: { color: "#C44516", opacity: 0.18 } }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", task_id: "task-1", highlight: null }).success).toBe(true);
-    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", preferences: { page_quality: "maximum", context_direction: "ltr", context_radius: 15 } }).success).toBe(true);
+    expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", preferences: { page_quality: "maximum", layout_mode: "auto" } }).success).toBe(true);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "task", task_id: "task-1", preferences: null }).success).toBe(true);
     expect(SearchScriptScopeSchema.options).toEqual(["simplified", "traditional", "both"]);
     expect(ReviewHighlightSettingsUpdateParamsSchema.safeParse({ scope: "global", search_script_scope: "both" }).success).toBe(true);
@@ -416,19 +586,19 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     }
   });
 
-  it("engine.ready payload 必须携带严格 protocol v3 与 engine version", () => {
+  it("engine.ready payload 必须携带严格 protocol v4 与 engine version", () => {
     const valid = { protocol_version: PROTOCOL_VERSION, event: "engine.ready", task_id: null, payload: { protocol_version: PROTOCOL_VERSION, engine_version: "0.1.0-alpha.11" } };
     expect(EngineReadyEventSchema.safeParse(valid).success).toBe(true);
     for (const payload of [
       { protocol_version: 1, engine_version: "old" },
       { engine_version: "missing" },
       "invalid",
-      { protocol_version: "3", engine_version: "string-version" },
+      { protocol_version: "4", engine_version: "string-version" },
       { protocol_version: PROTOCOL_VERSION + 1, engine_version: "future" },
     ]) {
       expect(EngineReadyEventSchema.safeParse({ ...valid, payload }).success).toBe(false);
     }
-    expect(EngineReadyEventSchema.safeParse({ ...valid, payload: { protocol_version: 3.0, engine_version: "same-number" } }).success).toBe(true);
+    expect(EngineReadyEventSchema.safeParse({ ...valid, payload: { protocol_version: 4.0, engine_version: "same-number" } }).success).toBe(true);
   });
 
   it("task create/get/list 结果使用明确运行时 schema", () => {
@@ -495,6 +665,6 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(parseMethodResult("exports.cancel", { export_id: "exp-2", status: "cancelling" })).toEqual({ export_id: "exp-2", status: "cancelling" });
     expect(() => parseMethodResult("exports.cancel", { export_id: "exp-2", task_id: "task-1", format: "json", status: "cancelling" })).not.toThrow();
     expect(ExportJobSchema.safeParse({ ...job, format: "xml" }).success).toBe(false);
-    // B2 本身未新增协议错误码（并发冲突复用 TASK_STATE_CONFLICT）；当前 v3 由 B3 必需预检链触发。
+    // B2 本身未新增协议错误码（并发冲突复用 TASK_STATE_CONFLICT）；当前 v4 由事务化批量校对合同触发。
   });
 });

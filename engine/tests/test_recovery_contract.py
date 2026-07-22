@@ -477,6 +477,7 @@ class RecoveryMigrationTests(unittest.TestCase):
                 "review_image_quality",
                 "context_direction",
                 "context_radius",
+                "layout_mode",
                 "ocr_corpus_version",
                 "ocr_index_status",
                 "ocr_model_id",
@@ -487,7 +488,18 @@ class RecoveryMigrationTests(unittest.TestCase):
             )
         )
         self.assertTrue(
-            {"matched_text", "match_start", "match_end", "unicode_sequence"}.issubset(
+            {
+                "matched_text",
+                "match_start",
+                "match_end",
+                "unicode_sequence",
+                "ocr_line_id",
+                "layout_context_json",
+                "layout_context_text",
+                "layout_context_version",
+                "layout_context_status",
+                "layout_context_error",
+            }.issubset(
                 {row[1] for row in store.conn.execute("PRAGMA table_info(occurrences)").fetchall()}
             )
         )
@@ -501,7 +513,8 @@ class RecoveryMigrationTests(unittest.TestCase):
                         'task_processed_pages', 'task_checkpoints', 'task_events',
                         'task_failures', 'task_sources', 'ocr_corpus_pages',
                         'ocr_lines', 'ocr_line_indexes', 'ocr_search_sessions',
-                        'ocr_search_hits'
+                        'ocr_search_hits', 'layout_context_page_overrides',
+                        'review_decision_operations'
                     )
                     """
                 ).fetchall()
@@ -517,6 +530,8 @@ class RecoveryMigrationTests(unittest.TestCase):
                 "ocr_line_indexes",
                 "ocr_search_sessions",
                 "ocr_search_hits",
+                "layout_context_page_overrides",
+                "review_decision_operations",
             },
         )
 
@@ -552,6 +567,29 @@ class RecoveryMigrationTests(unittest.TestCase):
             self.assertEqual([event["sequence"] for event in store.list_task_events(task_id)], [1, 2])
         finally:
             store.close()
+
+    def test_schema_13_database_adds_review_decision_idempotency_table(self) -> None:
+        db_path = Path(self.tmp) / "schema-13.db"
+        current = TaskStore(db_path)
+        current.close()
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("DROP TABLE review_decision_operations")
+            conn.execute("UPDATE schema_meta SET value='13' WHERE key='schema_version'")
+            conn.execute("PRAGMA user_version = 13")
+            conn.commit()
+        finally:
+            conn.close()
+
+        migrated = TaskStore(db_path)
+        try:
+            self.assertEqual(migrated.conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+            table = migrated.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_decision_operations'",
+            ).fetchone()
+            self.assertIsNotNone(table)
+        finally:
+            migrated.close()
 
     def test_completed_legacy_database_preserves_occurrences_reviews_notes_and_exports(self) -> None:
         db_path = self._create_legacy_db(

@@ -9,6 +9,12 @@ import {
   OcrSearchHitsParamsSchema,
   OcrSearchPreparePageImageParamsSchema,
   OcrSearchSessionsParamsSchema,
+  ReviewLayoutContextParamsSchema,
+  ReviewPreviewLayoutContextParamsSchema,
+  ReviewRebuildLayoutContextsParamsSchema,
+  ReviewUpdateLayoutOverrideParamsSchema,
+  ReviewUpdateDecisionParamsSchema,
+  ReviewUpdateDecisionsParamsSchema,
   SourcePreflightJobParamsSchema,
   SourcePreflightStartParamsSchema,
   TaskCreateParamsSchema,
@@ -111,8 +117,23 @@ export function registerEngineHandlers(sidecar: SidecarManager): void {
   ipcMain.handle("review.preparePageImage", async (_e, params: unknown) =>
     sidecar.call("review.preparePageImage", parseIpcParams(params)),
   );
+  ipcMain.handle("review.layoutContext", async (_e, params: unknown) =>
+    sidecar.call("review.layoutContext", ReviewLayoutContextParamsSchema.parse(params)),
+  );
+  ipcMain.handle("review.previewLayoutContext", async (_e, params: unknown) =>
+    sidecar.call("review.previewLayoutContext", ReviewPreviewLayoutContextParamsSchema.parse(params)),
+  );
+  ipcMain.handle("review.updateLayoutOverride", async (_e, params: unknown) =>
+    sidecar.call("review.updateLayoutOverride", ReviewUpdateLayoutOverrideParamsSchema.parse(params)),
+  );
+  ipcMain.handle("review.rebuildLayoutContexts", async (_e, params: unknown) =>
+    sidecar.call("review.rebuildLayoutContexts", ReviewRebuildLayoutContextsParamsSchema.parse(params)),
+  );
   ipcMain.handle("review.updateDecision", async (_e, params: unknown) =>
-    sidecar.call("review.updateDecision", parseIpcParams(params)),
+    sidecar.call("review.updateDecision", ReviewUpdateDecisionParamsSchema.parse(params)),
+  );
+  ipcMain.handle("review.updateDecisions", async (_e, params: unknown) =>
+    sidecar.call("review.updateDecisions", ReviewUpdateDecisionsParamsSchema.parse(params)),
   );
   ipcMain.handle("review.updateNote", async (_e, params: unknown) => sidecar.call("review.updateNote", parseIpcParams(params)));
 

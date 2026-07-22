@@ -19,6 +19,7 @@ class OccurrenceSequenceTests(unittest.TestCase):
             connection.execute("DROP TRIGGER IF EXISTS trg_occurrences_sequence_insert")
             connection.execute("DROP TRIGGER IF EXISTS trg_occurrences_sequence_update")
             connection.execute("DROP INDEX IF EXISTS idx_occ_task_sequence")
+            connection.execute("DROP INDEX IF EXISTS idx_occ_layout_rebuild")
             columns = {
                 row[1]
                 for row in connection.execute("PRAGMA table_info(occurrences)").fetchall()
@@ -100,10 +101,10 @@ class OccurrenceSequenceTests(unittest.TestCase):
 
             reopened = TaskStore(database)
             try:
-                self.assertEqual(SCHEMA_VERSION, 12)
+                self.assertEqual(SCHEMA_VERSION, 14)
                 self.assertEqual(
                     reopened.conn.execute("PRAGMA user_version").fetchone()[0],
-                    12,
+                    SCHEMA_VERSION,
                 )
                 total, rows = reopened.query_occurrences(task_id=task_id)
                 self.assertEqual(total, 4)

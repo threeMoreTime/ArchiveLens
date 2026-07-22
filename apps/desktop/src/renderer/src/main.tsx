@@ -1,8 +1,9 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { HashRouter } from "react-router-dom";
-import { FluentProvider, webLightTheme } from "@fluentui/react-components";
+import { FluentProvider } from "@fluentui/react-components";
 import App from "./App";
+import { archiveLensTheme } from "./theme";
 import "./styles.css";
 
 const container = document.getElementById("root");
@@ -12,7 +13,7 @@ if (!container) {
 
 createRoot(container).render(
   <React.StrictMode>
-    <FluentProvider theme={webLightTheme}>
+    <FluentProvider theme={archiveLensTheme}>
       <HashRouter>
         <App />
       </HashRouter>

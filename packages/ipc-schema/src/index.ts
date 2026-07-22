@@ -10,7 +10,7 @@
 import { z } from "zod";
 
 /** IPC 协议版本，必须与 Python 侧 `archivelens_engine.PROTOCOL_VERSION` 一致。 */
-export const PROTOCOL_VERSION = 3 as const;
+export const PROTOCOL_VERSION = 4 as const;
 
 export const MAX_SEARCH_TEXT_LENGTH = 32;
 export const MAX_SOURCE_FILES = 200;
@@ -35,17 +35,32 @@ export type ReviewImageQuality = z.infer<typeof ReviewImageQualitySchema>;
 export const ContextReadingDirectionSchema = z.enum(["ltr", "rtl", "ttb", "btt"]);
 export type ContextReadingDirection = z.infer<typeof ContextReadingDirectionSchema>;
 
-export const ReviewDisplayPreferencesSchema = z.object({
+export const LayoutModeSchema = z.enum(["auto", "horizontal", "vertical"]);
+export type LayoutMode = z.infer<typeof LayoutModeSchema>;
+
+const CurrentReviewDisplayPreferencesSchema = z.object({
+  page_quality: ReviewImageQualitySchema,
+  layout_mode: LayoutModeSchema,
+}).strict();
+
+const LegacyReviewDisplayPreferencesSchema = z.object({
   page_quality: ReviewImageQualitySchema,
   context_direction: ContextReadingDirectionSchema,
   context_radius: z.number().int().min(1).max(50),
-}).transform((preferences) => ({ ...preferences, page_quality: "maximum" as const }));
+}).strict();
+
+export const ReviewDisplayPreferencesSchema = z.union([
+  CurrentReviewDisplayPreferencesSchema,
+  LegacyReviewDisplayPreferencesSchema,
+]).transform((preferences) => ({
+  page_quality: "maximum" as const,
+  layout_mode: "layout_mode" in preferences ? preferences.layout_mode : "auto" as const,
+}));
 export type ReviewDisplayPreferences = z.infer<typeof ReviewDisplayPreferencesSchema>;
 
 export const DEFAULT_REVIEW_DISPLAY_PREFERENCES: ReviewDisplayPreferences = {
   page_quality: "maximum",
-  context_direction: "ltr",
-  context_radius: 15,
+  layout_mode: "auto",
 };
 
 export const ReviewPageOrientationSchema = z.enum(["up", "right", "down", "left"]);
@@ -59,7 +74,7 @@ export type SearchScriptScope = z.infer<typeof SearchScriptScopeSchema>;
 export const DEFAULT_SEARCH_SCRIPT_SCOPE: SearchScriptScope = "both";
 
 export const AppSettingsFileSchema = z.object({
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(3),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).default(4),
   appearance: z.object({
     review_highlight: ReviewHighlightStyleSchema.default(DEFAULT_REVIEW_HIGHLIGHT_STYLE),
     review_preferences: ReviewDisplayPreferencesSchema.default(DEFAULT_REVIEW_DISPLAY_PREFERENCES),
@@ -74,7 +89,7 @@ export const AppSettingsFileSchema = z.object({
     review_preferences: ReviewDisplayPreferencesSchema.optional(),
     page_orientations: ReviewPageOrientationsSchema.optional(),
   })).default({}),
-}).transform((settings) => ({ ...settings, version: 3 as const }));
+}).transform((settings) => ({ ...settings, version: 4 as const }));
 export type AppSettingsFile = z.infer<typeof AppSettingsFileSchema>;
 
 export const ReviewHighlightSettingsResultSchema = z.object({
@@ -296,7 +311,12 @@ export const MethodNameSchema = z.enum([
   "search.hits",
   "search.preparePageImage",
   "review.preparePageImage",
+  "review.layoutContext",
+  "review.previewLayoutContext",
+  "review.updateLayoutOverride",
+  "review.rebuildLayoutContexts",
   "review.updateDecision",
+  "review.updateDecisions",
   "review.updateNote",
   "export.html",
   "export.json",
@@ -601,6 +621,79 @@ export const ReviewSummarySchema = z.object({
   rejected_count: z.number().int().nonnegative(),
 });
 
+export const LayoutContextRectSchema = z.object({
+  x0: z.number().finite(),
+  y0: z.number().finite(),
+  x1: z.number().finite(),
+  y1: z.number().finite(),
+});
+export type LayoutContextRect = z.infer<typeof LayoutContextRectSchema>;
+
+export const NormalizedLayoutContextRectSchema = LayoutContextRectSchema.extend({
+  x0: z.number().finite().min(0).max(1),
+  y0: z.number().finite().min(0).max(1),
+  x1: z.number().finite().min(0).max(1),
+  y1: z.number().finite().min(0).max(1),
+}).refine((rect) => rect.x1 > rect.x0 && rect.y1 > rect.y0, "版块范围必须是有效矩形");
+
+export const LayoutContextItemSchema = z.object({
+  ocr_line_id: z.string(),
+  line_index: z.number().int(),
+  role: z.enum(["context", "target"]),
+  text: z.string(),
+  bbox: LayoutContextRectSchema,
+  normalized_bbox: NormalizedLayoutContextRectSchema,
+  match_start: z.number().int().nonnegative().nullable(),
+  match_end: z.number().int().positive().nullable(),
+});
+export type LayoutContextItem = z.infer<typeof LayoutContextItemSchema>;
+
+export const LayoutCandidateBlockSchema = z.object({
+  id: z.string().min(1),
+  orientation: z.enum(["horizontal", "vertical"]),
+  line_count: z.number().int().positive(),
+  bbox: LayoutContextRectSchema,
+  normalized_bbox: NormalizedLayoutContextRectSchema,
+  contains_target: z.boolean(),
+});
+
+export const MAX_LAYOUT_CANDIDATE_BLOCKS = 64;
+
+export const LayoutContextSchema = z.object({
+  version: z.number().int().positive(),
+  status: z.enum(["ready", "uncertain"]),
+  reason: z.string(),
+  orientation: z.enum(["horizontal", "vertical"]),
+  confidence: z.number().min(0).max(1),
+  target_line_index: z.number().int(),
+  target_ocr_line_id: z.string(),
+  match_start: z.number().int().nonnegative(),
+  match_end: z.number().int().nonnegative(),
+  plain_text: z.string(),
+  bbox: LayoutContextRectSchema,
+  normalized_bbox: NormalizedLayoutContextRectSchema,
+  block_bbox: LayoutContextRectSchema,
+  normalized_block_bbox: NormalizedLayoutContextRectSchema,
+  items: z.array(LayoutContextItemSchema).min(1).max(3),
+  candidate_blocks: z.array(LayoutCandidateBlockSchema).max(MAX_LAYOUT_CANDIDATE_BLOCKS),
+  effective_layout_mode: LayoutModeSchema.optional(),
+  has_page_override: z.boolean().optional(),
+  using_draft_override: z.boolean().optional(),
+}).passthrough();
+export type LayoutContext = z.infer<typeof LayoutContextSchema>;
+
+export const LayoutRebuildProgressSchema = z.object({
+  task_id: z.string().min(1),
+  version: z.number().int().positive(),
+  total: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  batch_processed: z.number().int().nonnegative().optional(),
+  batch_failed: z.number().int().nonnegative().optional(),
+});
+export type LayoutRebuildProgress = z.infer<typeof LayoutRebuildProgressSchema>;
+
 export const ResultsQueryParamsSchema = z.object({
   task_id: z.string().min(1),
   limit: z.number().int().min(1).max(200).optional(),
@@ -621,6 +714,7 @@ export const ResultsQueryResultSchema = z.object({
   task_status: z.string().min(1),
   scan_complete: z.boolean(),
   review_complete: z.boolean(),
+  layout_rebuild: LayoutRebuildProgressSchema,
   items: z.array(z.record(z.string(), z.unknown())),
 });
 
@@ -744,6 +838,7 @@ export const OcrSearchHitSchema = z.object({
   normalized_y0: z.number().min(0).max(1),
   normalized_x1: z.number().min(0).max(1),
   normalized_y1: z.number().min(0).max(1),
+  layout_context: LayoutContextSchema.nullable(),
 }).passthrough();
 export type OcrSearchHit = z.infer<typeof OcrSearchHitSchema>;
 
@@ -783,6 +878,99 @@ export const ReviewPreparePageImageParamsSchema = z.object({
   device_pixel_ratio: z.number().finite().min(0.5).max(4),
 });
 export type ReviewPreparePageImageParams = z.infer<typeof ReviewPreparePageImageParamsSchema>;
+
+export const ReviewLayoutContextParamsSchema = z.object({
+  task_id: z.string().min(1),
+  occurrence_id: z.string().min(1),
+});
+export type ReviewLayoutContextParams = z.infer<typeof ReviewLayoutContextParamsSchema>;
+
+export const ReviewLayoutContextResultSchema = z.object({
+  task_id: z.string().min(1),
+  occurrence_id: z.string().min(1),
+  context: LayoutContextSchema,
+});
+export type ReviewLayoutContextResult = z.infer<typeof ReviewLayoutContextResultSchema>;
+
+export const ReviewPreviewLayoutContextParamsSchema = ReviewLayoutContextParamsSchema.extend({
+  layout_mode: LayoutModeSchema,
+  normalized_block_bbox: NormalizedLayoutContextRectSchema.optional(),
+});
+export type ReviewPreviewLayoutContextParams = z.infer<typeof ReviewPreviewLayoutContextParamsSchema>;
+
+export const ReviewUpdateLayoutOverrideParamsSchema = ReviewLayoutContextParamsSchema.extend({
+  layout_mode: LayoutModeSchema.optional(),
+  normalized_block_bbox: NormalizedLayoutContextRectSchema.optional(),
+  clear: z.boolean().optional(),
+});
+export type ReviewUpdateLayoutOverrideParams = z.infer<typeof ReviewUpdateLayoutOverrideParamsSchema>;
+
+export const ReviewUpdateLayoutOverrideResultSchema = ReviewLayoutContextResultSchema.extend({
+  progress: LayoutRebuildProgressSchema,
+});
+export type ReviewUpdateLayoutOverrideResult = z.infer<typeof ReviewUpdateLayoutOverrideResultSchema>;
+
+export const ReviewRebuildLayoutContextsParamsSchema = z.object({
+  task_id: z.string().min(1),
+  limit: z.number().int().min(1).max(100).optional(),
+  priority_occurrence_id: z.string().min(1).optional(),
+});
+export type ReviewRebuildLayoutContextsParams = z.infer<typeof ReviewRebuildLayoutContextsParamsSchema>;
+
+export const MAX_REVIEW_DECISION_CHANGES = 10_000;
+export const ReviewDecisionSchema = z.enum(["confirmed", "needs_review", "rejected"]);
+export const ReviewDecisionValueSchema = ReviewDecisionSchema.nullable();
+export type ReviewDecisionValue = z.infer<typeof ReviewDecisionValueSchema>;
+
+export const ReviewUpdateDecisionParamsSchema = z.object({
+  task_id: z.string().min(1),
+  occurrence_id: z.string().min(1),
+  decision: ReviewDecisionValueSchema,
+});
+export type ReviewUpdateDecisionParams = z.infer<typeof ReviewUpdateDecisionParamsSchema>;
+
+export const ReviewUpdateDecisionResultSchema = z.object({
+  occurrence_id: z.string().min(1),
+  decision: ReviewDecisionValueSchema,
+  updated_at: z.string().min(1),
+});
+export type ReviewUpdateDecisionResult = z.infer<typeof ReviewUpdateDecisionResultSchema>;
+
+export const ReviewDecisionChangeSchema = z.object({
+  occurrence_id: z.string().min(1),
+  decision: ReviewDecisionValueSchema,
+});
+
+export const ReviewUpdateDecisionsParamsSchema = z.object({
+  task_id: z.string().min(1),
+  operation_id: z.string().uuid(),
+  changes: z.array(ReviewDecisionChangeSchema).min(1).max(MAX_REVIEW_DECISION_CHANGES),
+}).superRefine((params, context) => {
+  const seen = new Set<string>();
+  params.changes.forEach((change, index) => {
+    if (seen.has(change.occurrence_id)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "同一批次不能重复 occurrence_id",
+        path: ["changes", index, "occurrence_id"],
+      });
+    }
+    seen.add(change.occurrence_id);
+  });
+});
+export type ReviewUpdateDecisionsParams = z.infer<typeof ReviewUpdateDecisionsParamsSchema>;
+
+export const ReviewDecisionChangeResultSchema = ReviewDecisionChangeSchema.extend({
+  previous_decision: ReviewDecisionValueSchema,
+});
+
+export const ReviewUpdateDecisionsResultSchema = z.object({
+  task_id: z.string().min(1),
+  operation_id: z.string().uuid(),
+  updated_at: z.string().min(1),
+  items: z.array(ReviewDecisionChangeResultSchema).min(1).max(MAX_REVIEW_DECISION_CHANGES),
+});
+export type ReviewUpdateDecisionsResult = z.infer<typeof ReviewUpdateDecisionsResultSchema>;
 
 export const ReviewPageImageResultSchema = z.object({
   asset_relpath: z.string().min(1),
@@ -825,6 +1013,12 @@ export function parseMethodResult(method: string, value: unknown): unknown {
   if (method === "search.hits") return OcrSearchHitsResultSchema.parse(value);
   if (method === "search.preparePageImage") return ReviewPageImageResultSchema.parse(value);
   if (method === "review.preparePageImage") return ReviewPageImageResultSchema.parse(value);
+  if (["review.layoutContext", "review.previewLayoutContext"].includes(method))
+    return ReviewLayoutContextResultSchema.parse(value);
+  if (method === "review.updateLayoutOverride") return ReviewUpdateLayoutOverrideResultSchema.parse(value);
+  if (method === "review.rebuildLayoutContexts") return LayoutRebuildProgressSchema.parse(value);
+  if (method === "review.updateDecision") return ReviewUpdateDecisionResultSchema.parse(value);
+  if (method === "review.updateDecisions") return ReviewUpdateDecisionsResultSchema.parse(value);
   return value;
 }
 

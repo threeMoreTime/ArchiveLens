@@ -48,7 +48,7 @@ def run_packaged_diagnostics(resources: Path, env: dict[str, str]) -> dict[str, 
     if not engine.is_file():
         return None
     request = json.dumps(
-        {"protocol_version": 3, "request_id": "offline-native-diagnostics", "method": "diagnostics.run", "params": {}},
+        {"protocol_version": 4, "request_id": "offline-native-diagnostics", "method": "diagnostics.run", "params": {}},
         ensure_ascii=False,
     )
     with tempfile.TemporaryDirectory(prefix="archivelens-offline-diagnostics-") as workspace:

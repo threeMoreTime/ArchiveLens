@@ -32,7 +32,7 @@ describe("自定义检索词 UI wiring", () => {
   it("校对页显示 matched_text，且以页内淡红高亮替代截取图", () => {
     const source = page("ReviewPage.tsx");
     expect(source).toContain("matched_text");
-    expect(source).toContain('searchMode === "legacy_fixed_pair"');
+    expect(source).toContain('task?.search_mode === "legacy_fixed_pair"');
     expect(source).toContain('className="al-page-canvas"');
     expect(source).toContain('className="al-highlight"');
     expect(source).toContain('className="al-result-thumbnail"');

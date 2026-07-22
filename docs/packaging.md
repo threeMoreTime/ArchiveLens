@@ -21,7 +21,7 @@ pwsh scripts/build-engine.ps1
 - smoke 验证（已通过）：
 
 ```bash
-echo '{"protocol_version":3,"request_id":"r1","method":"app.info","params":{}}' \
+echo '{"protocol_version":4,"request_id":"r1","method":"app.info","params":{}}' \
   | dist/engine/win-x64/archivelens-engine.exe serve
 # → engine.ready 事件 + app.info success（python_executable 指向 exe 自身）
 ```

@@ -139,8 +139,7 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     }, taskId);
     expect(scanEvidence.preferences).toEqual({
       page_quality: "maximum",
-      context_direction: "ltr",
-      context_radius: 15,
+      layout_mode: "auto",
     });
     expect(scanEvidence.occurrence.page_image_width).toBe(scanEvidence.occurrence.source_page_width);
 
@@ -199,17 +198,19 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       }));
     };
-    await expect(page.locator(".al-zoom-value")).toHaveText("100%");
+    await expect.poll(async () => Number((await page.locator(".al-zoom-value").textContent())?.replace("%", ""))).toBeLessThan(100);
     await expect(page.getByRole("button", { name: "页面朝上（0°）" })).toHaveAttribute("aria-pressed", "true");
     await expect.poll(hasEnoughPhysicalPixels).toBe(true);
     await waitForEvidenceSettled();
-    await page.screenshot({ path: path.join(visualOutput, "review-pdf-100-source-fidelity.png") });
-    await page.getByRole("button", { name: "适应窗口" }).click();
-    await expect.poll(async () => Number((await page.locator(".al-zoom-value").textContent())?.replace("%", ""))).toBeLessThan(100);
+    await page.screenshot({ path: path.join(visualOutput, "review-pdf-fit-source-fidelity.png") });
+    await page.getByRole("button", { name: "原始比例" }).click();
+    await expect(page.locator(".al-zoom-value")).toHaveText("100%");
     await expect.poll(hasEnoughPhysicalPixels).toBe(true);
     await waitForEvidenceSettled();
-    await page.screenshot({ path: path.join(visualOutput, "review-pdf-fit-source-fidelity.png") });
-    await page.getByRole("button", { name: "100%" }).click();
+    await page.screenshot({ path: path.join(visualOutput, "review-pdf-100-source-fidelity.png") });
+    await page.getByRole("button", { name: "适应页面" }).click();
+    await expect.poll(async () => Number((await page.locator(".al-zoom-value").textContent())?.replace("%", ""))).toBeLessThan(100);
+    await page.getByRole("button", { name: "原始比例" }).click();
     await expect(page.locator(".al-zoom-value")).toHaveText("100%");
     const imageBeforeDrag = await pageImage.boundingBox();
     const highlightBeforeDrag = await page.locator(".al-highlight").boundingBox();
@@ -274,6 +275,7 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
       const review = document.querySelector<HTMLElement>(".al-review");
       const resultList = document.querySelector<HTMLElement>(".al-result-list");
       const detail = document.querySelector<HTMLElement>(".al-detail");
+      const detailScroll = document.querySelector<HTMLElement>(".al-detail-scroll");
       const aside = document.querySelector<HTMLElement>(".al-review-aside");
       return {
         documentHeight: document.documentElement.scrollHeight,
@@ -282,26 +284,29 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
         reviewHeight: review?.getBoundingClientRect().height ?? 0,
         resultOverflowY: resultList ? getComputedStyle(resultList).overflowY : "missing",
         detailOverflowY: detail ? getComputedStyle(detail).overflowY : "missing",
-        asideOverflowY: aside ? getComputedStyle(aside).overflowY : "missing",
-        asideWidth: aside?.getBoundingClientRect().width ?? 0,
+        detailScrollOverflowY: detailScroll ? getComputedStyle(detailScroll).overflowY : "missing",
+        asideExists: Boolean(aside),
       };
     });
     expect(workbenchLayout.documentHeight).toBeLessThanOrEqual(workbenchLayout.viewportHeight + 1);
     expect(workbenchLayout.reviewHeight).toBeLessThanOrEqual(workbenchLayout.viewportHeight + 1);
     expect(workbenchLayout.mainOverflowY).toBe("hidden");
     expect(workbenchLayout.resultOverflowY).toBe("hidden");
-    expect(workbenchLayout.detailOverflowY).toBe("auto");
-    expect(workbenchLayout.asideOverflowY).toBe("hidden");
-    expect(workbenchLayout.asideWidth).toBeGreaterThanOrEqual(54);
-    expect(workbenchLayout.asideWidth).toBeLessThanOrEqual(58);
+    expect(workbenchLayout.detailOverflowY).toBe("hidden");
+    expect(workbenchLayout.detailScrollOverflowY).toBe("auto");
+    expect(workbenchLayout.asideExists).toBe(false);
     await expect(page.locator(".al-review-summary, .al-review-aside-toggle")).toHaveCount(0);
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1080, 680));
-    await expect(page.getByRole("button", { name: "立即保存 (Ctrl+Enter)" })).toBeVisible();
+    await page.getByRole("button", { name: "查看详情" }).click();
+    await expect(page.locator(".al-detail")).toHaveClass(/drawer-open/);
+    await page.locator(".al-note-summary").click();
+    await expect(page.getByRole("button", { name: "立即保存 Ctrl+Enter" })).toBeVisible();
+    await page.getByRole("button", { name: "关闭", exact: true }).click();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)).toBeLessThanOrEqual(1);
     await expect(page.locator(".al-page-wrap")).toBeVisible();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 820));
 
-    await page.getByRole("button", { name: "100%" }).click();
+    await page.getByRole("button", { name: "原始比例" }).click();
     for (let index = 0; index < 7; index += 1) {
       await page.getByRole("button", { name: "放大页面" }).click();
     }
@@ -335,7 +340,7 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     await page.screenshot({ path: path.join(visualOutput, "review-pdf-400-source-fidelity.png") });
     const zoomedViewport = await page.evaluate(() => ({ height: window.innerHeight, documentHeight: document.documentElement.scrollHeight }));
     expect(zoomedViewport.documentHeight).toBeLessThanOrEqual(zoomedViewport.height + 1);
-    await page.getByRole("button", { name: "适应窗口" }).click();
+    await page.getByRole("button", { name: "适应页面" }).click();
 
     const occurrenceId = await page.evaluate(async (id) => {
       const result = await (window as any).archiveLens.results.query({ task_id: id, limit: 10 });
@@ -573,7 +578,7 @@ test("mixed PNG and multi-page TIFF sources complete as one raster task", async 
     expect(rasterTask.occurrence_count).toBeGreaterThan(0);
     await page.getByRole("button", { name: "进入校对工作台" }).click();
     await expect(page.locator('img[alt="出处页"]')).toBeVisible();
-    await page.getByRole("button", { name: "100%" }).click();
+    await page.getByRole("button", { name: "原始比例" }).click();
     await page.getByRole("button", { name: "放大页面" }).click();
     await expect(page.getByText("仅放大观察，不会增加源文件细节", { exact: true })).toBeVisible();
   } finally {

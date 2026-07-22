@@ -11,10 +11,12 @@ import SearchPage from "./pages/SearchPage";
 import TaskCenter from "./pages/TaskCenter";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import SettingsPage from "./pages/SettingsPage";
+import { taskDisplayName } from "./utils/presentation";
 import brandIconUrl from "../../../resources/icon-64.png";
 
 const CURRENT_TASK_STORAGE_KEY = "archivelens.currentTaskId";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "archivelens.sidebarCollapsed";
+const WORKBENCH_SIDEBAR_COLLAPSED_STORAGE_KEY = "archivelens.workbenchSidebarCollapsed";
 
 function taskIdFromPath(pathname: string): string | null {
   const match = /^\/(?:tasks|review|search|export)\/([^/]+)$/.exec(pathname);
@@ -36,10 +38,21 @@ export default function App() {
   const mainRef = useRef<HTMLElement>(null);
   const [recoverable, setRecoverable] = useState<unknown[]>([]);
   const [latestTask, setLatestTask] = useState<TaskSummary | null>(null);
+  const [activeTask, setActiveTask] = useState<TaskSummary | null>(null);
   const [rememberedTaskId, setRememberedTaskId] = useState<string | null>(() => localStorage.getItem(CURRENT_TASK_STORAGE_KEY));
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+  const [standardSidebarCollapsed, setStandardSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true"; } catch { return false; }
   });
+  const [workbenchSidebarCollapsed, setWorkbenchSidebarCollapsed] = useState(() => {
+    try {
+      const stored = localStorage.getItem(WORKBENCH_SIDEBAR_COLLAPSED_STORAGE_KEY);
+      return stored === null ? true : stored === "true";
+    } catch {
+      return true;
+    }
+  });
+  const isWorkbenchRoute = location.pathname.startsWith("/review/") || location.pathname.startsWith("/search/");
+  const sidebarCollapsed = isWorkbenchRoute ? workbenchSidebarCollapsed : standardSidebarCollapsed;
   useEffect(() => {
     const off = window.archiveLens.subscribe.onRecoverable((tasks: unknown[]) => {
       setRecoverable(Array.isArray(tasks) ? tasks : []);
@@ -78,20 +91,34 @@ export default function App() {
   }, [routeTaskId]);
 
   const currentTaskId = routeTaskId ?? rememberedTaskId ?? firstRecoverableTaskId ?? latestTask?.task_id ?? null;
+  const activeTaskDisplayName = activeTask?.task_id === currentTaskId ? taskDisplayName(activeTask) : null;
 
   useEffect(() => {
-    try { localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(sidebarCollapsed)); } catch { /* Keep the session state if storage is unavailable. */ }
-  }, [sidebarCollapsed]);
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(standardSidebarCollapsed)); } catch { /* Keep the session state if storage is unavailable. */ }
+  }, [standardSidebarCollapsed]);
+
+  useEffect(() => {
+    try { localStorage.setItem(WORKBENCH_SIDEBAR_COLLAPSED_STORAGE_KEY, String(workbenchSidebarCollapsed)); } catch { /* Keep the session state if storage is unavailable. */ }
+  }, [workbenchSidebarCollapsed]);
+
+  const toggleSidebar = () => {
+    if (isWorkbenchRoute) setWorkbenchSidebarCollapsed((value) => !value);
+    else setStandardSidebarCollapsed((value) => !value);
+  };
 
   useEffect(() => {
     let alive = true;
     if (!currentTaskId) {
+      setActiveTask(null);
       return () => { alive = false; };
     }
     const loadActiveTask = () => window.archiveLens.tasks.get(currentTaskId)
-      .then(() => { /* Successful lookup keeps the current task context valid. */ })
+      .then((task) => {
+        if (alive) setActiveTask(task);
+      })
       .catch(() => {
         if (!alive) return;
+        setActiveTask(null);
         if (!routeTaskId && rememberedTaskId === currentTaskId) {
           localStorage.removeItem(CURRENT_TASK_STORAGE_KEY);
           setRememberedTaskId(null);
@@ -115,6 +142,7 @@ export default function App() {
 
   return (
     <div className="al-app">
+      <a className="al-skip-link" href="#main-content">跳到主要内容</a>
       <aside className={"al-sidebar" + (sidebarCollapsed ? " collapsed" : "")}>
         <div className="al-brand-row">
           <div className="al-brand" title={sidebarCollapsed ? "ArchiveLens" : undefined}><img className="al-brand-icon" src={brandIconUrl} alt="" aria-hidden="true" /><span>ArchiveLens</span></div>
@@ -124,12 +152,12 @@ export default function App() {
             aria-label={sidebarCollapsed ? "展开菜单" : "收起菜单"}
             title={sidebarCollapsed ? "展开菜单" : "收起菜单"}
             aria-expanded={!sidebarCollapsed}
-            onClick={() => setSidebarCollapsed((value) => !value)}
+            onClick={toggleSidebar}
           >
             {sidebarCollapsed ? <PanelLeftExpandRegular /> : <PanelLeftContractRegular />}
           </button>
         </div>
-        <nav aria-label="主导航">
+        <nav className="al-nav-section al-global-nav" aria-label="全局导航">
           <NavLink to="/" aria-label={sidebarCollapsed ? "首页" : undefined} title={sidebarCollapsed ? "首页" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}>
             <HomeRegular /><span className="al-nav-label">首页</span>
           </NavLink>
@@ -137,16 +165,34 @@ export default function App() {
             <DocumentAddRegular /><span className="al-nav-label">新建扫描</span>
           </NavLink>
           <NavLink to="/tasks" end aria-label={sidebarCollapsed ? "任务中心" : undefined} title={sidebarCollapsed ? "任务中心" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ClipboardTaskListLtrRegular /><span className="al-nav-label">任务中心</span></NavLink>
-          {currentTaskId ? <NavLink to={`/tasks/${currentTaskId}`} aria-label={sidebarCollapsed ? "任务详情" : undefined} title={sidebarCollapsed ? "任务详情" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ClipboardTaskListLtrRegular /><span className="al-nav-label">任务详情</span></NavLink> : <span className="al-navlink disabled" aria-disabled="true" aria-label={sidebarCollapsed ? "任务详情，需要先选择任务" : undefined} title={sidebarCollapsed ? "任务详情（需要先选择任务）" : undefined}><ClipboardTaskListLtrRegular /><span className="al-nav-label">任务详情</span></span>}
-          {currentTaskId ? <NavLink to={`/review/${currentTaskId}`} aria-label={sidebarCollapsed ? "校对" : undefined} title={sidebarCollapsed ? "校对" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><EditRegular /><span className="al-nav-label">校对</span></NavLink> : <span className="al-navlink disabled" aria-disabled="true" aria-label={sidebarCollapsed ? "校对，需要先选择任务" : undefined} title={sidebarCollapsed ? "校对（需要先选择任务）" : undefined}><EditRegular /><span className="al-nav-label">校对</span></span>}
-          {currentTaskId ? <NavLink to={`/search/${currentTaskId}`} aria-label={sidebarCollapsed ? "任务内检索" : undefined} title={sidebarCollapsed ? "任务内检索" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><SearchRegular /><span className="al-nav-label">任务内检索</span></NavLink> : <span className="al-navlink disabled" aria-disabled="true" aria-label={sidebarCollapsed ? "任务内检索，需要先选择任务" : undefined} title={sidebarCollapsed ? "任务内检索（需要先选择任务）" : undefined}><SearchRegular /><span className="al-nav-label">任务内检索</span></span>}
-          <NavLink to={exportPath} aria-label={sidebarCollapsed ? "导出" : undefined} title={sidebarCollapsed ? "导出" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ShareRegular /><span className="al-nav-label">导出</span></NavLink>
         </nav>
+        {currentTaskId ? (
+          <section className="al-task-nav-section" aria-label="当前任务工作区">
+            <div className="al-task-nav-context" title={activeTaskDisplayName ?? "正在读取当前任务"}>
+              <span className="al-task-context-mark" aria-hidden="true" />
+              <span className="al-task-context-copy">
+                <small>当前任务</small>
+                <strong>{activeTaskDisplayName ?? "正在读取任务"}</strong>
+              </span>
+            </div>
+            <nav className="al-nav-section" aria-label="当前任务导航">
+              <NavLink to={`/tasks/${currentTaskId}`} aria-label={sidebarCollapsed ? "任务详情" : undefined} title={sidebarCollapsed ? "任务详情" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ClipboardTaskListLtrRegular /><span className="al-nav-label">任务详情</span></NavLink>
+              <NavLink to={`/review/${currentTaskId}`} aria-label={sidebarCollapsed ? "校对" : undefined} title={sidebarCollapsed ? "校对" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><EditRegular /><span className="al-nav-label">校对</span></NavLink>
+              <NavLink to={`/search/${currentTaskId}`} aria-label={sidebarCollapsed ? "任务内检索" : undefined} title={sidebarCollapsed ? "任务内检索" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><SearchRegular /><span className="al-nav-label">任务内检索</span></NavLink>
+              <NavLink to={exportPath} aria-label={sidebarCollapsed ? "导出" : undefined} title={sidebarCollapsed ? "导出" : undefined} className={({ isActive }) => "al-navlink" + (isActive ? " active" : "")}><ShareRegular /><span className="al-nav-label">导出</span></NavLink>
+            </nav>
+          </section>
+        ) : (
+          <div className="al-task-nav-empty" aria-label="尚未选择当前任务">
+            <span className="al-task-context-mark" aria-hidden="true" />
+            <span className="al-task-context-copy"><small>任务工作区</small><strong>从任务中心选择任务</strong></span>
+          </div>
+        )}
         <div className="al-sidebar-footer">
           <NavLink to="/settings" aria-label={sidebarCollapsed ? "设置" : undefined} title={sidebarCollapsed ? "设置" : undefined} className={({ isActive }) => "al-navlink al-settings-navlink" + (isActive || location.pathname === "/diagnostics" ? " active" : "")}><SettingsRegular /><span className="al-nav-label">设置</span></NavLink>
         </div>
       </aside>
-      <main ref={mainRef} className={"al-main" + (location.pathname.startsWith("/review/") || location.pathname.startsWith("/search/") ? " al-main-review" : "")}>
+      <main id="main-content" tabIndex={-1} ref={mainRef} className={"al-main" + (isWorkbenchRoute ? " al-main-review" : "")}>
         <Routes>
           <Route path="/" element={<Welcome />} />
           <Route path="/scan/new" element={<NewScan />} />

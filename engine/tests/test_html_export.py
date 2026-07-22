@@ -222,6 +222,45 @@ class HtmlExportTests(unittest.TestCase):
         self.assertIn('button.title=record.page.relativePath', report)
         self.assertIn('.occurrence-card.print-break{break-before:page}', report)
 
+    def test_renders_the_same_structured_layout_context_without_covering_glyphs(self) -> None:
+        self.items[0]["layout_context_json"] = json.dumps(
+            {
+                "version": 1,
+                "status": "ready",
+                "reason": "",
+                "orientation": "vertical",
+                "confidence": 0.95,
+                "target_line_index": 7,
+                "target_ocr_line_id": "line-7",
+                "match_start": 2,
+                "match_end": 4,
+                "plain_text": "右鄰列\n至其虧空錢粮\n左鄰列",
+                "bbox": {"x0": 166, "y0": 103, "x1": 240, "y1": 362},
+                "normalized_bbox": {"x0": 0.2, "y0": 0.1, "x1": 0.4, "y1": 0.5},
+                "block_bbox": {"x0": 44, "y0": 91, "x1": 407, "y1": 365},
+                "normalized_block_bbox": {"x0": 0.07, "y0": 0.1, "x1": 0.67, "y1": 0.5},
+                "items": [
+                    {"ocr_line_id": "line-8", "line_index": 8, "role": "context", "text": "右鄰列", "bbox": {"x0": 217, "y0": 105, "x1": 240, "y1": 360}, "normalized_bbox": {"x0": 0.35, "y0": 0.14, "x1": 0.4, "y1": 0.47}, "match_start": None, "match_end": None},
+                    {"ocr_line_id": "line-7", "line_index": 7, "role": "target", "text": "至其虧空錢粮", "bbox": {"x0": 193, "y0": 105, "x1": 216, "y1": 360}, "normalized_bbox": {"x0": 0.31, "y0": 0.14, "x1": 0.36, "y1": 0.47}, "match_start": 2, "match_end": 4},
+                    {"ocr_line_id": "line-6", "line_index": 6, "role": "context", "text": "左鄰列", "bbox": {"x0": 166, "y0": 103, "x1": 195, "y1": 362}, "normalized_bbox": {"x0": 0.27, "y0": 0.13, "x1": 0.32, "y1": 0.48}, "match_start": None, "match_end": None},
+                ],
+                "candidate_blocks": [],
+            },
+            ensure_ascii=False,
+        )
+
+        report = self.build(items=[self.items[0]])
+        data_match = re.search(r"const DATA=(.*?);\nconst STATUS_RANK=", report, re.DOTALL)
+        self.assertIsNotNone(data_match)
+        data = json.loads(data_match.group(1))
+        context = data["records"][0]["hit"]["layoutContext"]
+        self.assertEqual(context["orientation"], "vertical")
+        self.assertEqual([item["line_index"] for item in context["items"]], [8, 7, 6])
+        self.assertIn("function layoutContextNode(hit)", report)
+        self.assertIn("writing-mode:vertical-rl", report)
+        self.assertIn('line.append(document.createTextNode(text.slice(0,start)),el("mark"', report)
+        self.assertNotIn("evidence-locator", report)
+
     def test_navigation_fully_releases_desktop_width_and_tracks_current_record(self) -> None:
         report = self.build()
 
