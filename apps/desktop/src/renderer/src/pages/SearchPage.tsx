@@ -19,6 +19,12 @@ import type { TaskSummary } from "../../../preload/api";
 import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
 import { LayoutContextCanvas, layoutContextSubtitle } from "../components/LayoutContextCanvas";
 import { formatDateTime, taskDisplayName } from "../utils/presentation";
+import {
+  dedupeSearchSessions,
+  findReusableSearchSession,
+  normalizeSearchQueryText,
+  prependSearchSession,
+} from "../utils/searchHistory";
 
 const PAGE_SIZE = 50;
 
@@ -99,6 +105,7 @@ export default function SearchPage() {
   const [hitsLoading, setHitsLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
+  const [historyNotice, setHistoryNotice] = useState("");
   const [pageImage, setPageImage] = useState<ReviewPageImageResult | null>(null);
   const [pageImageLoading, setPageImageLoading] = useState(false);
   const [pageImageError, setPageImageError] = useState("");
@@ -124,6 +131,7 @@ export default function SearchPage() {
     let active = true;
     setInitialLoading(true);
     setError("");
+    setHistoryNotice("");
     setTask(null);
     setCorpus(null);
     setSessions([]);
@@ -144,8 +152,9 @@ export default function SearchPage() {
       setCorpus(nextCorpus);
       setScope(settings.search_script_scope);
       setQuery(nextTask.search_text || "");
-      setSessions(history.items);
-      const latest = history.items[0];
+      const dedupedHistory = dedupeSearchSessions(history.items);
+      setSessions(dedupedHistory);
+      const latest = dedupedHistory[0];
       if (latest) {
         setActiveSessionId(latest.search_session_id);
         setActiveSession(latest);
@@ -261,6 +270,7 @@ export default function SearchPage() {
   }, [pageImage?.height_100_css, pageImage?.width_100_css, selected, taskId, viewportSize.height, viewportSize.width, zoom]);
 
   const chooseSession = (session: OcrSearchSession) => {
+    setHistoryNotice("");
     setActiveSessionId(session.search_session_id);
     setActiveSession(session);
     setQuery(session.query_text);
@@ -269,16 +279,26 @@ export default function SearchPage() {
   };
 
   const executeSearch = async () => {
-    if (!corpusReady || searching || !query) return;
+    const queryText = normalizeSearchQueryText(query);
+    if (!corpusReady || searching || !queryText || !corpus) return;
+    const reusable = findReusableSearchSession(sessions, queryText, scope, corpus.corpus_version);
+    if (reusable) {
+      setQuery(queryText);
+      chooseSession(reusable);
+      setHistoryNotice("已打开当前语料版本中的已有结果，没有新增重复历史。");
+      return;
+    }
     setSearching(true);
     setError("");
+    setHistoryNotice("");
     try {
       const session = await window.archiveLens.search.execute({
         task_id: taskId,
-        query_text: query,
+        query_text: queryText,
         script_scope: scope,
       });
-      setSessions((current) => [session, ...current.filter((item) => item.search_session_id !== session.search_session_id)]);
+      setQuery(queryText);
+      setSessions((current) => prependSearchSession(current, session));
       setActiveSession(session);
       setActiveSessionId(session.search_session_id);
       setOffset(0);
@@ -347,7 +367,7 @@ export default function SearchPage() {
           <option value="simplified">只命中简体</option>
           <option value="traditional">只命中繁体</option>
         </select>
-        <Button type="submit" appearance="primary" disabled={!corpusReady || searching || !query}>
+        <Button type="submit" appearance="primary" disabled={!corpusReady || searching || !normalizeSearchQueryText(query)}>
           {searching ? "正在检索…" : "检索"}
         </Button>
         <select
@@ -372,6 +392,7 @@ export default function SearchPage() {
 
       {initialLoading && <div className="al-search-page-message"><LoadingState label="正在读取本地 OCR 语料与检索历史…" /></div>}
       {error && <div className="al-search-page-message"><InlineFeedback>{error}</InlineFeedback></div>}
+      {historyNotice && <div className="al-search-page-message"><InlineFeedback tone="info">{historyNotice}</InlineFeedback></div>}
 
       {!initialLoading && corpus && (
         <div className="al-search-summary" role="status">
@@ -397,7 +418,7 @@ export default function SearchPage() {
       {!initialLoading && corpusReady && (
         <div className="al-search-body">
           <aside className="al-search-history" aria-label="检索历史">
-            <div className="al-search-pane-heading"><strong>检索历史</strong><span>{sessions.length} 次</span></div>
+            <div className="al-search-pane-heading"><strong>检索历史</strong><span>{sessions.length} 组</span></div>
             <div className="al-search-history-scroll">
               {sessions.length === 0 && <Text className="al-muted">首次检索后，会话和命中证据会保存在当前任务中。</Text>}
               {sessions.map((session) => (

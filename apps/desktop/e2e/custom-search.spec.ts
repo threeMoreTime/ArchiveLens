@@ -164,6 +164,12 @@ test("custom search UI creates a real OCR task and renders complete word evidenc
     await expect(page.locator(".al-search-result").first()).toBeVisible();
     await expect(page.getByText("简繁字形索引命中").first()).toBeVisible();
     await expect(page.locator(".al-search-history-scroll button")).toHaveCount(3);
+    await page.getByRole("button", { name: "检索", exact: true }).click();
+    await expect(page.getByText("已打开当前语料版本中的已有结果，没有新增重复历史。")).toBeVisible();
+    await expect(page.locator(".al-search-history-scroll button")).toHaveCount(3);
+    expect(await page.evaluate(async (id) => (
+      await (window as any).archiveLens.search.listSessions(id, 100)
+    ).items.length, taskId)).toBe(3);
     await page.getByRole("link", { name: "任务详情" }).click();
 
     await page.getByRole("button", { name: "进入校对工作台" }).click();
