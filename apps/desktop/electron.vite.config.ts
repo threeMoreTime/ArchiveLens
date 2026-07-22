@@ -42,6 +42,8 @@ export default defineConfig({
     root: "src/renderer",
     build: {
       outDir: "out/renderer",
+      minify: "esbuild",
+      cssMinify: "esbuild",
     },
     plugins: [react(), devCspPlugin],
     resolve: {
