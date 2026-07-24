@@ -46,7 +46,7 @@ const LAYER_LABELS: Record<string, string> = {
   raw_exact: "原文精确命中",
   context_resolved: "上下文识别命中",
   variant_graph: "简繁字形索引命中",
-  ocr_top_k: "OCR Top-K 候选",
+  ocr_top_k: "低置信候选",
 };
 
 const VERIFICATION_LABELS: Record<string, string> = {
@@ -401,7 +401,7 @@ export default function SearchPage() {
           <span>OCR 行：<strong>{corpus.line_count}</strong></span>
           {activeSession && <span>当前结果：<strong>{activeSession.counts.total}</strong></span>}
           {activeSession && <span>范围：<strong>{SCRIPT_SCOPE_LABELS[activeSession.script_scope]}</strong></span>}
-          {semanticLabel && <span title="OpenCC 词语证据或字形关联结论">索引语义：<strong>{semanticLabel}</strong></span>}
+          {semanticLabel && <span title="OpenCC 词语证据或字形关联结论">简繁判断：<strong>{semanticLabel}</strong></span>}
         </div>
       )}
 
@@ -442,14 +442,14 @@ export default function SearchPage() {
               <div className="al-search-layer-counts" aria-label="检索层级统计">
                 <span>原文 {activeSession.counts.layers.raw_exact ?? 0}</span>
                 <span>上下文 {activeSession.counts.layers.context_resolved ?? 0}</span>
-                <span>字形图 {activeSession.counts.layers.variant_graph ?? 0}</span>
-                <span>Top-K {activeSession.counts.layers.ocr_top_k ?? 0}</span>
+                <span>字形关联 {activeSession.counts.layers.variant_graph ?? 0}</span>
+                <span>低置信候选 {activeSession.counts.layers.ocr_top_k ?? 0}</span>
               </div>
             )}
             <div className="al-search-result-scroll" role="listbox" aria-busy={hitsLoading} aria-label="分层检索命中列表">
               {hitsLoading && hits.length === 0 && <div className="al-list-message"><LoadingState label="正在读取命中证据…" /></div>}
               {!hitsLoading && activeSession && hits.length === 0 && <div className="al-list-message"><Text weight="semibold">没有符合当前字形范围的结果</Text><Text className="al-muted">可切换简繁范围或输入其他词语；OCR 原文不会被转换。</Text></div>}
-              {!hitsLoading && !activeSession && <div className="al-list-message"><Text weight="semibold">输入词语开始检索</Text><Text className="al-muted">检索会按原文、上下文、字形图、Top-K 候选依次分层。</Text></div>}
+              {!hitsLoading && !activeSession && <div className="al-list-message"><Text weight="semibold">输入词语开始检索</Text><Text className="al-muted">检索会按原文、上下文、简繁字形关联、低置信候选依次分层。</Text></div>}
               {hits.map((hit) => (
                 <button
                   type="button"
@@ -483,7 +483,7 @@ export default function SearchPage() {
                   <div><strong>{selected.file_name}</strong><span>第 {selected.page_no} 页 · 第 {selected.line_index + 1} 行</span></div>
                   <div><Button size="small" disabled={selectedIndex <= 0} onClick={() => selectAdjacent(-1)}>上一条</Button><Button size="small" disabled={selectedIndex < 0 || selectedIndex >= hits.length - 1} onClick={() => selectAdjacent(1)}>下一条</Button></div>
                 </div>
-                {selected.verification_status === "candidate_pending_review" && <InlineFeedback tone="warning">这是孤立单字的 OCR Top-K 候选，不是 OCR 主结果，必须对照原图人工核查。</InlineFeedback>}
+                {selected.verification_status === "candidate_pending_review" && <InlineFeedback tone="warning">这是孤立单字的低置信候选，不是 OCR 主结果，必须对照原图人工核查。</InlineFeedback>}
                 <div ref={viewerRef} className="al-search-viewer">
                   <div className="al-viewer-overlays">
                     <div className="al-viewer-toolbar" aria-label="页面缩放工具">
@@ -525,8 +525,7 @@ export default function SearchPage() {
                   <div><span>核查状态</span><strong>{VERIFICATION_LABELS[selected.verification_status] ?? selected.verification_status}</strong></div>
                   <div><span>图片原字形</span><strong>{SCRIPT_LABELS[selected.source_script] ?? selected.source_script}</strong></div>
                   <div><span>匹配文本</span><strong>{selected.matched_text}</strong></div>
-                  <div><span>OCR 置信度</span><strong>{selected.line_confidence.toFixed(3)}</strong></div>
-                  <div><span>索引类型</span><strong>{selected.index_kind}</strong></div>
+                  <div><span>OCR 置信度</span><strong>{Math.round(selected.line_confidence * 100)}%</strong></div>
                 </div>
                 {(payloadText(selected.payload, "semantic_label") || semanticLabel) && (
                   <Text className="al-search-semantic-note">索引说明：{payloadText(selected.payload, "semantic_label") ?? semanticLabel}。字形关联不等同于语义确认，请以原图和上下文为准。</Text>

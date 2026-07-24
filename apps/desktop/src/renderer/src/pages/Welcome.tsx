@@ -1,44 +1,75 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Card, Text } from "@fluentui/react-components";
 import type { EngineExitInfo, EnvironmentInfo, TaskSummary } from "../../../preload/api";
-import { EmptyState, InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
-import { diagnosticStatusLabel, formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from "../utils/presentation";
-
-type DiagnosticCheck = NonNullable<EnvironmentInfo["engine"]>["checks"][number];
+import { EmptyState, LoadingState, PageHeader } from "../components/feedback";
+import { DiagnosticErrorNotice } from "../components/DiagnosticErrorNotice";
+import { toDiagnosticIssue, type DiagnosticIssue } from "../utils/diagnosticIssue";
+import { formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from "../utils/presentation";
 
 export default function Welcome() {
   const nav = useNavigate();
-  const [checks, setChecks] = useState<DiagnosticCheck[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [taskTotal, setTaskTotal] = useState(0);
   const [completedTaskTotal, setCompletedTaskTotal] = useState(0);
   const [busy, setBusy] = useState(false);
   const [loadingTasks, setLoadingTasks] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [taskIssue, setTaskIssue] = useState<DiagnosticIssue | null>(null);
+  const [envIssue, setEnvIssue] = useState<DiagnosticIssue | null>(null);
+  const [envTone, setEnvTone] = useState<"error" | "warning">("warning");
+  const [demoIssue, setDemoIssue] = useState<DiagnosticIssue | null>(null);
+  // 卸载后不再更新状态：供 loadTasks 与事件回调共享的挂载标志。
+  const aliveRef = useRef(true);
 
-  useEffect(() => {
-    let active = true;
-    let refreshTimer: number | null = null;
-    const loadTasks = () => Promise.all([
+  const reloadEnvironment = useCallback(() => {
+    window.archiveLens.app.getEnvironment().then((env: EnvironmentInfo) => {
+      const constrained = (env.engine?.checks ?? []).filter((check) => check.status !== "PASS");
+      if (env.startupError) {
+        setEnvTone("error");
+        setEnvIssue(toDiagnosticIssue("ENVIRONMENT_CHECK_FAILED", new Error(env.startupError.message), {
+          backendCode: env.startupError.code,
+          impact: "本地识别服务未就绪，暂时无法开始新的扫描或检索。",
+          remedy: "请重新检查环境；若持续失败可重启应用。",
+        }));
+      } else if (constrained.length > 0) {
+        setEnvTone("warning");
+        setEnvIssue(toDiagnosticIssue("ENVIRONMENT_CHECK_FAILED", new Error(constrained.map((check) => `${check.label}:${check.status}`).join("; ")), {
+          impact: constrained[0]?.impact || "部分本地能力受限，可能影响识别或格式支持。",
+          remedy: constrained[0]?.remedy || "请重新检查环境后再开始扫描。",
+        }));
+      } else {
+        setEnvIssue(null);
+      }
+    }).catch((error: unknown) => {
+      setEnvTone("error");
+      setEnvIssue(toDiagnosticIssue("ENVIRONMENT_CHECK_FAILED", error));
+    });
+  }, []);
+
+  // 任务列表加载：提升为 useCallback，使重试按钮与事件回调共用同一入口，
+  // 避免重试时整页刷新丢失 SPA 路由状态。卸载后通过 aliveRef 守卫不再更新状态。
+  const loadTasks = useCallback(() => {
+    setLoadingTasks(true);
+    return Promise.all([
       window.archiveLens.tasks.list({ limit: 8, offset: 0 }),
       window.archiveLens.tasks.list({ limit: 1, offset: 0, status: "completed" }),
     ]).then(([response, completed]) => {
-      if (!active) return;
+      if (!aliveRef.current) return;
       setTasks(response.items);
       setTaskTotal(response.total);
       setCompletedTaskTotal(completed.total);
-    }).catch((nextError: unknown) => {
-      if (active) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setTaskIssue(null);
+    }).catch((error: unknown) => {
+      if (aliveRef.current) setTaskIssue(toDiagnosticIssue("TASK_LIST_LOAD_FAILED", error));
     }).finally(() => {
-      if (active) setLoadingTasks(false);
+      if (aliveRef.current) setLoadingTasks(false);
     });
+  }, []);
 
-    window.archiveLens.app.getEnvironment().then((env: EnvironmentInfo) => {
-      if (!active) return;
-      setChecks(env.engine?.checks ?? []);
-      if (env.startupError) setError(`${env.startupError.message}。可前往“环境诊断”查看处理建议和日志。`);
-    }).catch((nextError: unknown) => active && setError(nextError instanceof Error ? nextError.message : String(nextError)));
+  useEffect(() => {
+    aliveRef.current = true;
+    let refreshTimer: number | null = null;
+    reloadEnvironment();
     const scheduleTasks = () => {
       if (refreshTimer !== null) return;
       refreshTimer = window.setTimeout(() => {
@@ -49,28 +80,32 @@ export default function Welcome() {
     void loadTasks();
     const offEvent = window.archiveLens.subscribe.onEvent(scheduleTasks);
     const offExit = window.archiveLens.subscribe.onEngineExit((info: EngineExitInfo) => {
-      if (!info.expected) setError(`本地识别服务异常退出（${info.kind}）。任务数据仍保留在本机；请打开环境诊断并查看日志。`);
+      if (!aliveRef.current || info.expected) return;
+      setEnvTone("error");
+      setEnvIssue(toDiagnosticIssue("ENVIRONMENT_CHECK_FAILED", new Error(`本地识别服务异常退出（${info.kind}）`), {
+        impact: "当前扫描或检索可能已中断，任务数据仍保留在本机。",
+        remedy: "请重新检查环境；如反复出现可重启应用。",
+      }));
     });
-    return () => { active = false; if (refreshTimer !== null) window.clearTimeout(refreshTimer); offEvent(); offExit(); };
-  }, []);
+    return () => { aliveRef.current = false; if (refreshTimer !== null) window.clearTimeout(refreshTimer); offEvent(); offExit(); };
+  }, [reloadEnvironment, loadTasks]);
 
   const currentTask = useMemo(
     () => tasks.find((task) => ["running", "paused", "recoverable"].includes(task.status)) ?? tasks[0] ?? null,
     [tasks],
   );
   const recentOccurrenceCount = tasks.reduce((sum, task) => sum + (task.occurrence_count ?? 0), 0);
-  const constrainedChecks = checks.filter((check) => check.status !== "PASS");
   const currentTaskHasKnownTotal = Boolean(currentTask && currentTask.total_pages > 0);
   const currentTaskIsActive = Boolean(currentTask && ["queued", "starting", "running", "pausing", "resuming"].includes(currentTask.status));
 
   const tryDemo = async () => {
     setBusy(true);
-    setError(null);
+    setDemoIssue(null);
     try {
       const demo = await window.archiveLens.demo.create();
       nav(`/review/${demo.task_id}`);
-    } catch (nextError: unknown) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch (error: unknown) {
+      setDemoIssue(toDiagnosticIssue("TASK_ACTION_FAILED", error));
     } finally {
       setBusy(false);
     }
@@ -82,7 +117,8 @@ export default function Welcome() {
         title={taskTotal > 0 ? "欢迎回来，继续处理档案" : "欢迎使用 ArchiveLens"}
         description="在本机扫描 PDF、DJVU、DJV、TIFF、JPEG 和 PNG 文件，定位你指定的文字或词语；档案内容不会上传到网络。"
       />
-      {error && <InlineFeedback>无法完成部分本地检查：{error} <Button size="small" onClick={() => nav("/diagnostics")}>查看诊断</Button></InlineFeedback>}
+      {envIssue && <DiagnosticErrorNotice issue={envIssue} operation="app.getEnvironment" tone={envTone} onRetry={reloadEnvironment} />}
+      {demoIssue && <DiagnosticErrorNotice issue={demoIssue} operation="demo.create" onRetry={() => void tryDemo()} />}
 
       <div className="al-home-hero">
         <section className="al-home-intro">
@@ -107,14 +143,14 @@ export default function Welcome() {
           <div className="al-section-heading-row"><Text className="al-section-heading" weight="semibold">最近任务</Text>{taskTotal > 0 && <Button appearance="subtle" size="small" onClick={() => nav("/tasks")}>查看全部 {taskTotal} 项</Button>}</div>
           <Card className="al-card al-task-table-card">
             {loadingTasks && <LoadingState label="正在读取本地任务…" />}
-            {!loadingTasks && tasks.length === 0 && <EmptyState title="尚无任务" detail="选择一个文件夹并输入检索词后，最近任务会显示在这里。" action={{ label: "新建扫描", onClick: () => nav("/scan/new") }} />}
+            {taskIssue && <DiagnosticErrorNotice issue={taskIssue} operation="tasks.list" onRetry={() => { void loadTasks(); }} />}
+            {!loadingTasks && !taskIssue && tasks.length === 0 && <EmptyState title="尚无任务" detail="选择一个文件夹并输入检索词后，最近任务会显示在这里。" action={{ label: "新建扫描", onClick: () => nav("/scan/new") }} />}
             {!loadingTasks && tasks.length > 0 && <div className="al-task-table" role="table" aria-label="最近任务"><div className="al-task-table-head" role="row"><span>任务</span><span>状态</span><span>结果</span><span>更新时间</span><span>操作</span></div>{tasks.map((task) => { const view = taskStatusView(task); const updatedAt = task.finished_at || task.started_at || task.created_at; return <div className="al-task-table-row" role="row" key={task.task_id}><span className="al-task-name-cell"><strong title={taskDisplayName(task)}>{taskDisplayName(task)}</strong><small title={task.source_dir}>{taskSourceLabel(task)}</small></span><span><span className={`al-badge al-badge-${view.tone}`}>{view.label}</span></span><span>{task.occurrence_count} 条</span><span title={updatedAt || undefined}>{formatDateTime(updatedAt)}</span><Button size="small" onClick={() => nav(`/tasks/${task.task_id}`)}>{["completed", "failed", "cancelled"].includes(task.status) ? "查看" : "继续"}</Button></div>; })}</div>}
           </Card>
           <Text className="al-section-heading" weight="semibold">使用流程</Text>
           <div className="al-workflow-grid"><Card className="al-card"><strong>1. 创建扫描</strong><Text className="al-muted">选择本地档案文件夹并设置精确检索词。</Text></Card><Card className="al-card"><strong>2. 处理与恢复</strong><Text className="al-muted">查看进度、暂停任务，并在异常退出后安全恢复。</Text></Card><Card className="al-card"><strong>3. 校对与导出</strong><Text className="al-muted">逐条确认命中，再导出带完整性状态的结果。</Text></Card></div>
         </section>
         <aside className="al-home-aside">
-          <Card className="al-card"><div className="al-card-heading-row"><Text weight="semibold">环境摘要</Text><Button appearance="subtle" size="small" onClick={() => nav("/diagnostics")}>查看详情</Button></div><div className="al-env-list">{checks.length === 0 && !error && <LoadingState label="正在检查本地环境…" />}{checks.map((check) => <div className="al-env-row" key={check.key}><span title={check.detail}>{check.label}</span><span className={`al-badge al-badge-${check.status}`}>{diagnosticStatusLabel(check.status)}</span></div>)}</div>{constrainedChecks[0]?.impact && <InlineFeedback tone="warning">{constrainedChecks[0].impact}</InlineFeedback>}</Card>
           <Card className="al-card"><Text weight="semibold">工作概览</Text><div className="al-metric-grid"><span><strong>{taskTotal}</strong> 本地任务</span><span><strong>{completedTaskTotal}</strong> 已完成</span><span><strong>{recentOccurrenceCount}</strong> 最近任务命中</span></div></Card>
           <Card className="al-card al-local-card"><Text weight="semibold">本地处理与隐私</Text><Text className="al-muted">OCR、校对、导出和任务恢复均在当前计算机完成。</Text></Card>
         </aside>

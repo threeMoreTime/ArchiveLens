@@ -33,6 +33,20 @@ describe("Preload API 形状（任务 §五.3）", () => {
     }
   });
 
+  it("暴露开发者边界 API，但仍不提供通用文件读取能力", () => {
+    const app = exposed.app as Record<string, unknown>;
+    const settings = exposed.settings as Record<string, unknown>;
+    for (const method of ["getVersion", "getDeveloperSnapshot", "reportRendererError", "copyDiagnosticSummary", "copyAiDebugInfo", "openRendererDevTools"]) {
+      expect(typeof app[method]).toBe("function");
+    }
+    expect(typeof settings.getDeveloperMode).toBe("function");
+    expect(typeof settings.setDeveloperMode).toBe("function");
+    // 仍不得暴露任意读文件、读日志正文或执行进程的能力
+    expect(app.readFile).toBeUndefined();
+    expect(app.readLog).toBeUndefined();
+    expect((exposed as Record<string, unknown>).files).toBeUndefined();
+  });
+
   it("subscribe.onEvent 返回 unsubscribe 函数", () => {
     const subscribe = exposed.subscribe as { onEvent: (cb: (e: unknown) => void) => unknown };
     const off = subscribe.onEvent(() => undefined);

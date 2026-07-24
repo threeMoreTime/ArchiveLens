@@ -174,3 +174,12 @@ Task 状态机 12 态（`draft/queued/starting/running/pausing/paused/stopping/c
   字节；warning 与 failure 阈值统一记录在 `scripts/quality-budgets.json`；
 * GitHub Actions 与零成本本地候选门禁均调用这些同源脚本，生成摘要只写入 gitignored
   `coverage/` 或 CI artifact，不进入正式应用包。
+
+## 开发者模式与诊断边界
+
+开发者模式是一个持久化、默认关闭的本地开关，把纯技术诊断从普通页面迁入隐藏的开发者页面。
+
+* 持久化在 `SettingsStore` 的 `developer.enabled`（设置文件版本保持 4，旧版本忽略该字段）。
+* Main 侧门禁：`ErrorRegistry`（内存保存最近一条已知错误）与 `DeveloperDiagnostics`（`Promise.allSettled` 采集快照、脱敏/完整/AI 三种剪贴板报告、日志尾部读取）位于 `src/main/diagnostics/`。完整快照、完整路径复制、AI 调试复制、打开日志目录与打开 DevTools 都必须先校验开发者模式已开启；脱敏摘要不受限。
+* 开发者相关 IPC（`settings.getDeveloperMode`/`settings.setDeveloperMode`、`app.getVersion`/`getDeveloperSnapshot`/`reportRendererError`/`copyDiagnosticSummary`/`copyAiDebugInfo`/`openRendererDevTools`）只属于 Electron Main↔Preload↔Renderer 本地边界，不经过 Python JSONL 协议，也不加入 `MethodNameSchema` 或递增 `PROTOCOL_VERSION`。
+* DevTools 通过 `BrowserWindow.fromWebContents(event.sender).webContents.openDevTools({ mode: "detach" })` 打开当前窗口；生产环境仍拦截 F12 与 Ctrl+Shift+I，隐藏页面按钮是唯一入口。

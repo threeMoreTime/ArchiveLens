@@ -3,6 +3,8 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Button, Card, Text } from "@fluentui/react-components";
 import type { TaskFailure, TaskSummary } from "../../../preload/api";
 import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
+import { DiagnosticErrorNotice } from "../components/DiagnosticErrorNotice";
+import { toDiagnosticIssue, type DiagnosticIssue } from "../utils/diagnosticIssue";
 import { formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from "../utils/presentation";
 
 type TaskData = TaskSummary & { error_code?: string; current_file?: string | null; failures?: TaskFailure[] };
@@ -16,18 +18,14 @@ const OCR_INDEX_LABELS: Record<NonNullable<TaskSummary["ocr_index_status"]>, str
   legacy_requires_reocr: "旧任务需重新 OCR",
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export default function TaskPage() {
   const { taskId = "" } = useParams();
   const nav = useNavigate();
   const location = useLocation();
   const [task, setTask] = useState<TaskData | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [action, setAction] = useState<"start" | "pause" | "resume" | "cancel" | "open-folder" | "open-logs" | null>(null);
+  const [loadIssue, setLoadIssue] = useState<DiagnosticIssue | null>(null);
+  const [actionIssue, setActionIssue] = useState<DiagnosticIssue | null>(null);
+  const [action, setAction] = useState<"start" | "pause" | "resume" | "cancel" | "open-folder" | null>(null);
   const loadSequenceRef = useRef(0);
   const legacyRequiresReview = task?.error_code === "LEGACY_TASK_REQUIRES_REVIEW";
   const corpusSearchReady = task?.ocr_index_status === "ready" || task?.ocr_index_status === "partial";
@@ -40,16 +38,16 @@ export default function TaskPage() {
       const nextTask = await window.archiveLens.tasks.get(taskId) as TaskData;
       if (sequence !== loadSequenceRef.current) return;
       setTask(nextTask);
-      setLoadError(null);
-    } catch (nextError: unknown) {
+      setLoadIssue(null);
+    } catch (error: unknown) {
       if (sequence !== loadSequenceRef.current) return;
-      setLoadError(errorMessage(nextError));
+      setLoadIssue(toDiagnosticIssue("TASK_STATUS_READ_FAILED", error));
     }
   }, [taskId]);
 
   useEffect(() => {
     setTask(null);
-    setLoadError(null);
+    setLoadIssue(null);
     void load();
     const off = window.archiveLens.subscribe.onEvent((event: { task_id?: string | null }) => {
       if (event?.task_id === taskId) void load();
@@ -59,20 +57,23 @@ export default function TaskPage() {
   }, [load, taskId]);
 
   useEffect(() => {
-    setActionError(typeof startError === "string" && startError
-      ? `任务已创建，但启动请求失败：${startError}。请检查环境后点击“启动任务”重试。`
+    setActionIssue(typeof startError === "string" && startError
+      ? toDiagnosticIssue("TASK_ACTION_FAILED", new Error(startError), {
+        what: "任务已创建，但启动请求失败。",
+        impact: "任务尚未开始处理，但已保留在本机。",
+        remedy: "请确认本地识别环境后点击“启动任务”重试。",
+      })
       : null);
   }, [startError, taskId]);
 
   const runAction = async (kind: "start" | "pause" | "resume" | "cancel") => {
     setAction(kind);
-    setActionError(null);
+    setActionIssue(null);
     try {
       await window.archiveLens.tasks[kind](taskId);
       await load();
-    } catch (nextError: unknown) {
-      const label = kind === "start" ? "启动" : kind === "pause" ? "暂停" : kind === "resume" ? "恢复" : "取消";
-      setActionError(`${label}任务失败：${errorMessage(nextError)}。任务数据仍保留在本机，可重试或查看日志。`);
+    } catch (error: unknown) {
+      setActionIssue(toDiagnosticIssue("TASK_ACTION_FAILED", error));
     } finally {
       setAction(null);
     }
@@ -81,23 +82,15 @@ export default function TaskPage() {
   const openTaskFolder = async () => {
     if (!task?.workspace_dir) return;
     setAction("open-folder");
-    setActionError(null);
+    setActionIssue(null);
     try {
       await window.archiveLens.tasks.openDirectory(taskId);
-    } catch (nextError) {
-      setActionError(`无法打开任务目录：${errorMessage(nextError)}`);
-    } finally {
-      setAction(null);
-    }
-  };
-
-  const openLogs = async () => {
-    setAction("open-logs");
-    setActionError(null);
-    try {
-      await window.archiveLens.app.openLogDirectory();
-    } catch (nextError) {
-      setActionError(`无法打开日志目录：${errorMessage(nextError)}`);
+    } catch (error) {
+      setActionIssue(toDiagnosticIssue("LOCAL_DATA_ACTION_FAILED", error, {
+        what: "无法打开任务目录。",
+        impact: "任务数据仍保留在本机，未受影响。",
+        remedy: "请稍后重试。",
+      }));
     } finally {
       setAction(null);
     }
@@ -117,11 +110,11 @@ export default function TaskPage() {
       : task.status === "stopping"
         ? "正在安全取消任务；当前页处理结束后会保留已经写入的结果，请勿重复提交取消请求。"
         : task.status === "stale"
-          ? "任务运行状态异常，已有数据仍保留在本机。请查看日志并等待状态恢复，或在确认来源后重新创建任务。"
+          ? "任务运行状态异常，已有数据仍保留在本机。请等待状态恢复，或在确认来源后重新创建任务。"
           : ["paused", "recoverable"].includes(task.status)
             ? "任务处于可恢复状态，已完成的数据已安全保留在本机。"
             : task.status === "failed"
-              ? "任务未能继续执行。已完成的数据仍会保留；查看失败原因和日志后，可使用原目录重新创建任务。"
+              ? "任务未能继续执行。已完成的数据仍会保留；查看失败原因后，可使用原目录重新创建任务。"
               : task.status === "cancelled"
                 ? "任务已取消，取消前保存的结果仍可查看和导出。"
                 : "正在从本地档案中提取 OCR 结果，进度会自动刷新。";
@@ -129,9 +122,9 @@ export default function TaskPage() {
   return (
     <div className="al-welcome al-task-page">
       <PageHeader title="扫描任务" description="查看真实扫描进度、失败明细和下一步操作；任务数据始终保留在本地工作区。" />
-      {loadError && <InlineFeedback>任务状态读取失败：{loadError} <Button size="small" onClick={() => void load()}>重试</Button></InlineFeedback>}
-      {actionError && <InlineFeedback>{actionError}</InlineFeedback>}
-      {!task && !loadError && <LoadingState label="正在读取任务状态…" />}
+      {loadIssue && <DiagnosticErrorNotice issue={loadIssue} operation="tasks.get" taskId={taskId} onRetry={() => void load()} />}
+      {actionIssue && <DiagnosticErrorNotice issue={actionIssue} operation="tasks.action" taskId={taskId} />}
+      {!task && !loadIssue && <LoadingState label="正在读取任务状态…" />}
       {task && statusView && <div className="al-task-layout">
         <section className="al-task-main">
           <Card className="al-task-card">
@@ -143,17 +136,16 @@ export default function TaskPage() {
               <Text>{knownTotal ? `已处理 ${task.processed_pages}/${task.total_pages} 页` : activeStatus ? `已处理 ${task.processed_pages} 页，正在统计总页数` : `已处理 ${task.processed_pages} 页`} · 当前状态：{statusView.label}</Text>
             </div>
           </Card>
-          <Card className="al-card al-task-status-card"><Text weight="semibold">状态说明</Text><Text className="al-muted">{statusDetail}</Text>{task.current_file && <Text className="al-task-current-file" title={task.current_file}>当前文件：{task.current_file}</Text>}{task.error_message && <InlineFeedback tone={task.failure_count > 0 ? "warning" : "error"}>{task.error_message}</InlineFeedback>}{legacyRequiresReview && <InlineFeedback tone="warning">该旧版本未完成任务缺少可信页进度。旧结果已保留，但不能自动恢复；请使用原目录创建新任务。</InlineFeedback>}</Card>
+          <Card className="al-card al-task-status-card"><Text weight="semibold">状态说明</Text><Text className="al-muted">{statusDetail}</Text>{task.current_file && <Text className="al-task-current-file" title={task.current_file}>当前文件：{task.current_file}</Text>}{legacyRequiresReview && <InlineFeedback tone="warning">该旧版本未完成任务缺少可信页进度。旧结果已保留，但不能自动恢复；请使用原目录创建新任务。</InlineFeedback>}</Card>
           <Card className="al-card"><Text weight="semibold">扫描进度</Text><div className="al-task-stat-grid"><span><strong>{task.processed_pages}</strong> 已处理页</span><span><strong>{knownTotal ? Math.max(0, task.total_pages - task.processed_pages) : "—"}</strong> {knownTotal ? "待处理页" : activeStatus ? "总页数统计中" : "总页数未记录"}</span><span><strong>{task.failure_count}</strong> 失败项</span><span><strong>{task.occurrence_count}</strong> OCR 命中</span></div></Card>
           <Card className="al-card al-task-status-card">
-            <Text weight="semibold">任务内检索语料</Text>
+            <Text weight="semibold">任务内检索覆盖</Text>
             <Text className="al-muted">状态：{task.ocr_index_status ? OCR_INDEX_LABELS[task.ocr_index_status] : "状态无法确认"} · 已索引 {task.ocr_indexed_pages ?? 0} 页</Text>
-            {task.ocr_model_id && <Text className="al-muted">统一 OCR 模型：{task.ocr_model_id}</Text>}
             {task.ocr_index_status === "partial" && <InlineFeedback tone="warning">当前只能检索已持久化页面，扫描完成前结果仍可能增加；失败页可能造成漏检。</InlineFeedback>}
             {corpusRequiresReocr && <InlineFeedback tone="warning">旧任务不能静默迁移为新语料。必须使用原来源显式重新 OCR，原有 OCR 结果不会被覆盖。</InlineFeedback>}
           </Card>
 
-          {task.failure_count > 0 && <Card className="al-card al-task-failures"><div className="al-card-heading-row"><Text weight="semibold">失败明细</Text><Button size="small" onClick={() => void openLogs()}>查看日志</Button></div>{failureDetails.length === 0 ? <InlineFeedback tone="warning">该任务来自旧版本，只记录了失败数量，未保存结构化明细。请查看日志定位原因。</InlineFeedback> : <><Text className="al-muted">以下项目可能造成漏检；修复环境或源文件后，建议使用原目录重新扫描。</Text><div className="al-failure-list">{failureDetails.map((failure, index) => <div key={failure.failure_id || `${failure.file_path}-${failure.page_number}-${index}`}><strong title={failure.file_path}>{failure.file_path || "任务级错误"}{failure.page_number ? ` · 第 ${failure.page_number} 页` : ""}</strong><span>{failure.error_type || failure.stage || "处理失败"}：{failure.error_message || "未提供错误详情"}</span><small>{failure.possible_missed_hits ? "可能存在漏检" : "未标记为漏检风险"}</small></div>)}</div>{task.failure_count > failureDetails.length && <Text className="al-muted">当前仅显示前 {failureDetails.length} 项；完整的 {task.failure_count} 项记录请在任务日志和报告中查看。</Text>}</>}</Card>}
+          {task.failure_count > 0 && <Card className="al-card al-task-failures"><Text weight="semibold">失败明细</Text>{failureDetails.length === 0 ? <InlineFeedback tone="warning">该任务来自旧版本，只记录了失败数量，未保存结构化明细。可使用原目录重新扫描以定位受影响文件。</InlineFeedback> : <><Text className="al-muted">以下项目可能造成漏检；修复环境或源文件后，建议使用原目录重新扫描。诊断码 TASK_SCAN_PARTIAL。</Text><div className="al-failure-list">{failureDetails.map((failure, index) => <div key={failure.failure_id || `${failure.file_path}-${failure.page_number}-${index}`}><strong title={failure.file_path}>{failure.file_path || "任务级错误"}{failure.page_number ? ` · 第 ${failure.page_number} 页` : ""}</strong><span>{failure.possible_missed_hits ? "可能存在漏检" : "已完成，未标记漏检风险"}</span></div>)}</div>{task.failure_count > failureDetails.length && <Text className="al-muted">当前仅显示前 {failureDetails.length} 项；完整的 {task.failure_count} 项记录可在导出报告中查看。</Text>}</>}</Card>}
         </section>
         <aside className="al-task-aside">
           <Card className="al-card">
@@ -177,9 +169,8 @@ export default function TaskPage() {
               <Button appearance="subtle" onClick={() => nav("/tasks")}>返回任务中心</Button>
             </div>
           </Card>
-          <Card className="al-card"><Text weight="semibold">数据与诊断</Text><div className="al-task-actions"><Button disabled={!task.workspace_dir || Boolean(action)} onClick={() => void openTaskFolder()}>{action === "open-folder" ? "正在打开…" : "打开任务目录"}</Button><Button disabled={Boolean(action)} onClick={() => void openLogs()}>{action === "open-logs" ? "正在打开…" : "打开应用日志"}</Button><Button onClick={() => nav("/diagnostics")}>环境诊断</Button></div></Card>
+          <Card className="al-card"><Text weight="semibold">本地数据</Text><div className="al-task-actions"><Button disabled={!task.workspace_dir || Boolean(action)} onClick={() => void openTaskFolder()}>{action === "open-folder" ? "正在打开…" : "打开任务目录"}</Button></div><Text className="al-muted">任务目录包含 OCR 页面证据、校对记录和导出文件。请在备份该目录后再进行手工清理。</Text></Card>
           <Card className="al-card"><Text weight="semibold">时间记录</Text><div className="al-task-time-list"><span>创建时间<strong>{formatDateTime(task.created_at)}</strong></span><span>开始时间<strong>{formatDateTime(task.started_at)}</strong></span><span>完成时间<strong>{formatDateTime(task.finished_at)}</strong></span></div></Card>
-          <Card className="al-card al-local-card"><Text weight="semibold">本地数据</Text><Text className="al-muted">任务目录包含 OCR 页面证据、校对记录和导出文件。请在备份该目录后再进行手工清理。</Text></Card>
         </aside>
       </div>}
     </div>

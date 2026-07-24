@@ -52,6 +52,17 @@ import {
   SourcePreflightResultSchema,
   StorageCleanupResultSchema,
 } from "@shared/index";
+import {
+  AppSettingsFileSchema,
+  DeveloperModeResultSchema,
+  DeveloperModeUpdateParamsSchema,
+  KnownErrorSnapshotSchema,
+  RendererErrorReportSchema,
+  DeveloperSnapshotParamsSchema,
+  DiagnosticCopyParamsSchema,
+  AiDebugCopyParamsSchema,
+  ClipboardCopyResultSchema,
+} from "@shared/index";
 
 const FIXTURE_DIR = path.resolve(__dirname, "../../../tests/ipc-contract/fixtures");
 const VALIDATION_CASES = JSON.parse(
@@ -666,5 +677,44 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     expect(() => parseMethodResult("exports.cancel", { export_id: "exp-2", task_id: "task-1", format: "json", status: "cancelling" })).not.toThrow();
     expect(ExportJobSchema.safeParse({ ...job, format: "xml" }).success).toBe(false);
     // B2 本身未新增协议错误码（并发冲突复用 TASK_STATE_CONFLICT）；当前 v4 由事务化批量校对合同触发。
+  });
+
+  it("Electron 本地开发者 schema 不进入 Python 方法名，设置版本保持 4", () => {
+    // 设置合同：新增 developer 字段默认关闭，版本仍为 4，向后兼容旧文件
+    const parsed = AppSettingsFileSchema.parse({});
+    expect(parsed.version).toBe(4);
+    expect(parsed.developer).toEqual({ enabled: false });
+    const legacy = AppSettingsFileSchema.parse({ version: 1, appearance: {}, task_overrides: {} });
+    expect(legacy.version).toBe(4);
+    expect(legacy.developer.enabled).toBe(false);
+
+    // 开发者本地方法不属于 Python JSONL 协议，因此不加入 MethodNameSchema
+    for (const method of [
+      "settings.getDeveloperMode",
+      "settings.setDeveloperMode",
+      "app.getVersion",
+      "app.getDeveloperSnapshot",
+      "app.reportRendererError",
+      "app.copyDiagnosticSummary",
+      "app.copyAiDebugInfo",
+      "app.openRendererDevTools",
+    ]) {
+      expect(MethodNameSchema.safeParse(method).success, method).toBe(false);
+    }
+
+    // 本地 schema 正常解析
+    expect(DeveloperModeResultSchema.safeParse({ enabled: true }).success).toBe(true);
+    expect(DeveloperModeUpdateParamsSchema.safeParse({ enabled: false }).success).toBe(true);
+    expect(DiagnosticCopyParamsSchema.safeParse({ mode: "redacted" }).success).toBe(true);
+    expect(DiagnosticCopyParamsSchema.safeParse({ mode: "full", task_id: "t1" }).success).toBe(true);
+    expect(DiagnosticCopyParamsSchema.safeParse({ mode: "bogus" }).success).toBe(false);
+    expect(AiDebugCopyParamsSchema.safeParse({ task_id: "t1", occurrence_id: "o1" }).success).toBe(true);
+    expect(ClipboardCopyResultSchema.safeParse({ mode: "ai_debug", char_count: 10, log_line_count: 3, includes_ocr_context: true, ocr_context_status: "included" }).success).toBe(true);
+    expect(RendererErrorReportSchema.safeParse({ operation: "tasks.list", message: "x" }).success).toBe(true);
+    expect(KnownErrorSnapshotSchema.safeParse({ time: "t", source: "sidecar", operation: "op", task_id: null, code: "X", message: "m", stack: null }).success).toBe(true);
+    expect(DeveloperSnapshotParamsSchema.safeParse({}).success).toBe(true);
+    // 错误码闭合枚举未新增开发者本地错误码
+    expect(ErrorCodeSchema.safeParse("DEVELOPER_MODE_REQUIRED").success).toBe(false);
+    expect(ErrorCodeSchema.safeParse("DIAGNOSTIC_PAYLOAD_TOO_LARGE").success).toBe(false);
   });
 });

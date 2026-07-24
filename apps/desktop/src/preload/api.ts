@@ -1,5 +1,10 @@
 import type {
   AppInfoResult,
+  AiDebugCopyParams,
+  ClipboardCopyResult,
+  DeveloperModeResult,
+  DeveloperSnapshot,
+  DiagnosticCopyParams,
   DiagnosticsResult,
   Event,
   OcrCorpusStatusResult,
@@ -10,6 +15,7 @@ import type {
   OcrSearchSessionsResult,
   LayoutContext,
   LayoutRebuildProgress,
+  RendererErrorReport,
   ReviewDisplayPreferences,
   ReviewHighlightSettingsResult,
   ReviewHighlightSettingsUpdateParams,
@@ -253,11 +259,17 @@ export interface DemoResult {
 export interface ArchiveLensApi {
   app: {
     getInfo(): Promise<AppInfoResult>;
+    getVersion(): Promise<string>;
     getEnvironment(): Promise<EnvironmentInfo>;
     getLocalDataSummary(): Promise<LocalDataSummary>;
     cleanupTemporaryData(): Promise<StorageCleanupResult>;
     openUserDataDirectory(): Promise<void>;
     openLogDirectory(): Promise<void>;
+    getDeveloperSnapshot(p?: { task_id?: string }): Promise<DeveloperSnapshot>;
+    reportRendererError(p: RendererErrorReport): Promise<{ ok: boolean }>;
+    copyDiagnosticSummary(p: DiagnosticCopyParams): Promise<ClipboardCopyResult>;
+    copyAiDebugInfo(p: AiDebugCopyParams): Promise<ClipboardCopyResult>;
+    openRendererDevTools(): Promise<{ ok: boolean }>;
   };
   dialog: {
     selectFolder(): Promise<string | null>;
@@ -368,6 +380,8 @@ export interface ArchiveLensApi {
   settings: {
     get(task_id?: string): Promise<ReviewHighlightSettingsResult>;
     update(p: ReviewHighlightSettingsUpdateParams): Promise<ReviewHighlightSettingsResult>;
+    getDeveloperMode(): Promise<DeveloperModeResult>;
+    setDeveloperMode(p: { enabled: boolean }): Promise<DeveloperModeResult>;
   };
   test?: {
     lifecycle: {

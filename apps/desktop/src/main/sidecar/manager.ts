@@ -12,6 +12,7 @@ import {
   type Event,
 } from "@shared/index";
 import { logger } from "../logging/logger";
+import { errorRegistry } from "../diagnostics/errorRegistry";
 
 export const SIDECAR_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_REQ_TIMEOUT_MS = 30_000;
@@ -149,6 +150,13 @@ export class SidecarManager extends EventEmitter {
     );
     this.lastStartupError = error;
     logger.error(error.message);
+    errorRegistry.record({
+      source: "sidecar",
+      operation: "engine.ready",
+      code: error.code,
+      message: error.message,
+      details: error.details,
+    });
     waiter.reject(error);
     this.terminateProtocolFault();
   }
@@ -280,6 +288,13 @@ export class SidecarManager extends EventEmitter {
     }
     this.pending.clear();
     logger.error(`Sidecar protocol mismatch stage=${stage} expected=${PROTOCOL_VERSION} actual=${String(actual)}`);
+    errorRegistry.record({
+      source: "sidecar",
+      operation: `protocol:${stage}`,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+    });
     this.emit("protocolError", error);
     this.terminateProtocolFault();
   }
@@ -309,10 +324,13 @@ export class SidecarManager extends EventEmitter {
       return Promise.reject(new EngineError("ENGINE_CRASHED", "Sidecar 未运行"));
     }
     const request_id = randomUUID();
+    const taskId = typeof params["task_id"] === "string" ? params["task_id"] : null;
     return new Promise<Response>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pending.delete(request_id)) {
-          reject(new EngineError("IPC_TIMEOUT", `${method} 超时 ${timeoutMs}ms`));
+          const error = new EngineError("IPC_TIMEOUT", `${method} 超时 ${timeoutMs}ms`);
+          errorRegistry.record({ source: "sidecar", operation: method, taskId, code: error.code, message: error.message });
+          reject(error);
         }
       }, timeoutMs);
       this.pending.set(request_id, { resolve, reject, timer });
@@ -322,7 +340,9 @@ export class SidecarManager extends EventEmitter {
       } catch (error) {
         clearTimeout(timer);
         this.pending.delete(request_id);
-        reject(new EngineError("ENGINE_CRASHED", `Sidecar request write failed: ${String(error)}`));
+        const engineError = new EngineError("ENGINE_CRASHED", `Sidecar request write failed: ${String(error)}`);
+        errorRegistry.record({ source: "sidecar", operation: method, taskId, code: engineError.code, message: engineError.message });
+        reject(engineError);
       }
     });
   }
@@ -331,6 +351,14 @@ export class SidecarManager extends EventEmitter {
   async call<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
     const resp = await this.request(method, params, timeoutMs);
     if (!resp.ok) {
+      errorRegistry.record({
+        source: "engine",
+        operation: method,
+        taskId: typeof params["task_id"] === "string" ? params["task_id"] : null,
+        code: resp.error.code,
+        message: resp.error.message,
+        details: resp.error.details,
+      });
       throw new EngineError(resp.error.code, resp.error.message, resp.error.details);
     }
     try {
@@ -350,6 +378,15 @@ export class SidecarManager extends EventEmitter {
       logger.warn(line);
     } else {
       logger.error(line);
+    }
+    if (!classification.expected) {
+      errorRegistry.record({
+        source: "sidecar",
+        operation: "sidecar.exit",
+        code: classification.kind === "crash" ? "ENGINE_CRASHED" : "ENGINE_STOPPED",
+        message: line,
+        details: { code, signal, kind: classification.kind, stderr_tail: this.stderrTail.slice(-20) },
+      });
     }
     this.requestedExitReason = null;
     this.ready = false;

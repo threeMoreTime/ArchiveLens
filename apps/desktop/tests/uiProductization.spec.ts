@@ -16,7 +16,9 @@ const reviewHighlightSettings = source("components/ReviewHighlightSettings.tsx")
 const layoutContextCanvas = source("components/LayoutContextCanvas.tsx");
 const exportPage = source("pages/ExportPage.tsx");
 const taskCenter = source("pages/TaskCenter.tsx");
-const diagnosticsPage = source("pages/DiagnosticsPage.tsx");
+const developerPage = source("pages/DeveloperPage.tsx");
+const developerTrigger = source("components/DeveloperModeTrigger.tsx");
+const diagnosticErrorNotice = source("components/DiagnosticErrorNotice.tsx");
 const settingsPage = source("pages/SettingsPage.tsx");
 const scriptSearchSettings = source("components/ScriptSearchSettings.tsx");
 const reviewShortcutSettings = source("components/ReviewShortcutSettings.tsx");
@@ -169,7 +171,7 @@ describe("桌面端产品化 UI contract", () => {
     expect(searchPage).toContain("只命中繁体");
     expect(searchPage).toContain("简体和繁体");
     expect(searchPage).toContain("OCR 原文（不可变）");
-    expect(searchPage).toContain("OCR Top-K 候选");
+    expect(searchPage).toContain("低置信候选");
     expect(searchPage).toContain("版面 OCR 上下文");
     expect(searchPage).toContain("LayoutContextCanvas");
     expect(searchPage).toContain("不能静默迁移");
@@ -201,7 +203,7 @@ describe("桌面端产品化 UI contract", () => {
     expect(styles).toContain("overflow:auto");
   });
 
-  it("设置页集中承载显示偏好，并从设置进入独立环境诊断页", () => {
+  it("设置页集中承载显示偏好，并把技术诊断迁入隐藏开发者入口", () => {
     expect(app).toContain('to="/settings"');
     expect(app).toContain('path="/settings"');
     expect(app).not.toContain('to="/diagnostics"');
@@ -217,8 +219,14 @@ describe("桌面端产品化 UI contract", () => {
     expect(reviewHighlightSettings).toContain("全局默认");
     expect(reviewHighlightSettings).toContain("指定任务");
     expect(reviewHighlightSettings).toContain("选择任务");
-    expect(settingsPage).toContain('nav("/diagnostics")');
-    expect(settingsPage).toContain("打开环境诊断");
+    // 环境诊断入口已移除，改为隐藏开发者入口（未解锁不渲染开发者按钮）
+    expect(settingsPage).not.toContain('nav("/diagnostics")');
+    expect(settingsPage).not.toContain("打开环境诊断");
+    expect(settingsPage).not.toContain("打开日志目录");
+    expect(settingsPage).not.toContain("localData.user_data_path");
+    expect(settingsPage).toContain("DeveloperModeTrigger");
+    expect(settingsPage).toContain("developerEnabled &&");
+    expect(settingsPage).toContain('nav("/settings/developer")');
   });
 
   it("导出页读取任务全量结果，并使用受限的预加载导出 API", () => {
@@ -298,11 +306,80 @@ describe("桌面端产品化 UI contract", () => {
     expect(styles).toContain("@media (forced-colors:active)");
   });
 
-  it("环境诊断展示影响、处理建议、重试和日志入口", () => {
-    expect(diagnosticsPage).toContain("check.impact");
-    expect(diagnosticsPage).toContain("check.remedy");
-    expect(diagnosticsPage).toContain("runDiagnostics");
-    expect(diagnosticsPage).toContain("openLogDirectory");
+  it("开发者页面承载技术诊断、复制入口、DevTools 与退出，且默认折叠原始 JSON", () => {
+    expect(developerPage).toContain("重新诊断");
+    expect(developerPage).toContain("复制诊断摘要");
+    expect(developerPage).toContain("复制含完整路径信息");
+    expect(developerPage).toContain("复制 AI 错误调试信息");
+    expect(developerPage).toContain("打开日志目录");
+    expect(developerPage).toContain("打开本地数据目录");
+    expect(developerPage).toContain("打开渲染器开发者工具");
+    expect(developerPage).toContain("退出开发者模式");
+    expect(developerPage).toContain("window.archiveLens.app.getDeveloperSnapshot");
+    expect(developerPage).toContain("window.archiveLens.app.copyAiDebugInfo");
+    expect(developerPage).toContain("window.archiveLens.app.openRendererDevTools");
+    expect(developerPage).toContain("window.archiveLens.settings.getDeveloperMode");
+    // 进入时重新校验开发者模式，未启用则 replace 到 /settings
+    expect(developerPage).toContain('nav("/settings", { replace: true })');
+    // 原始 JSON 默认折叠、使用 details/pre，且不渲染日志正文
+    expect(developerPage).toContain("<details className=\"al-developer-raw\">");
+    expect(developerPage).toContain("al-developer-raw-pre");
+    // 确认框使用 Fluent Dialog，不得使用 window.confirm
+    expect(developerPage).toContain("<Dialog");
+    expect(developerPage).not.toContain("window.confirm");
+    expect(developerPage).toContain("复制含完整路径的诊断信息？");
+    expect(developerPage).toContain("复制完整 AI 错误调试信息？");
+    expect(developerPage).toContain("只写入本机剪贴板，不会自动发送");
+    // 读取校对页记录的 occurrence ID
+    expect(developerPage).toContain("archivelens.lastReviewOccurrence.");
+  });
+
+  it("隐藏开发者入口按 3 秒内连点 7 次解锁，并逐步提示剩余次数", () => {
+    expect(developerTrigger).toContain("REQUIRED_TAPS = 7");
+    expect(developerTrigger).toContain("RESET_WINDOW_MS = 3000");
+    expect(developerTrigger).toContain("再点击 ${REQUIRED_TAPS - count} 次进入开发者模式");
+    expect(developerTrigger).toContain("已进入开发者模式");
+    expect(developerTrigger).toContain("window.archiveLens.settings.setDeveloperMode({ enabled: true })");
+    expect(developerTrigger).toContain('aria-live="polite"');
+  });
+
+  it("统一诊断错误组件只渲染业务信息，原始错误只上报", () => {
+    expect(diagnosticErrorNotice).toContain("reportRendererError");
+    expect(diagnosticErrorNotice).toContain("copyDiagnosticSummary");
+    expect(diagnosticErrorNotice).toContain("issue.what");
+    expect(diagnosticErrorNotice).toContain("issue.impact");
+    expect(diagnosticErrorNotice).toContain("issue.remedy");
+    expect(diagnosticErrorNotice).toContain("issue.code");
+    expect(diagnosticErrorNotice).not.toContain("issue.rawMessage}");
+  });
+
+  it("普通页面不再出现 OCR 模型、绝对运行路径与原始 stage/type/error", () => {
+    expect(taskPage).not.toContain("统一 OCR 模型");
+    expect(taskPage).not.toContain("task.ocr_model_id");
+    expect(taskPage).not.toContain("task.error_message");
+    expect(taskPage).not.toContain("failure.error_type");
+    expect(taskPage).not.toContain("failure.stage");
+    expect(taskPage).not.toContain('nav("/diagnostics")');
+    expect(taskPage).not.toContain("openLogDirectory");
+    expect(taskPage).toContain("DiagnosticErrorNotice");
+    expect(taskPage).toContain("TASK_SCAN_PARTIAL");
+    // 导出页移除完整输出路径与原始错误
+    expect(exportPage).not.toContain("job.error_message");
+    expect(exportPage).not.toContain("job.cleanup_error_message");
+    expect(exportPage).not.toContain("title={job.output_path}");
+    expect(exportPage).not.toContain("title={item.path}");
+    expect(exportPage).toContain("EXPORT_JOB_FAILED");
+    // 首页移除逐组件环境摘要与诊断入口
+    expect(welcome).not.toContain('nav("/diagnostics")');
+    expect(welcome).not.toContain("环境摘要");
+    expect(welcome).toContain("DiagnosticErrorNotice");
+    // 置信度统一整数百分比
+    expect(reviewPage).toContain("Math.round(value * 100)}%");
+    expect(reviewPage).not.toContain("value.toFixed(2)");
+    expect(searchPage).toContain("Math.round(selected.line_confidence * 100)}%");
+    expect(searchPage).not.toContain("line_confidence.toFixed(3)");
+    // 校对页移除“已加载 x/y”
+    expect(reviewPage).not.toContain("已加载 ");
   });
 
   it("设置页透明展示本地明文、逐任务占用与安全临时清理边界", () => {

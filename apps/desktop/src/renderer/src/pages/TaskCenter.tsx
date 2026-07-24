@@ -22,6 +22,8 @@ import { DocumentAddRegular, SearchRegular } from "@fluentui/react-icons";
 import { useNavigate } from "react-router-dom";
 import type { TaskSummary } from "../../../preload/api";
 import { EmptyState, InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
+import { DiagnosticErrorNotice } from "../components/DiagnosticErrorNotice";
+import { toDiagnosticIssue, toRendererErrorReport, type DiagnosticIssue } from "../utils/diagnosticIssue";
 import { cleanupStatusView, effectiveCleanupStatus, formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from "../utils/presentation";
 import { batchActionLabel, batchEligibility, batchPreview, type BatchTaskAction } from "../utils/taskBatchActions";
 
@@ -59,10 +61,6 @@ function primaryActionId(status: string): string {
   return "details";
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "无法读取任务，请重试";
-}
-
 export default function TaskCenter() {
   const nav = useNavigate();
   const [items, setItems] = useState<TaskSummary[]>([]);
@@ -72,8 +70,8 @@ export default function TaskCenter() {
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [actionError, setActionError] = useState("");
+  const [loadIssue, setLoadIssue] = useState<DiagnosticIssue | null>(null);
+  const [actionIssue, setActionIssue] = useState<DiagnosticIssue | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TaskSummary | null>(null);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
   const [taskAction, setTaskAction] = useState<{ taskId: string; kind: TaskControlAction } | null>(null);
@@ -87,7 +85,7 @@ export default function TaskCenter() {
   const load = useCallback(async () => {
     const sequence = ++loadSequenceRef.current;
     setLoading(true);
-    setError("");
+    setLoadIssue(null);
     try {
       const response = await window.archiveLens.tasks.list({
         limit: PAGE_SIZE,
@@ -101,7 +99,7 @@ export default function TaskCenter() {
       const lastPage = Math.max(0, Math.ceil(response.total / PAGE_SIZE) - 1);
       if (pageIndex > lastPage) setPageIndex(lastPage);
     } catch (nextError) {
-      if (sequence === loadSequenceRef.current) setError(errorMessage(nextError));
+      if (sequence === loadSequenceRef.current) setLoadIssue(toDiagnosticIssue("TASK_LIST_LOAD_FAILED", nextError));
     } finally {
       if (sequence === loadSequenceRef.current) setLoading(false);
     }
@@ -134,11 +132,11 @@ export default function TaskCenter() {
     const taskId = deleteTarget.task_id;
     setDeletingTaskId(taskId);
     setDeleteTarget(null);
-    setActionError("");
+    setActionIssue(null);
     try {
       await window.archiveLens.tasks.delete(taskId);
     } catch (nextError) {
-      setActionError(`删除任务失败：${errorMessage(nextError)}`);
+      setActionIssue(toDiagnosticIssue("TASK_ACTION_FAILED", nextError, { what: "删除任务失败。" }));
     } finally {
       await load();
       setDeletingTaskId(null);
@@ -146,33 +144,33 @@ export default function TaskCenter() {
   };
   const retryCleanup = async (taskId: string) => {
     setDeletingTaskId(taskId);
-    setActionError("");
+    setActionIssue(null);
     try {
       await window.archiveLens.tasks.delete(taskId);
       await load();
     } catch (nextError) {
-      setActionError(`重试清理失败：${errorMessage(nextError)}`);
+      setActionIssue(toDiagnosticIssue("TASK_ACTION_FAILED", nextError, { what: "重试清理失败。" }));
     } finally {
       setDeletingTaskId(null);
     }
   };
   const openCleanupDir = async (taskId: string) => {
-    setActionError("");
+    setActionIssue(null);
     try {
       await window.archiveLens.tasks.openCleanupDir(taskId);
     } catch (nextError) {
-      setActionError(`打开残留目录失败：${errorMessage(nextError)}`);
+      setActionIssue(toDiagnosticIssue("LOCAL_DATA_ACTION_FAILED", nextError, { what: "无法打开残留目录。" }));
     }
   };
   const runTaskAction = async (taskId: string, kind: TaskControlAction) => {
     setTaskAction({ taskId, kind });
-    setActionError("");
+    setActionIssue(null);
     try {
       await window.archiveLens.tasks[kind](taskId);
       await load();
     } catch (nextError) {
       const label = { start: "启动", pause: "暂停", resume: "继续", cancel: "取消" }[kind];
-      setActionError(`${label}任务失败：${errorMessage(nextError)}`);
+      setActionIssue(toDiagnosticIssue("TASK_ACTION_FAILED", nextError, { what: `${label}任务失败。` }));
     } finally {
       setTaskAction(null);
     }
@@ -185,7 +183,7 @@ export default function TaskCenter() {
     const skipped: BatchResultItem[] = [];
     const failed: BatchResultItem[] = [];
     setBatchReport(null);
-    setActionError("");
+    setActionIssue(null);
     setBatchRun({ action, currentTaskId: null });
     try {
       for (const target of boundedTargets) {
@@ -194,7 +192,8 @@ export default function TaskCenter() {
         try {
           current = await window.archiveLens.tasks.get(target.taskId);
         } catch (nextError) {
-          failed.push({ ...target, message: `读取最新状态失败：${errorMessage(nextError)}` });
+          failed.push({ ...target, message: "读取最新状态失败，已跳过。诊断码 TASK_STATUS_READ_FAILED。" });
+          void window.archiveLens.app.reportRendererError(toRendererErrorReport("tasks.get", toDiagnosticIssue("TASK_STATUS_READ_FAILED", nextError), target.taskId)).catch(() => undefined);
           continue;
         }
         const eligibility = batchEligibility(current, action);
@@ -208,7 +207,8 @@ export default function TaskCenter() {
           if (action === "delete") await window.archiveLens.tasks.delete(target.taskId);
           success.push({ ...target, message: eligibility.label });
         } catch (nextError) {
-          failed.push({ ...target, message: errorMessage(nextError) });
+          failed.push({ ...target, message: "操作失败，请稍后重试。诊断码 TASK_ACTION_FAILED。" });
+          void window.archiveLens.app.reportRendererError(toRendererErrorReport("tasks.batch", toDiagnosticIssue("TASK_ACTION_FAILED", nextError), target.taskId)).catch(() => undefined);
         }
       }
       setBatchReport({ action, requested: boundedTargets.length, success, skipped, failed });
@@ -321,10 +321,10 @@ export default function TaskCenter() {
         </Card>
       )}
 
-      {error && <InlineFeedback>任务列表加载失败：{error} <Button size="small" onClick={() => void load()}>重试</Button></InlineFeedback>}
-      {actionError && <InlineFeedback tone="error">{actionError}</InlineFeedback>}
+      {loadIssue && <DiagnosticErrorNotice issue={loadIssue} operation="tasks.list" onRetry={() => void load()} />}
+      {actionIssue && <DiagnosticErrorNotice issue={actionIssue} operation="tasks.action" />}
       {loading && items.length === 0 && <LoadingState label="正在读取全部本地任务…" />}
-      {!loading && !error && items.length === 0 && (
+      {!loading && !loadIssue && items.length === 0 && (
         <EmptyState
           title={query || status ? "没有符合条件的任务" : "尚无本地任务"}
           detail={query || status ? "尝试清除筛选或更换关键词。" : "创建扫描后，可从这里继续、校对或导出。"}

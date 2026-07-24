@@ -17,13 +17,14 @@ describe("完整离线安装包", () => {
 
   it("打包配置包含运行组件、许可证和 DjVu 对应源码", () => {
     const builder = readFileSync(path.join(root, "apps/desktop/electron-builder.yml"), "utf-8");
-    const diagnostics = readFileSync(path.join(root, "apps/desktop/src/renderer/src/pages/DiagnosticsPage.tsx"), "utf-8");
+    const developer = readFileSync(path.join(root, "apps/desktop/src/renderer/src/pages/DeveloperPage.tsx"), "utf-8");
     expect(builder).toContain("to: native/tesseract");
     expect(builder).toContain("to: native/djvulibre");
     expect(builder).toContain("to: licenses");
     expect(builder).toContain("to: sources");
-    expect(diagnostics).toContain("ArchiveLens 安装包内置");
-    expect(diagnostics).toContain("实际路径");
+    // 组件来源与完整路径已迁入开发者页面
+    expect(developer).toContain("来源：");
+    expect(developer).toContain("路径：");
   });
 
   it("安装版与 Portable 的本地数据保留合同明确且不在卸载时删除", () => {

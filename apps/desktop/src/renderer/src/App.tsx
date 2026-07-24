@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { ClipboardTaskListLtrRegular, DocumentAddRegular, EditRegular, HomeRegular, PanelLeftContractRegular, PanelLeftExpandRegular, SearchRegular, SettingsRegular, ShareRegular } from "@fluentui/react-icons";
 import type { TaskSummary } from "../../preload/api";
 import ExportPage from "./pages/ExportPage";
@@ -9,7 +9,7 @@ import TaskPage from "./pages/TaskPage";
 import ReviewPage from "./pages/ReviewPage";
 import SearchPage from "./pages/SearchPage";
 import TaskCenter from "./pages/TaskCenter";
-import DiagnosticsPage from "./pages/DiagnosticsPage";
+import DeveloperPage from "./pages/DeveloperPage";
 import SettingsPage from "./pages/SettingsPage";
 import { taskDisplayName } from "./utils/presentation";
 import brandIconUrl from "../../../resources/icon-64.png";
@@ -189,7 +189,7 @@ export default function App() {
           </div>
         )}
         <div className="al-sidebar-footer">
-          <NavLink to="/settings" aria-label={sidebarCollapsed ? "设置" : undefined} title={sidebarCollapsed ? "设置" : undefined} className={({ isActive }) => "al-navlink al-settings-navlink" + (isActive || location.pathname === "/diagnostics" ? " active" : "")}><SettingsRegular /><span className="al-nav-label">设置</span></NavLink>
+          <NavLink to="/settings" aria-label={sidebarCollapsed ? "设置" : undefined} title={sidebarCollapsed ? "设置" : undefined} className={({ isActive }) => "al-navlink al-settings-navlink" + (isActive || location.pathname.startsWith("/settings") ? " active" : "")}><SettingsRegular /><span className="al-nav-label">设置</span></NavLink>
         </div>
       </aside>
       <main id="main-content" tabIndex={-1} ref={mainRef} className={"al-main" + (isWorkbenchRoute ? " al-main-review" : "")}>
@@ -202,8 +202,9 @@ export default function App() {
           <Route path="/search/:taskId" element={<SearchPage />} />
           <Route path="/export" element={<ExportPage />} />
           <Route path="/export/:taskId" element={<ExportPage />} />
-          <Route path="/diagnostics" element={<DiagnosticsPage />} />
+          <Route path="/diagnostics" element={<Navigate to="/settings" replace />} />
           <Route path="/settings" element={<SettingsPage currentTaskId={currentTaskId} />} />
+          <Route path="/settings/developer" element={<DeveloperPage currentTaskId={currentTaskId} />} />
         </Routes>
       </main>
     </div>

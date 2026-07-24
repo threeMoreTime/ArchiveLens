@@ -6,6 +6,7 @@ import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback
 import { ReviewHighlightSettings, type HighlightTaskOption } from "../components/ReviewHighlightSettings";
 import { ReviewShortcutSettings } from "../components/ReviewShortcutSettings";
 import { ScriptSearchSettings } from "../components/ScriptSearchSettings";
+import { DeveloperModeTrigger } from "../components/DeveloperModeTrigger";
 import { taskDisplayName } from "../utils/presentation";
 
 interface SettingsPageProps {
@@ -53,6 +54,15 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
   const [cleanupConfirming, setCleanupConfirming] = useState(false);
   const [cleaning, setCleaning] = useState(false);
   const [cleanupFeedback, setCleanupFeedback] = useState("");
+  const [appVersion, setAppVersion] = useState("");
+  const [developerEnabled, setDeveloperEnabled] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void window.archiveLens.app.getVersion().then((version) => { if (active) setAppVersion(version); }).catch(() => undefined);
+    void window.archiveLens.settings.getDeveloperMode().then(({ enabled }) => { if (active) setDeveloperEnabled(enabled); }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   const loadLocalData = useCallback(async () => {
     setLocalDataLoading(true);
@@ -95,15 +105,6 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
     }
   };
 
-  const openLogs = async () => {
-    setLocalDataError("");
-    try {
-      await window.archiveLens.app.openLogDirectory();
-    } catch (error) {
-      setLocalDataError(`无法打开日志目录：${errorMessage(error)}`);
-    }
-  };
-
   const openTaskData = async (taskId: string) => {
     setLocalDataError("");
     try {
@@ -123,8 +124,11 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
     setLocalDataError("");
     try {
       const result = await window.archiveLens.app.cleanupTemporaryData();
+      const incomplete = result.failed > 0 || result.remaining > 0;
       setCleanupFeedback(
-        `已尝试 ${result.attempted} 项：清理完成 ${result.completed} 项，失败 ${result.failed} 项，仍待处理 ${result.remaining} 项。${result.skipped_active ? ` 已跳过 ${result.skipped_active} 个运行中导出。` : ""}`,
+        incomplete
+          ? "部分导出临时残留未能清理，正式任务数据与成功导出不受影响，可稍后重试。"
+          : "已清理导出临时残留，正式任务数据与成功导出不受影响。",
       );
       setCleanupConfirming(false);
       await loadLocalData();
@@ -167,20 +171,18 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
               <div><Text weight="semibold" size={500}>本地数据与隐私</Text><Text className="al-muted">ArchiveLens 不上传档案，但数据库、OCR 原文、索引、页面图片、校对备注和导出默认以本地明文保存；本地处理不等于应用级加密。</Text></div>
             </div>
             <InlineFeedback tone="warning">同一 Windows 账户下能读取这些目录的程序也可能读取内容。敏感档案请同时使用 Windows 账户保护与磁盘加密；导出的 HTML/JSON 也应按敏感文件管理。</InlineFeedback>
-            <div className="al-inline-actions"><Button appearance="primary" onClick={() => void openUserData()}>打开本地数据目录</Button><Button onClick={() => void openLogs()}>打开日志目录</Button><Button disabled={localDataLoading} onClick={() => void loadLocalData()}>{localDataLoading ? "正在统计…" : "刷新占用"}</Button></div>
+            <div className="al-inline-actions"><Button appearance="primary" onClick={() => void openUserData()}>打开本地数据目录</Button><Button disabled={localDataLoading} onClick={() => void loadLocalData()}>{localDataLoading ? "正在统计…" : "刷新占用"}</Button></div>
             {localDataLoading && !localData && <LoadingState label="正在统计本地数据占用…" />}
             {localDataError && <InlineFeedback>{localDataError}</InlineFeedback>}
             {localData && <>
               <dl className="al-local-data-summary">
                 <div><dt>当前可读数据合计</dt><dd>{formatDataSize(localData.total_bytes)}</dd></div>
                 <div><dt>数据库（OCR 原文、索引、校对与任务记录）</dt><dd>{formatDataSize(localData.database_bytes)}</dd></div>
-                <div><dt>数据库迁移备份（最近 3 份）</dt><dd>{formatDataSize(localData.migration_backup_bytes)}</dd></div>
-                <div><dt>任务派生数据（页面图片、crop 等）</dt><dd>{formatDataSize(localData.task_derived_bytes)}</dd></div>
+                <div><dt>任务派生数据（页面图片等）</dt><dd>{formatDataSize(localData.task_derived_bytes)}</dd></div>
                 <div><dt>成功导出</dt><dd>{formatDataSize(localData.export_bytes)}</dd></div>
                 <div><dt>导出临时残留</dt><dd>{formatDataSize(localData.temporary_export_bytes)}</dd></div>
                 <div><dt>日志 / 设置 / 其他</dt><dd>{formatDataSize(localData.log_bytes + localData.settings_bytes + localData.other_bytes)}</dd></div>
               </dl>
-              <Text className="al-muted" title={localData.user_data_path}>位置：{localData.user_data_path}</Text>
               {!localData.complete && <InlineFeedback tone="warning">统计不完整：跳过 {localData.skipped_link_count} 个链接，{localData.unreadable_entry_count} 项无法读取。显示数字仅代表当前可读取内容。</InlineFeedback>}
               <details className="al-local-task-usage">
                 <summary>查看各任务占用（{localData.tasks.length}）</summary>
@@ -202,14 +204,20 @@ export default function SettingsPage({ currentTaskId }: SettingsPageProps) {
         </main>
 
         <aside className="al-settings-aside">
-          <Card className="al-card al-settings-section">
-            <Text weight="semibold" size={500}>环境与诊断</Text>
-            <Text className="al-muted">检查 OCR 引擎、语言包、文件格式支持和本地工作目录。</Text>
-            <Button appearance="primary" onClick={() => nav("/diagnostics")}>打开环境诊断</Button>
-          </Card>
+          {developerEnabled && (
+            <Card className="al-card al-settings-section al-developer-entry">
+              <Text weight="semibold" size={500}>开发者</Text>
+              <Text className="al-muted">技术诊断、版本、路径与调试导出已迁移到独立的开发者页面。</Text>
+              <Button appearance="primary" onClick={() => nav("/settings/developer")}>打开开发者页面</Button>
+            </Card>
+          )}
           <Card className="al-card al-settings-section al-settings-local-note">
             <Text weight="semibold">本地设置</Text>
             <Text className="al-muted">设置仅保存在本机，不会修改原始文件。简繁范围用于任务内搜索；出处页始终按源文件无损显示；上下文配置会在创建扫描任务时写入新任务。</Text>
+          </Card>
+          <Card className="al-card al-settings-section al-settings-about">
+            <Text weight="semibold">关于</Text>
+            <DeveloperModeTrigger version={appVersion || "…"} onUnlocked={() => setDeveloperEnabled(true)} />
           </Card>
         </aside>
       </div>

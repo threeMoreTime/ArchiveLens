@@ -5,11 +5,17 @@ import type { Event } from "@shared/index";
 const api: ArchiveLensApi = {
   app: {
     getInfo: () => ipcRenderer.invoke("app.getInfo"),
+    getVersion: () => ipcRenderer.invoke("app.getVersion"),
     getEnvironment: () => ipcRenderer.invoke("app.getEnvironment"),
     getLocalDataSummary: () => ipcRenderer.invoke("app.getLocalDataSummary"),
     cleanupTemporaryData: () => ipcRenderer.invoke("app.cleanupTemporaryData"),
     openUserDataDirectory: () => ipcRenderer.invoke("app.openUserDataDirectory"),
     openLogDirectory: () => ipcRenderer.invoke("app.openLogDirectory"),
+    getDeveloperSnapshot: (p) => ipcRenderer.invoke("app.getDeveloperSnapshot", p ?? {}),
+    reportRendererError: (p) => ipcRenderer.invoke("app.reportRendererError", p),
+    copyDiagnosticSummary: (p) => ipcRenderer.invoke("app.copyDiagnosticSummary", p),
+    copyAiDebugInfo: (p) => ipcRenderer.invoke("app.copyAiDebugInfo", p),
+    openRendererDevTools: () => ipcRenderer.invoke("app.openRendererDevTools"),
   },
   dialog: {
     selectFolder: () => ipcRenderer.invoke("dialog.selectFolder"),
@@ -87,6 +93,8 @@ const api: ArchiveLensApi = {
   settings: {
     get: (task_id) => ipcRenderer.invoke("settings.get", task_id ? { task_id } : {}),
     update: (p) => ipcRenderer.invoke("settings.update", p),
+    getDeveloperMode: () => ipcRenderer.invoke("settings.getDeveloperMode"),
+    setDeveloperMode: (p) => ipcRenderer.invoke("settings.setDeveloperMode", p),
   },
 };
 

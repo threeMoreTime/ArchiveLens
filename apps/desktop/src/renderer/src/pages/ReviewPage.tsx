@@ -57,8 +57,10 @@ import {
 } from "@shared/index";
 import type { TaskSummary } from "../../../preload/api";
 import { InlineFeedback, LoadingState } from "../components/feedback";
+import { DiagnosticErrorNotice } from "../components/DiagnosticErrorNotice";
 import { LayoutContextCanvas, layoutContextSubtitle } from "../components/LayoutContextCanvas";
 import { highlightBackground } from "../components/ReviewHighlightSettings";
+import { toDiagnosticIssue } from "../utils/diagnosticIssue";
 import { taskDisplayName } from "../utils/presentation";
 import {
   getReviewShortcutAction,
@@ -216,7 +218,7 @@ function errorMessage(error: unknown) {
 }
 
 function confidenceLabel(value: number | null) {
-  return typeof value === "number" ? value.toFixed(2) : "未提供置信度";
+  return typeof value === "number" ? `${Math.round(value * 100)}%` : "未提供置信度";
 }
 
 function verificationLabel(status: string) {
@@ -380,7 +382,6 @@ export default function ReviewPage() {
   );
   const selected = selectedIndex >= 0 ? items[selectedIndex] ?? null : null;
   const displayedLayoutContext = layoutPreviewContext ?? layoutContext;
-  const loadedCount = useMemo(() => items.reduce((count, item) => count + (item ? 1 : 0), 0), [items]);
   const pageOrientation = selected
     ? pageOrientations[selected.document_id] ?? DEFAULT_REVIEW_PAGE_ORIENTATION
     : DEFAULT_REVIEW_PAGE_ORIENTATION;
@@ -425,6 +426,16 @@ export default function ReviewPage() {
   useEffect(() => {
     storeReviewDensity(density);
   }, [density]);
+
+  // 记录当前选中结果的 occurrence ID（仅 ID，不写入 OCR 正文），供开发者页 AI 调试复用。
+  useEffect(() => {
+    if (!taskId || !selectedId) return;
+    try {
+      localStorage.setItem(`archivelens.lastReviewOccurrence.${taskId}`, selectedId);
+    } catch {
+      // 存储不可用时忽略；仅影响开发者页 AI 调试的默认选择。
+    }
+  }, [taskId, selectedId]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -1866,7 +1877,7 @@ export default function ReviewPage() {
               )}
             </div>
             <div className="al-review-list-meta">
-              <Text className="al-muted">{total === 0 ? "无结果" : "已加载 " + String(loadedCount) + " / " + String(total)}</Text>
+              <Text className="al-muted">{total === 0 ? "无结果" : loading ? "结果加载中…（共 " + String(total) + " 条）" : "共 " + String(total) + " 条结果"}</Text>
               <Button size="small" appearance={batchMode ? "primary" : "subtle"} disabled={actionBusy} onClick={() => { setBatchMode((value) => !value); setSelectedBatchIds(new Set()); }}>
                 {batchMode ? "批量选择中" : "批量选择"}
               </Button>
@@ -2023,7 +2034,7 @@ export default function ReviewPage() {
                     </div>
                   )}
                   {layoutRebuild?.failed ? <InlineFeedback>有 {layoutRebuild.failed} 条上下文重建失败，可重新打开对应结果重试。</InlineFeedback> : null}
-                  {layoutRebuildError && <InlineFeedback>后台整理暂停：{layoutRebuildError}</InlineFeedback>}
+                  {layoutRebuildError && <DiagnosticErrorNotice issue={toDiagnosticIssue("REVIEW_LAYOUT_REBUILD_FAILED", new Error(layoutRebuildError))} operation="review.rebuildLayoutContexts" taskId={taskId} tone="warning" />}
                   {layoutCorrectionMode && (
                     <div className="al-layout-correction-panel">
                       <div className="al-layout-mode-buttons" role="radiogroup" aria-label="本页版面模式">
@@ -2056,7 +2067,7 @@ export default function ReviewPage() {
                       </div>
                     </div>
                   )}
-                  {layoutContextError && <InlineFeedback>{layoutContextError}</InlineFeedback>}
+                  {layoutContextError && <DiagnosticErrorNotice issue={toDiagnosticIssue("REVIEW_LAYOUT_CONTEXT_FAILED", new Error(layoutContextError))} operation="review.layoutContext" taskId={taskId} tone="warning" />}
                   {layoutContextLoading && !displayedLayoutContext && <LoadingState label="正在重建当前版面上下文…" />}
                   {displayedLayoutContext?.status === "uncertain" && (
                     <div className="al-layout-uncertain" role="status">

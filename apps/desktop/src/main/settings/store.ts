@@ -90,6 +90,23 @@ export class SettingsStore {
     });
   }
 
+  /** 读取开发者模式开关（默认关闭）。 */
+  async getDeveloperMode(): Promise<{ enabled: boolean }> {
+    await this.queue;
+    const settings = await this.load();
+    return { enabled: settings.developer.enabled };
+  }
+
+  /** 持久化开发者模式开关；关闭后 Main 门禁立即生效。 */
+  setDeveloperMode(enabled: boolean): Promise<{ enabled: boolean }> {
+    return this.enqueue(async () => {
+      const settings = AppSettingsFileSchema.parse(await this.load());
+      settings.developer.enabled = enabled;
+      await this.save(settings);
+      return { enabled: settings.developer.enabled };
+    });
+  }
+
   private async load(): Promise<AppSettingsFile> {
     if (this.settings) return this.settings;
     try {

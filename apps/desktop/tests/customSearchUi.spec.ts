@@ -45,6 +45,7 @@ describe("自定义检索词 UI wiring", () => {
     const source = page("Welcome.tsx");
     expect(source).toContain("env.startupError");
     expect(source).toContain("onEngineExit");
-    expect(source).toContain("!error");
+    expect(source).toContain("!taskIssue");
+    expect(source).toContain("DiagnosticErrorNotice");
   });
 });

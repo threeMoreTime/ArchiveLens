@@ -3,6 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button, Card, Spinner, Text } from "@fluentui/react-components";
 import type { ExportJob, ExportJobStatus, ExportRecord, ResultsPage, TaskSummary } from "../../../preload/api";
 import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
+import { DiagnosticErrorNotice } from "../components/DiagnosticErrorNotice";
+import { toDiagnosticIssue, type DiagnosticIssue } from "../utils/diagnosticIssue";
 import { formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from "../utils/presentation";
 
 type ExportFormat = "json" | "html";
@@ -22,7 +24,7 @@ function stageLabel(job: ExportJob): string {
     case "completed": return "已完成";
     case "failed": return "失败";
     case "interrupted": return "上次未完成（已中断）";
-    default: return job.status;
+    default: return "处理中…";
   }
 }
 
@@ -39,10 +41,6 @@ function exportKindLabel(format: string): string {
   return format.toUpperCase();
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "导出失败，请重试";
-}
-
 export default function ExportPage() {
   const { taskId } = useParams();
   const nav = useNavigate();
@@ -53,7 +51,8 @@ export default function ExportPage() {
   const [loading, setLoading] = useState(Boolean(taskId));
   const [selectedFormat, setSelectedFormat] = useState<ExportFormat>("html");
   const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
-  const [actionError, setActionError] = useState("");
+  const [loadIssue, setLoadIssue] = useState<DiagnosticIssue | null>(null);
+  const [actionIssue, setActionIssue] = useState<DiagnosticIssue | null>(null);
   const [busy, setBusy] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const loadSeq = useRef(0);
@@ -76,7 +75,8 @@ export default function ExportPage() {
     setHistory([]);
     setJobs([]);
     setAwaitingConfirmation(false);
-    setActionError("");
+    setLoadIssue(null);
+    setActionIssue(null);
     setSelectedFormat("html");
     if (!taskId) {
       setLoading(false);
@@ -94,8 +94,8 @@ export default function ExportPage() {
       setSummary(nextSummary);
       setHistory(exports.items);
       setJobs(jobList.items);
-    }).catch((nextError: unknown) => {
-      if (seq === loadSeq.current) setActionError(errorMessage(nextError));
+    }).catch((error: unknown) => {
+      if (seq === loadSeq.current) setLoadIssue(toDiagnosticIssue("EXPORT_LOAD_FAILED", error));
     }).finally(() => {
       if (seq === loadSeq.current) setLoading(false);
     });
@@ -125,12 +125,12 @@ export default function ExportPage() {
     if (!taskId || busy) return;
     setAwaitingConfirmation(false);
     setBusy(true);
-    setActionError("");
+    setActionIssue(null);
     try {
       await window.archiveLens.export.create({ task_id: taskId, format });
       await loadJobs(taskId);
-    } catch (nextError) {
-      setActionError(errorMessage(nextError));
+    } catch (error) {
+      setActionIssue(toDiagnosticIssue("EXPORT_JOB_FAILED", error));
     } finally {
       setBusy(false);
     }
@@ -148,12 +148,12 @@ export default function ExportPage() {
   const cancelJob = async (exportId: string) => {
     if (busy) return;
     setBusy(true);
-    setActionError("");
+    setActionIssue(null);
     try {
       await window.archiveLens.export.cancel(exportId);
       await loadJobs(taskId ?? "");
-    } catch (nextError) {
-      setActionError(`取消失败：${errorMessage(nextError)}`);
+    } catch (error) {
+      setActionIssue(toDiagnosticIssue("EXPORT_ACTION_FAILED", error, { what: "取消导出未能完成。" }));
     } finally {
       setBusy(false);
     }
@@ -162,12 +162,12 @@ export default function ExportPage() {
   const retryJob = async (exportId: string) => {
     if (busy) return;
     setBusy(true);
-    setActionError("");
+    setActionIssue(null);
     try {
       await window.archiveLens.export.retry(exportId);
       await loadJobs(taskId ?? "");
-    } catch (nextError) {
-      setActionError(`重新导出失败：${errorMessage(nextError)}`);
+    } catch (error) {
+      setActionIssue(toDiagnosticIssue("EXPORT_JOB_FAILED", error, { what: "重新导出未能开始。" }));
     } finally {
       setBusy(false);
     }
@@ -176,8 +176,8 @@ export default function ExportPage() {
   const openExportFolder = async (exportId: string) => {
     try {
       await window.archiveLens.export.openDirectory(exportId);
-    } catch (nextError) {
-      setActionError(`无法打开导出目录：${errorMessage(nextError)}`);
+    } catch (error) {
+      setActionIssue(toDiagnosticIssue("EXPORT_ACTION_FAILED", error, { what: "无法打开导出目录。" }));
     }
   };
 
@@ -185,8 +185,8 @@ export default function ExportPage() {
     if (!task?.workspace_dir) return;
     try {
       await window.archiveLens.tasks.openDirectory(taskId ?? "");
-    } catch (nextError) {
-      setActionError(`无法打开任务目录：${errorMessage(nextError)}`);
+    } catch (error) {
+      setActionIssue(toDiagnosticIssue("LOCAL_DATA_ACTION_FAILED", error, { what: "无法打开任务目录。" }));
     }
   };
 
@@ -219,8 +219,9 @@ export default function ExportPage() {
     <div className="al-welcome al-export-page">
       <PageHeader title="导出结果" description="选择一种格式，导出在后台进行；可查看进度、取消并重新导出。" />
       {loading && <LoadingState label="正在读取导出摘要和历史记录…" />}
-      {actionError && <InlineFeedback tone="error">{actionError}</InlineFeedback>}
-      {!loading && !task && <InlineFeedback>读取任务失败 <Button size="small" onClick={() => setReloadToken((value) => value + 1)}>重试读取</Button></InlineFeedback>}
+      {loadIssue && <DiagnosticErrorNotice issue={loadIssue} operation="exports.load" taskId={taskId} onRetry={() => setReloadToken((value) => value + 1)} />}
+      {actionIssue && <DiagnosticErrorNotice issue={actionIssue} operation="exports.action" taskId={taskId} />}
+      {!loading && !task && !loadIssue && <InlineFeedback>读取任务失败 <Button size="small" onClick={() => setReloadToken((value) => value + 1)}>重试读取</Button></InlineFeedback>}
       {!loading && task && summary && statusView && (
         <div className="al-export-layout">
           <div className="al-export-main">
@@ -268,9 +269,8 @@ export default function ExportPage() {
                     <div key={job.export_id} className="al-export-job-row">
                       <div className="al-export-job-head"><strong>{exportKindLabel(job.format)}</strong><span className={`al-badge al-badge-${jobTone(job.status)}`}>{stageLabel(job)}</span></div>
                       <small className="al-muted">创建 {formatDateTime(job.created_at)}{job.finished_at ? ` · 完成 ${formatDateTime(job.finished_at)}` : ""}</small>
-                      {job.status === "completed" && job.output_path && <small className="al-muted" title={job.output_path}>{job.output_path}</small>}
-                      {job.error_message && <InlineFeedback tone="error">{job.error_message}</InlineFeedback>}
-                      {job.cleanup_status === "failed" && <InlineFeedback tone="warning">{job.cleanup_error_message || "导出临时文件清理失败，将在下次启动重试。"}</InlineFeedback>}
+                      {(job.status === "failed" || job.status === "interrupted") && <Text className="al-muted">本次导出未完成，已有成功导出不受影响。诊断码 EXPORT_JOB_FAILED。</Text>}
+                      {job.cleanup_status === "failed" && <Text className="al-muted">导出临时残留清理未完成，将在下次启动重试；正式数据不受影响。诊断码 EXPORT_CLEANUP_FAILED。</Text>}
                       <div className="al-inline-actions">
                         {ACTIVE_JOB.has(job.status) && job.export_id !== activeJob?.export_id && <Button size="small" disabled={busy || job.status === "cancelling"} onClick={() => void cancelJob(job.export_id)}>{job.status === "cancelling" ? "正在取消…" : "取消导出"}</Button>}
                         {job.status === "completed" && job.output_path && <Button size="small" onClick={() => void openExportFolder(job.export_id)}>打开文件夹</Button>}
@@ -286,7 +286,7 @@ export default function ExportPage() {
           <aside className="al-export-aside" aria-label="导出完整性摘要">
             <Card className="al-card"><Text weight="semibold">导出完整性</Text><div className="al-export-integrity"><span>扫描：{summary.scan_complete ? "已完整处理" : "未完整处理"}</span><span>校对：{summary.review_complete ? "已完成" : `未完成（剩余 ${summary.review_summary.unreviewed_count} 条）`}</span></div></Card>
             {(!summary.scan_complete || !summary.review_complete) && <InlineFeedback tone="warning">阶段性报告不应作为最终核验报告；请在扫描无失败且全部结果校对后重新导出。</InlineFeedback>}
-            <Card className="al-card"><div className="al-card-heading-row"><Text weight="semibold">成功导出历史</Text><Button appearance="subtle" size="small" onClick={() => void openTaskFolder()}>任务目录</Button></div>{history.length === 0 ? <Text className="al-muted">此任务尚无成功导出记录。</Text> : <div className="al-export-history">{history.map((item) => <button key={item.export_id} type="button" onClick={() => void openTaskFolder()}><strong>{exportKindLabel(item.kind)}</strong><span>{formatDateTime(item.created_at)}</span><small title={item.path}>{item.path}</small></button>)}</div>}</Card>
+            <Card className="al-card"><div className="al-card-heading-row"><Text weight="semibold">成功导出历史</Text><Button appearance="subtle" size="small" onClick={() => void openTaskFolder()}>任务目录</Button></div>{history.length === 0 ? <Text className="al-muted">此任务尚无成功导出记录。</Text> : <div className="al-export-history">{history.map((item) => <button key={item.export_id} type="button" onClick={() => void openTaskFolder()}><strong>{exportKindLabel(item.kind)}</strong><span>{formatDateTime(item.created_at)}</span></button>)}</div>}</Card>
             <Card className="al-card"><Text weight="semibold">本地处理</Text><Text className="al-muted">导出文件与历史记录均保存在当前任务工作区，不会上传到网络服务。失败或取消不会覆盖已有成功文件。</Text></Card>
           </aside>
         </div>

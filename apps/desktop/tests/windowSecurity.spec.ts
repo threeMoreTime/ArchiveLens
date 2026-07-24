@@ -31,3 +31,34 @@ describe("Production Renderer CSP", () => {
     expect(html).not.toContain("localhost:*");
   });
 });
+
+describe("开发者 DevTools 与日志门禁", () => {
+  const appHandlers = readFileSync(resolve(__dirname, "../src/main/ipc/app.ts"), "utf-8");
+  const mainWindow = readFileSync(resolve(__dirname, "../src/main/windows/main.ts"), "utf-8");
+
+  it("DevTools 与日志入口均先校验开发者模式", () => {
+    expect(appHandlers).toContain('ipcMain.handle("app.openRendererDevTools"');
+    expect(appHandlers).toContain("BrowserWindow.fromWebContents(event.sender)");
+    expect(appHandlers).toContain('mode: "detach"');
+    expect(appHandlers).toContain('title: "ArchiveLens 开发者工具"');
+    // openDevTools 与 openLogDirectory 前必须调用门禁
+    const devtoolsSection = appHandlers.slice(appHandlers.indexOf('"app.openRendererDevTools"'));
+    expect(devtoolsSection).toContain("await requireDeveloperMode()");
+    const logsSection = appHandlers.slice(appHandlers.indexOf('"app.openLogDirectory"'));
+    expect(logsSection.slice(0, 200)).toContain("await requireDeveloperMode()");
+  });
+
+  it("完整复制与 AI 调试复制受门禁保护，脱敏复制不受限", () => {
+    const fullSection = appHandlers.slice(appHandlers.indexOf('"app.copyDiagnosticSummary"'));
+    expect(fullSection).toContain('parsed.mode === "full") await requireDeveloperMode()');
+    const aiSection = appHandlers.slice(appHandlers.indexOf('"app.copyAiDebugInfo"'), appHandlers.indexOf('"app.openRendererDevTools"'));
+    expect(aiSection).toContain("await requireDeveloperMode()");
+  });
+
+  it("生产环境仍拦截 F12 与 Ctrl+Shift+I", () => {
+    expect(mainWindow).toContain("before-input-event");
+    expect(mainWindow).toContain('input.key === "F12"');
+    expect(mainWindow).toContain('input.control && input.shift && input.key.toLowerCase() === "i"');
+    expect(mainWindow).toContain('!process.env["AL_DEBUG"] && !DEV_SERVER_URL');
+  });
+});

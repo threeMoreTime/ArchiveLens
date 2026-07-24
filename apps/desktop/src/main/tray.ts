@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, Menu, nativeImage, Tray } from "electron";
 import { resolveTrayIconPath } from "./appIcon";
 import { logger } from "./logging/logger";
 
@@ -69,12 +69,6 @@ function rebuildMenu(getWin: () => BrowserWindow | null) {
       },
     },
     { type: "separator" },
-    {
-      label: "打开日志目录",
-      click: () => {
-        void shell.openPath(logger.logDirectory);
-      },
-    },
     {
       label: "退出",
       click: () => {

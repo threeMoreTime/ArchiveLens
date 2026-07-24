@@ -73,6 +73,12 @@ export const SearchScriptScopeSchema = z.enum(["simplified", "traditional", "bot
 export type SearchScriptScope = z.infer<typeof SearchScriptScopeSchema>;
 export const DEFAULT_SEARCH_SCRIPT_SCOPE: SearchScriptScope = "both";
 
+/** 开发者模式持久化设置。默认关闭；向后兼容字段，不递增设置文件版本。 */
+export const DeveloperSettingsSchema = z.object({
+  enabled: z.boolean().default(false),
+}).default({ enabled: false });
+export type DeveloperSettings = z.infer<typeof DeveloperSettingsSchema>;
+
 export const AppSettingsFileSchema = z.object({
   version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).default(4),
   appearance: z.object({
@@ -84,6 +90,7 @@ export const AppSettingsFileSchema = z.object({
     review_preferences: DEFAULT_REVIEW_DISPLAY_PREFERENCES,
     search_script_scope: DEFAULT_SEARCH_SCRIPT_SCOPE,
   }),
+  developer: DeveloperSettingsSchema,
   task_overrides: z.record(z.string().min(1), z.object({
     review_highlight: ReviewHighlightStyleSchema.optional(),
     review_preferences: ReviewDisplayPreferencesSchema.optional(),
@@ -1036,5 +1043,168 @@ export interface UserFacingError {
   /** 技术详情入口 */
   details?: Record<string, unknown>;
 }
+
+// --------------------------------------------------------------------------- //
+// Electron 本地开发者边界 schema
+//
+// 以下 schema 只用于 Electron Main ↔ Preload ↔ Renderer 的本地 IPC，
+// 不经过 Python JSONL 协议，因此不加入 MethodNameSchema，也不影响 PROTOCOL_VERSION。
+// --------------------------------------------------------------------------- //
+
+/** Renderer 单次上报错误正文的字符上限；超过时 Main 拒绝并返回 DIAGNOSTIC_PAYLOAD_TOO_LARGE。 */
+export const MAX_RENDERER_ERROR_MESSAGE_CHARS = 4000;
+export const MAX_RENDERER_ERROR_STACK_CHARS = 20000;
+export const MAX_RENDERER_ERROR_DETAILS_CHARS = 8000;
+/** 复制 AI 错误调试信息时最多合并的日志行数。 */
+export const MAX_AI_DEBUG_LOG_LINES = 300;
+
+export const DeveloperModeResultSchema = z.object({
+  enabled: z.boolean(),
+});
+export type DeveloperModeResult = z.infer<typeof DeveloperModeResultSchema>;
+
+export const DeveloperModeUpdateParamsSchema = z.object({
+  enabled: z.boolean(),
+});
+export type DeveloperModeUpdateParams = z.infer<typeof DeveloperModeUpdateParamsSchema>;
+
+/** ErrorRegistry 中的最近一条已知错误（内存态，不落盘、不含日志正文）。 */
+export const KnownErrorSnapshotSchema = z.object({
+  time: z.string(),
+  source: z.enum(["main", "sidecar", "engine", "renderer"]),
+  operation: z.string(),
+  task_id: z.string().nullable(),
+  code: z.string(),
+  message: z.string(),
+  details: z.record(z.string(), z.unknown()).default({}),
+  stack: z.string().nullable(),
+});
+export type KnownErrorSnapshot = z.infer<typeof KnownErrorSnapshotSchema>;
+
+/**
+ * Renderer 上报错误。长度上限不在 schema 内强制截断，
+ * 由 Main/ErrorRegistry 显式校验并在超限时拒绝，避免静默截断。
+ */
+export const RendererErrorReportSchema = z.object({
+  operation: z.string().min(1),
+  task_id: z.string().nullable().optional(),
+  code: z.string().optional(),
+  message: z.string(),
+  details: z.record(z.string(), z.unknown()).optional(),
+  stack: z.string().nullable().optional(),
+});
+export type RendererErrorReport = z.infer<typeof RendererErrorReportSchema>;
+
+export const DeveloperSnapshotParamsSchema = z.object({
+  task_id: z.string().min(1).optional(),
+});
+export type DeveloperSnapshotParams = z.infer<typeof DeveloperSnapshotParamsSchema>;
+
+export const DeveloperSnapshotBuildRuntimeSchema = z.object({
+  app_version: z.string(),
+  engine_version: z.string().nullable(),
+  protocol_version: z.number(),
+  desktop_commit: z.string().nullable(),
+  engine_commit: z.string().nullable(),
+  electron: z.string(),
+  chrome: z.string(),
+  node: z.string(),
+  python: z.string().nullable(),
+  platform: z.string(),
+  arch: z.string(),
+  sidecar_ready: z.boolean(),
+  sidecar_status: z.string(),
+});
+
+export const DeveloperSnapshotCheckSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  status: z.string(),
+  detail: z.string().default(""),
+  impact: z.string().default(""),
+  remedy: z.string().default(""),
+  source: z.string().default(""),
+  path: z.string().default(""),
+});
+
+export const DeveloperSnapshotLocalDataSchema = z.object({
+  user_data_path: z.string(),
+  engine_data_path: z.string(),
+  log_path: z.string(),
+  python_executable: z.string().nullable(),
+  total_bytes: z.number().nonnegative(),
+  database_bytes: z.number().nonnegative(),
+  migration_backup_bytes: z.number().nonnegative(),
+  task_derived_bytes: z.number().nonnegative(),
+  export_bytes: z.number().nonnegative(),
+  temporary_export_bytes: z.number().nonnegative(),
+  log_bytes: z.number().nonnegative(),
+  settings_bytes: z.number().nonnegative(),
+  other_bytes: z.number().nonnegative(),
+  complete: z.boolean(),
+});
+
+export const DeveloperSnapshotTaskSchema = z.object({
+  task_id: z.string(),
+  status: z.string(),
+  workspace_path: z.string().nullable(),
+  ocr_model_id: z.string().nullable(),
+  ocr_model_sha256: z.string().nullable(),
+  ocr_index_status: z.string().nullable(),
+  ocr_indexed_pages: z.number().nullable(),
+  ocr_corpus_version: z.number().nullable(),
+  processed_pages: z.number().nonnegative(),
+  total_pages: z.number().nonnegative(),
+  occurrence_count: z.number().nonnegative(),
+  layout_rebuild: z.record(z.string(), z.unknown()).nullable(),
+  failures: z.array(z.record(z.string(), z.unknown())),
+  last_failed_export: z.record(z.string(), z.unknown()).nullable(),
+  last_known_error: KnownErrorSnapshotSchema.nullable(),
+}).passthrough();
+export type DeveloperSnapshotTask = z.infer<typeof DeveloperSnapshotTaskSchema>;
+
+export const DeveloperSnapshotCollectionErrorSchema = z.object({
+  section: z.string(),
+  message: z.string(),
+});
+
+export const DeveloperSnapshotSchema = z.object({
+  generated_at: z.string(),
+  build_runtime: DeveloperSnapshotBuildRuntimeSchema,
+  checks: z.array(DeveloperSnapshotCheckSchema),
+  local_data: DeveloperSnapshotLocalDataSchema,
+  current_task: DeveloperSnapshotTaskSchema.nullable(),
+  last_known_error: KnownErrorSnapshotSchema.nullable(),
+  collection_errors: z.array(DeveloperSnapshotCollectionErrorSchema),
+});
+export type DeveloperSnapshot = z.infer<typeof DeveloperSnapshotSchema>;
+
+export const DiagnosticCurrentErrorSchema = z.object({
+  code: z.string().optional(),
+  message: z.string().optional(),
+  task_id: z.string().nullable().optional(),
+});
+
+export const DiagnosticCopyParamsSchema = z.object({
+  task_id: z.string().min(1).optional(),
+  mode: z.enum(["redacted", "full"]),
+  current_error: DiagnosticCurrentErrorSchema.optional(),
+});
+export type DiagnosticCopyParams = z.infer<typeof DiagnosticCopyParamsSchema>;
+
+export const AiDebugCopyParamsSchema = z.object({
+  task_id: z.string().min(1).optional(),
+  occurrence_id: z.string().min(1).optional(),
+});
+export type AiDebugCopyParams = z.infer<typeof AiDebugCopyParamsSchema>;
+
+export const ClipboardCopyResultSchema = z.object({
+  mode: z.enum(["redacted", "full", "ai_debug"]),
+  char_count: z.number().int().nonnegative(),
+  log_line_count: z.number().int().nonnegative(),
+  includes_ocr_context: z.boolean(),
+  ocr_context_status: z.enum(["included", "not_available"]),
+});
+export type ClipboardCopyResult = z.infer<typeof ClipboardCopyResultSchema>;
 
 export { z };

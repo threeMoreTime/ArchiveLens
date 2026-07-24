@@ -202,4 +202,44 @@ describe("SettingsStore", () => {
       appearance: { review_highlight: { color: "#ABCDEF", opacity: 0.6 } },
     });
   });
+
+  it("旧设置默认关闭开发者模式", async () => {
+    const { filePath } = await createStore();
+    await writeFile(filePath, JSON.stringify({
+      version: 1,
+      appearance: { review_highlight: { color: "#278BC7", opacity: 0.32 } },
+      task_overrides: {},
+    }), "utf-8");
+    const restored = new SettingsStore(filePath);
+    await expect(restored.getDeveloperMode()).resolves.toEqual({ enabled: false });
+  });
+
+  it("首次读取时开发者模式默认关闭", async () => {
+    const { store } = await createStore();
+    await expect(store.getDeveloperMode()).resolves.toEqual({ enabled: false });
+  });
+
+  it("开启开发者模式跨实例恢复，且设置文件仍为版本 4", async () => {
+    const { filePath, store } = await createStore();
+    await expect(store.setDeveloperMode(true)).resolves.toEqual({ enabled: true });
+    const saved = JSON.parse(await readFile(filePath, "utf-8"));
+    expect(saved).toMatchObject({ version: 4, developer: { enabled: true } });
+    const restored = new SettingsStore(filePath);
+    await expect(restored.getDeveloperMode()).resolves.toEqual({ enabled: true });
+  });
+
+  it("关闭开发者模式持久化并跨实例保持", async () => {
+    const { filePath, store } = await createStore();
+    await store.setDeveloperMode(true);
+    await expect(store.setDeveloperMode(false)).resolves.toEqual({ enabled: false });
+    const restored = new SettingsStore(filePath);
+    await expect(restored.getDeveloperMode()).resolves.toEqual({ enabled: false });
+  });
+
+  it("切换开发者模式不影响既有高亮设置", async () => {
+    const { store } = await createStore();
+    await store.update({ scope: "global", highlight: { color: "#123456", opacity: 0.4 } });
+    await store.setDeveloperMode(true);
+    await expect(store.get()).resolves.toMatchObject({ global: { color: "#123456", opacity: 0.4 } });
+  });
 });

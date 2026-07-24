@@ -214,7 +214,9 @@ export default function NewScan() {
       }
     } catch (nextError: unknown) {
       if (preflightGeneration.current !== generation) return;
-      setError(nextError instanceof Error ? nextError.message : "无法完成文件夹预检");
+      const message = nextError instanceof Error ? nextError.message : "无法完成文件夹预检";
+      setError(`预检失败，请检查所选来源后重试。诊断码 NEW_SCAN_PREFLIGHT_FAILED。`);
+      void window.archiveLens.app.reportRendererError({ operation: "tasks.preflight", task_id: null, code: "NEW_SCAN_PREFLIGHT_FAILED", message }).catch(() => undefined);
     }
   }
 
@@ -224,7 +226,9 @@ export default function NewScan() {
       const job = await window.archiveLens.tasks.cancelPreflight(preflightJob.preflight_id);
       setPreflightJob(job);
     } catch (nextError: unknown) {
-      setError(nextError instanceof Error ? nextError.message : "无法取消文件夹预检");
+      const message = nextError instanceof Error ? nextError.message : "无法取消文件夹预检";
+      setError(`取消预检失败，请稍后重试。诊断码 NEW_SCAN_PREFLIGHT_FAILED。`);
+      void window.archiveLens.app.reportRendererError({ operation: "tasks.preflightCancel", task_id: null, code: "NEW_SCAN_PREFLIGHT_FAILED", message }).catch(() => undefined);
     }
   };
 
@@ -270,8 +274,12 @@ export default function NewScan() {
       });
     } catch (nextError: unknown) {
       const message = nextError instanceof Error ? nextError.message : String(nextError);
-      setError(message);
-      if (message.includes("预检后发生变化")) {
+      const stale = message.includes("预检后发生变化");
+      setError(stale
+        ? "所选来源在预检后发生变化，请重新预检后再创建任务。诊断码 NEW_SCAN_CREATE_FAILED。"
+        : "创建扫描任务失败，请稍后重试；原始文件不会被修改。诊断码 NEW_SCAN_CREATE_FAILED。");
+      void window.archiveLens.app.reportRendererError({ operation: "tasks.create", task_id: null, code: "NEW_SCAN_CREATE_FAILED", message }).catch(() => undefined);
+      if (stale) {
         setPreflightJob(null);
         setPreflightConfirmed(false);
       }
@@ -314,7 +322,7 @@ export default function NewScan() {
                 {!preflightJob && <Text className="al-muted">正在准备预检…</Text>}
                 {preflightJob && ["queued", "running", "cancelling"].includes(preflightJob.status) && <div className="al-preflight-running"><Spinner size="tiny" /><Text>{preflightJob.status === "cancelling" ? "正在取消预检" : "正在分析文件、页数与磁盘空间"}</Text></div>}
                 {preflightJob?.status === "cancelled" && <InlineFeedback tone="warning">预检已取消，尚未创建任务。</InlineFeedback>}
-                {preflightJob?.status === "failed" && <InlineFeedback>预检失败：{preflightJob.error_message || "未知错误"}</InlineFeedback>}
+                {preflightJob?.status === "failed" && <InlineFeedback>预检失败，请检查所选来源后重试。诊断码 NEW_SCAN_PREFLIGHT_FAILED。</InlineFeedback>}
                 {preflightResult && <PreflightSummary result={preflightResult} confirmed={preflightConfirmed} onConfirmed={setPreflightConfirmed} />}
               </Card>}
             </>
