@@ -25,6 +25,7 @@ import {
   normalizeSearchQueryText,
   prependSearchSession,
 } from "../utils/searchHistory";
+import { shouldCommit } from "../utils/requestGuard";
 
 const PAGE_SIZE = 50;
 
@@ -115,6 +116,14 @@ export default function SearchPage() {
   const hitRequestRef = useRef(0);
   const imageRequestRef = useRef(0);
   const fitWhenReadyRef = useRef(true);
+  // P1-1：corpusStatus 请求身份守卫。routeGeneration 在 taskId 变化时递增，
+  // requestSequence 标记每次请求；只有请求身份仍匹配当前页面且组件挂载时才写入 corpus。
+  const corpusRouteGeneration = useRef(0);
+  const corpusRequestSequence = useRef(0);
+  const corpusMountedRef = useRef(true);
+  // corpus 防抖定时器：连续事件合并为一次 corpusStatus 刷新。
+  const corpusDebounceRef = useRef<number | null>(null);
+  const CORPUS_REFRESH_DEBOUNCE_MS = 300;
 
   const corpusReady = corpus?.status === "ready" || corpus?.status === "partial";
   const selected = useMemo(
@@ -127,8 +136,28 @@ export default function SearchPage() {
   const pageNumber = Math.floor(offset / PAGE_SIZE) + 1;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  // P1-1：刷新语料状态，带 taskId+routeGeneration+requestSequence+mounted 身份守卫。
+  // 事件触发（task.completed 等）与首次进入都经此路径，旧任务的请求不覆盖新页面。
+  const reloadCorpus = useCallback(async (id: string, generation: number) => {
+    const seq = ++corpusRequestSequence.current;
+    try {
+      const nextCorpus = await window.archiveLens.search.getCorpusStatus(id);
+      if (!shouldCommit(
+        { taskId: id, generation, sequence: seq },
+        { currentTaskId: taskId, currentGeneration: corpusRouteGeneration.current, currentSequence: corpusRequestSequence.current, mounted: corpusMountedRef.current },
+      )) return;
+      setCorpus(nextCorpus);
+    } catch {
+      // 语料状态读取失败不阻塞：保留上次已知状态，下次事件再刷新。
+    }
+  }, [taskId]);
+
   useEffect(() => {
     let active = true;
+    // taskId 变化：递增 routeGeneration 使旧 corpus 请求作废，重置挂载标志。
+    corpusRouteGeneration.current += 1;
+    const corpusGeneration = corpusRouteGeneration.current;
+    corpusMountedRef.current = true;
     setInitialLoading(true);
     setError("");
     setHistoryNotice("");
@@ -149,7 +178,20 @@ export default function SearchPage() {
     ]).then(([nextTask, nextCorpus, settings, history]) => {
       if (!active) return;
       setTask(nextTask);
-      setCorpus(nextCorpus);
+      const commitOk = shouldCommit(
+        { taskId, generation: corpusGeneration, sequence: corpusRequestSequence.current },
+        { currentTaskId: taskId, currentGeneration: corpusRouteGeneration.current, currentSequence: corpusRequestSequence.current, mounted: corpusMountedRef.current },
+      );
+      // 首次加载的 corpus 也经身份守卫写入，避免旧任务覆盖。
+      if (commitOk) {
+        setCorpus(nextCorpus);
+        // 兜底：若首次 corpus 非 ready（任务仍在跑或刚完成、语料 finalize 滞后），
+        // 主动刷新一次——覆盖用户在 task.completed 事件发出后才进入检索页、
+        // 错过事件导致 corpus 停留在 not_built 的时序场景。后续由事件订阅 + 轮询兜底。
+        if (nextCorpus.status !== "ready" && nextCorpus.status !== "failed" && nextCorpus.status !== "legacy_requires_reocr") {
+          void reloadCorpus(taskId, corpusGeneration);
+        }
+      }
       setScope(settings.search_script_scope);
       setQuery(nextTask.search_text || "");
       const dedupedHistory = dedupeSearchSessions(history.items);
@@ -168,10 +210,55 @@ export default function SearchPage() {
     });
     return () => {
       active = false;
+      corpusMountedRef.current = false;
       hitRequestRef.current += 1;
       imageRequestRef.current += 1;
+      if (corpusDebounceRef.current !== null) {
+        window.clearTimeout(corpusDebounceRef.current);
+        corpusDebounceRef.current = null;
+      }
     };
-  }, [taskId]);
+  }, [taskId, reloadCorpus]);
+
+  // P1-1 兜底：corpus 处于中间态（not_built/building/partial）时轮询刷新，
+  // 覆盖"用户在 task.completed 事件发出后才进入检索页、错过事件"的时序场景，
+  // 以及语料 finalize 滞后于 task 终态的情况。corpus 变 ready/failed/legacy 或
+  // 组件卸载时停止轮询。事件订阅是主路径，轮询仅在中间态兜底。
+  useEffect(() => {
+    if (!taskId) return;
+    const intermediate = corpus?.status === "not_built" || corpus?.status === "building" || corpus?.status === "partial";
+    if (!intermediate) return;
+    const generation = corpusRouteGeneration.current;
+    const timer = window.setInterval(() => { void reloadCorpus(taskId, generation); }, 1500);
+    return () => window.clearInterval(timer);
+  }, [taskId, corpus?.status, reloadCorpus]);
+
+  // P1-1：订阅当前任务的生命周期事件，语料就绪/失败/取消后自动刷新 corpusStatus。
+  // 只处理 event.task_id === 当前 taskId 的事件，其他任务事件立即忽略。
+  // 连续事件经 300ms 防抖合并为一次刷新（扫描无高频 progress 事件，防抖主要防御
+  // resumed 后紧跟 completed 等连续状态转换，以及未来可能的进度事件）。
+  useEffect(() => {
+    if (!taskId) return;
+    const generation = corpusRouteGeneration.current;
+    const refreshCorpus = () => {
+      if (corpusDebounceRef.current !== null) window.clearTimeout(corpusDebounceRef.current);
+      corpusDebounceRef.current = window.setTimeout(() => {
+        corpusDebounceRef.current = null;
+        void reloadCorpus(taskId, generation);
+      }, CORPUS_REFRESH_DEBOUNCE_MS);
+    };
+    return window.archiveLens.subscribe.onEvent((event: { task_id?: string | null; event: string }) => {
+      if (event.task_id !== taskId) return;
+      // 语料状态相关的任务状态转换事件。Engine 实际发送的事件名：
+      // task.completed/failed/cancelled/resumed/occurrences_reconciled。
+      if ([
+        "task.completed", "task.failed", "task.cancelled",
+        "task.resumed", "task.occurrences_reconciled",
+      ].includes(event.event)) {
+        refreshCorpus();
+      }
+    });
+  }, [taskId, reloadCorpus]);
 
   const loadHits = useCallback(async (sessionId: string, nextOffset: number) => {
     const requestId = ++hitRequestRef.current;

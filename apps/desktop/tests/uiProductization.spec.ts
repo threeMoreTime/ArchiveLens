@@ -180,6 +180,22 @@ describe("桌面端产品化 UI contract", () => {
     expect(styles).toContain(".al-search-layer-ocr-top-k");
   });
 
+  it("P1-1：检索页订阅当前任务事件并自动刷新语料状态，带防抖与身份守卫", () => {
+    // 订阅事件并过滤当前 taskId
+    expect(searchPage).toContain("window.archiveLens.subscribe.onEvent");
+    expect(searchPage).toContain("event.task_id !== taskId");
+    // 语料刷新事件（Engine 真实事件名）
+    expect(searchPage).toContain("task.completed");
+    expect(searchPage).toContain("task.failed");
+    expect(searchPage).toContain("task.cancelled");
+    // reloadCorpus 带身份守卫（复用 requestGuard）
+    expect(searchPage).toContain("reloadCorpus");
+    expect(searchPage).toContain("shouldCommit");
+    // 防抖定时器
+    expect(searchPage).toContain("CORPUS_REFRESH_DEBOUNCE_MS");
+    expect(searchPage).toContain("corpusDebounceRef");
+  });
+
   it("移除清晰度档位并保留可折叠、可联动的版面模式样例", () => {
     expect(reviewHighlightSettings).not.toContain("qualityExpanded");
     expect(reviewHighlightSettings).toContain("layoutExpanded");
