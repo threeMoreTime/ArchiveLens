@@ -66,6 +66,9 @@ async function launchDesktop(userDataDir: string): Promise<ElectronApplication> 
 async function openReview(app: ElectronApplication, taskId: string): Promise<Page> {
   const page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
+  // 显式设定三栏视口（>=1180px 断点），避免 CI runner 窗口内容区不确定导致
+  // 进入窄屏抽屉模式（详情默认关闭、布局层叠变化）。与产品默认窗口 1280×820 一致。
+  await page.setViewportSize({ width: 1280, height: 760 });
   await expect.poll(async () => page.evaluate(async () => (await (window as any).archiveLens.app.getEnvironment()).sidecarReady)).toBe(true);
   const seededPage = await page.evaluate(async (id) => {
     return (window as any).archiveLens.results.query({ task_id: id, limit: 1, offset: 0 });

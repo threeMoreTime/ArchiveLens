@@ -647,8 +647,8 @@ button.al-task-delete-button:disabled { background:#efd4d1; color:#875b56; borde
   .al-detail-drawer-toggle { display:inline-flex !important; }
   .al-review-body { grid-template-columns:minmax(0,1fr) minmax(300px,38%); }
   .al-review-resizer { display:none; }
-  .al-detail { position:absolute; z-index:12; inset:0 0 0 auto; width:min(390px,44vw); min-width:320px; box-shadow:var(--sh2); transform:translateX(105%); transition:transform 160ms ease; }
-  .al-detail.drawer-open { transform:translateX(0); }
+  .al-detail { position:absolute; z-index:12; inset:0 0 0 auto; width:min(390px,44vw); min-width:320px; box-shadow:var(--sh2); transform:translateX(105%); transition:transform 160ms ease; pointer-events:none; }
+  .al-detail.drawer-open { transform:translateX(0); pointer-events:auto; }
   .al-detail-drawer-close { display:inline-flex !important; }
   .al-detail-drawer-backdrop { position:absolute; z-index:11; inset:0; display:block; border:0; background:#2f22143d; }
   .al-review.image-focused .al-detail-drawer-toggle { display:none !important; }

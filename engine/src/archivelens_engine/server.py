@@ -1501,28 +1501,42 @@ def _h_tasks_cancel(server: Server, params: dict) -> dict:
     if not can_cancel(current):
         return {"task_id": task_id, "status": current}
     tc = server._task_controls.get(task_id)
+    worker_generation = int(task["worker_generation"])
     if tc is not None:
-        tc.request_cancel()
+        # 活跃 worker：先完成状态转换，成功后才通知 worker 停止。
+        # 与 pause 一致，避免 worker 已收 cancel 但数据库状态未变（顺序风险）。
         try:
             server._transition(task_id, "stopping")
         except ProtocolError:
-            pass
-        task = server.store.get_task(task_id)
+            # 转换失败（如并发已转走）：不通知 worker，返回当前真实状态。
+            refreshed = server.store.get_task(task_id)
+            return {"task_id": task_id, "status": str(refreshed["status"]) if refreshed else current}
+        tc.request_cancel()
         server.emit_task_event(
             "task.cancelling",
             task_id,
             {},
             source_id=SLOWFAKE_SOURCE_ID if server.slowfake_pages > 0 else "",
-            worker_generation=int(task["worker_generation"] if task else 0),
+            worker_generation=worker_generation,
         )
         return {"task_id": task_id, "status": "stopping"}
-    server.store.update_task(task_id, status="cancelled", finished_at=now_iso())
+    # 无活跃 worker：经状态机转换到 cancelled，不绕过 _transition 直接改写。
+    # running 等无直达 cancelled 出口的状态先经 stopping（由退出协调兜底）。
+    if "cancelled" not in LEGAL_TRANSITIONS.get(current, frozenset()):
+        if "stopping" in LEGAL_TRANSITIONS.get(current, frozenset()):
+            server._transition(task_id, "stopping")
+        else:
+            # 没有任何取消路径：返回当前状态，不强行改写。
+            return {"task_id": task_id, "status": current}
+    server._transition(task_id, "cancelled")
+    # cancelled 是终态，补充 finished_at（_transition 不设置 finished_at）。
+    server.store.update_task(task_id, finished_at=now_iso())
     server.emit_task_event(
         "task.cancelled",
         task_id,
         {"reason": "cancelled"},
         source_id=SLOWFAKE_SOURCE_ID if server.slowfake_pages > 0 else "",
-        worker_generation=int(task["worker_generation"] if task else 0),
+        worker_generation=worker_generation,
     )
     return {"task_id": task_id, "status": "cancelled"}
 

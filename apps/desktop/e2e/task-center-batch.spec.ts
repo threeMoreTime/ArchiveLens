@@ -88,6 +88,9 @@ test("task center batches revalidate, continue after failure, and retry safely",
     });
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
+    // 显式设定足够宽的视口（表格 min-width 996px + 工具栏），避免 CI runner
+    // 窗口内容区偏窄导致表格列被压缩、表头复选框被工具栏/行遮挡。
+    await page.setViewportSize({ width: 1280, height: 760 });
     await waitForSidecar(page);
 
     const created = await page.evaluate(async (dir) => {

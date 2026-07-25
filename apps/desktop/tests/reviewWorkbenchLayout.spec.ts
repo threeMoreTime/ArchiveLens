@@ -32,7 +32,10 @@ describe("专业审核工作台布局与交互契约", () => {
     expect(reviewPage).toContain("al-detail-drawer-backdrop");
     expect(reviewPage).toContain("drawer-open");
     expect(styles).toContain("@media (max-width:1180px)");
-    expect(styles).toContain(".al-detail.drawer-open { transform:translateX(0); }");
+    // 抽屉关闭时 pointer-events:none，避免移出视口的抽屉拦截下方点击；
+    // 打开时恢复 pointer-events:auto 并平移回视口。
+    expect(styles).toContain(".al-detail.drawer-open { transform:translateX(0); pointer-events:auto; }");
+    expect(styles).toMatch(/\.al-detail \{[^}]*pointer-events:none/);
     expect(styles).not.toMatch(/@media \(max-width:1180px\)[\s\S]*?\.al-review-body \{[^}]*grid-template-columns:1fr;[^}]*\}/);
   });
 

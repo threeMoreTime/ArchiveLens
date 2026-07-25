@@ -674,6 +674,29 @@ class TaskPauseCancelGuardTests(unittest.TestCase):
         self.assertEqual(self.server.store.get_task(task_id)["status"], "pausing")
         self.assertEqual(pause_requested, [True])
 
+    def test_cancel_transitions_before_notifying_worker(self) -> None:
+        # running 任务且有活跃 worker：应先 transition 到 stopping 成功后才 request_cancel。
+        from types import SimpleNamespace
+
+        task_id = self._create_task("running")
+        cancel_requested = []
+        fake_control = SimpleNamespace(request_cancel=lambda: cancel_requested.append(True))
+        self.server._task_controls[task_id] = fake_control
+        result = self.server.handlers["tasks.cancel"](self.server, {"task_id": task_id})
+        self.assertEqual(result["status"], "stopping")
+        self.assertEqual(self.server.store.get_task(task_id)["status"], "stopping")
+        self.assertEqual(cancel_requested, [True])
+
+    def test_cancel_without_worker_goes_through_state_machine(self) -> None:
+        # 无活跃 worker 的 paused 任务：经 _transition 走状态机到 cancelled，
+        # 不绕过状态机直接 update_task；finished_at 被设置。
+        task_id = self._create_task("paused")
+        result = self.server.handlers["tasks.cancel"](self.server, {"task_id": task_id})
+        self.assertEqual(result["status"], "cancelled")
+        task = self.server.store.get_task(task_id)
+        self.assertEqual(task["status"], "cancelled")
+        self.assertIsNotNone(task["finished_at"])
+
 
 class TaskScanFailureErrorCodesTests(unittest.TestCase):
     """P1-5/P1-6：全局扫描失败不再用 TASK_RECOVERABLE；None 不掩盖异常。"""
