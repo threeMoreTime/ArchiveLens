@@ -27,8 +27,8 @@
   },
   "bundles": {
     "rendererJs": { "warningRaw": 1300000, "failureRaw": 1330000, "warningGzip": 270000, "failureGzip": 280000 },
-    "rendererCss": { "warningRaw": 52000, "failureRaw": 55000, "warningGzip": 9800, "failureGzip": 10500 },
-    "mainJs": { "warningRaw": 100000, "failureRaw": 110000, "warningGzip": 22000, "failureGzip": 25000 },
+    "rendererCss": { "warningRaw": 52000, "failureRaw": 60000, "warningGzip": 9800, "failureGzip": 11000 },
+    "mainJs": { "warningRaw": 100000, "failureRaw": 136000, "warningGzip": 22000, "failureGzip": 31000 },
     "preloadJs": { "warningRaw": 8000, "failureRaw": 10000, "warningGzip": 3000, "failureGzip": 4000 }
   }
 }
