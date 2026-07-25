@@ -252,6 +252,27 @@ describe("桌面端产品化 UI contract", () => {
     expect(exportPage).toContain("setJobs([]);");
   });
 
+  it("P1-4：导出页为所有异步请求建立 taskId+routeGeneration+requestSequence 身份守卫", () => {
+    // 路由代次守卫：taskId 变化时递增，使旧请求作废
+    expect(exportPage).toContain("routeGeneration");
+    expect(exportPage).toContain("requestSequence");
+    expect(exportPage).toContain("mountedRef");
+    // loadJobs 必须接收 generation 并在写入前校验 taskId+generation+sequence+mounted
+    expect(exportPage).toContain("async (id: string, generation: number)");
+    expect(exportPage).toContain("generation !== routeGeneration.current");
+    expect(exportPage).toContain("seq !== requestSequence.current");
+    expect(exportPage).toContain("id !== taskId");
+  });
+
+  it("P1-4：cancel/retry 前校验 job 归属当前任务，陈旧 job 不作用于错误任务", () => {
+    expect(exportPage).toContain("jobBelongsToCurrentTask");
+    expect(exportPage).toContain("job.task_id === taskId");
+    // cancel 与 retry 都必须调用归属校验
+    expect(exportPage).toContain("if (!jobBelongsToCurrentTask(target))");
+    // retry 后校验 Engine 返回的真实 task_id 与当前页面一致
+    expect(exportPage).toContain("created.task_id !== taskId");
+  });
+
   it("任务中心用可扩展菜单承载生命周期操作和安全删除", () => {
     expect(taskCenter).toContain("query: query || undefined");
     expect(taskCenter).toContain("status: status || undefined");

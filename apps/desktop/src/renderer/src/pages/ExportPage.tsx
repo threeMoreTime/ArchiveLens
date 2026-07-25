@@ -55,21 +55,39 @@ export default function ExportPage() {
   const [actionIssue, setActionIssue] = useState<DiagnosticIssue | null>(null);
   const [busy, setBusy] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
-  const loadSeq = useRef(0);
+  // 跨任务异步竞态守卫：routeGeneration 在 taskId 变化时递增，requestSequence 标记每次请求。
+  // 只有请求的 taskId+generation+sequence 均匹配当前页面时才允许写入 state，
+  // 避免旧任务在途请求/事件覆盖新页面、或对错误任务执行 cancel/retry。
+  const routeGeneration = useRef(0);
+  const requestSequence = useRef(0);
+  const mountedRef = useRef(true);
 
-  const loadJobs = useCallback(async (id: string) => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const loadJobs = useCallback(async (id: string, generation: number) => {
+    const seq = ++requestSequence.current;
     try {
       const result = await window.archiveLens.export.listJobs(id, { limit: 50, offset: 0 });
+      // 仅当 taskId、routeGeneration、requestSequence 均匹配且组件仍挂载时才写入。
+      if (!mountedRef.current || generation !== routeGeneration.current || seq !== requestSequence.current || id !== taskId) return;
       setJobs(result.items);
       const exports = await window.archiveLens.export.list(id, { limit: 10, offset: 0 });
+      if (!mountedRef.current || generation !== routeGeneration.current || seq !== requestSequence.current || id !== taskId) return;
       setHistory(exports.items);
     } catch {
       // 作业或历史读取失败不阻塞主流程；下次轮询/事件再刷新
     }
-  }, []);
+  }, [taskId]);
 
   useEffect(() => {
-    const seq = ++loadSeq.current;
+    // taskId 变化时递增 routeGeneration，使所有在途的旧请求作废。
+    routeGeneration.current += 1;
+    const generation = routeGeneration.current;
+    requestSequence.current += 1;
+    const seq = requestSequence.current;
     setTask(null);
     setSummary(null);
     setHistory([]);
@@ -80,7 +98,7 @@ export default function ExportPage() {
     setSelectedFormat("html");
     if (!taskId) {
       setLoading(false);
-      return () => { loadSeq.current += 1; };
+      return () => { routeGeneration.current += 1; };
     }
     setLoading(true);
     Promise.all([
@@ -89,50 +107,63 @@ export default function ExportPage() {
       window.archiveLens.export.list(taskId, { limit: 10, offset: 0 }),
       window.archiveLens.export.listJobs(taskId),
     ]).then(([nextTask, nextSummary, exports, jobList]) => {
-      if (seq !== loadSeq.current) return;
+      if (!mountedRef.current || generation !== routeGeneration.current || seq !== requestSequence.current) return;
       setTask(nextTask);
       setSummary(nextSummary);
       setHistory(exports.items);
       setJobs(jobList.items);
     }).catch((error: unknown) => {
-      if (seq === loadSeq.current) setLoadIssue(toDiagnosticIssue("EXPORT_LOAD_FAILED", error));
+      if (mountedRef.current && generation === routeGeneration.current && seq === requestSequence.current) {
+        setLoadIssue(toDiagnosticIssue("EXPORT_LOAD_FAILED", error));
+      }
     }).finally(() => {
-      if (seq === loadSeq.current) setLoading(false);
+      if (mountedRef.current && generation === routeGeneration.current && seq === requestSequence.current) setLoading(false);
     });
-    return () => { loadSeq.current += 1; };
-  }, [reloadToken, taskId, loadJobs]);
+    return () => { routeGeneration.current += 1; };
+  }, [reloadToken, taskId]);
 
   // 有运行中作业时轮询；事件触发即时刷新
   const hasActive = jobs.some((job) => ACTIVE_JOB.has(job.status));
   useEffect(() => {
     if (!taskId || !hasActive) return;
-    const timer = window.setInterval(() => { void loadJobs(taskId); }, 1000);
+    const generation = routeGeneration.current;
+    const timer = window.setInterval(() => { void loadJobs(taskId, generation); }, 1000);
     return () => window.clearInterval(timer);
   }, [hasActive, taskId, loadJobs]);
 
   useEffect(() => {
     if (!taskId) return;
+    const generation = routeGeneration.current;
     return window.archiveLens.subscribe.onEvent((event: { task_id?: string | null; event: string }) => {
       if (event.task_id === taskId && (event.event === "export.progress" || event.event === "export.cleanup")) {
-        void loadJobs(taskId);
+        void loadJobs(taskId, generation);
       }
     });
   }, [taskId, loadJobs]);
 
   const cleanupActive = Boolean(task?.cleanup_status);
 
+  // 校验 job 归属当前路由 taskId，防止切换任务后对陈旧 job 执行 cancel/retry。
+  const jobBelongsToCurrentTask = (job: ExportJob | undefined): boolean => {
+    if (!job || !taskId) return false;
+    return job.task_id === taskId;
+  };
+
   const startExport = async (format: ExportFormat) => {
     if (!taskId || busy) return;
     setAwaitingConfirmation(false);
     setBusy(true);
     setActionIssue(null);
+    const generation = routeGeneration.current;
     try {
       await window.archiveLens.export.create({ task_id: taskId, format });
-      await loadJobs(taskId);
+      await loadJobs(taskId, generation);
     } catch (error) {
-      setActionIssue(toDiagnosticIssue("EXPORT_JOB_FAILED", error));
+      if (mountedRef.current && generation === routeGeneration.current) {
+        setActionIssue(toDiagnosticIssue("EXPORT_JOB_FAILED", error));
+      }
     } finally {
-      setBusy(false);
+      if (mountedRef.current && generation === routeGeneration.current) setBusy(false);
     }
   };
 
@@ -146,30 +177,56 @@ export default function ExportPage() {
   };
 
   const cancelJob = async (exportId: string) => {
-    if (busy) return;
+    if (busy || !taskId) return;
+    // 校验 job 仍属于当前任务：切换任务后陈旧 job 的取消会作用于错误任务。
+    const target = jobs.find((job) => job.export_id === exportId);
+    if (!jobBelongsToCurrentTask(target)) {
+      setActionIssue(toDiagnosticIssue("EXPORT_ACTION_FAILED", new Error("该导出不属于当前任务，已刷新页面。"), { what: "无法取消：导出归属已变化。" }));
+      setReloadToken((value) => value + 1);
+      return;
+    }
     setBusy(true);
     setActionIssue(null);
+    const generation = routeGeneration.current;
     try {
       await window.archiveLens.export.cancel(exportId);
-      await loadJobs(taskId ?? "");
+      await loadJobs(taskId, generation);
     } catch (error) {
-      setActionIssue(toDiagnosticIssue("EXPORT_ACTION_FAILED", error, { what: "取消导出未能完成。" }));
+      if (mountedRef.current && generation === routeGeneration.current) {
+        setActionIssue(toDiagnosticIssue("EXPORT_ACTION_FAILED", error, { what: "取消导出未能完成。" }));
+      }
     } finally {
-      setBusy(false);
+      if (mountedRef.current && generation === routeGeneration.current) setBusy(false);
     }
   };
 
   const retryJob = async (exportId: string) => {
-    if (busy) return;
+    if (busy || !taskId) return;
+    // 校验 job 归属；retry 必须作用于当前任务的真实导出。
+    const target = jobs.find((job) => job.export_id === exportId);
+    if (!jobBelongsToCurrentTask(target)) {
+      setActionIssue(toDiagnosticIssue("EXPORT_ACTION_FAILED", new Error("该导出不属于当前任务，已刷新页面。"), { what: "无法重试：导出归属已变化。" }));
+      setReloadToken((value) => value + 1);
+      return;
+    }
     setBusy(true);
     setActionIssue(null);
+    const generation = routeGeneration.current;
     try {
-      await window.archiveLens.export.retry(exportId);
-      await loadJobs(taskId ?? "");
+      const created = await window.archiveLens.export.retry(exportId);
+      // Engine 从 export_id 反查真实 task_id 返回；前端校验归属一致，拒绝跨任务污染。
+      if (created.task_id !== taskId) {
+        setActionIssue(toDiagnosticIssue("EXPORT_ACTION_FAILED", new Error("重试导出归属的任务与当前页面不一致。"), { what: "重试导出归属异常，已刷新。" }));
+        setReloadToken((value) => value + 1);
+        return;
+      }
+      await loadJobs(taskId, generation);
     } catch (error) {
-      setActionIssue(toDiagnosticIssue("EXPORT_JOB_FAILED", error, { what: "重新导出未能开始。" }));
+      if (mountedRef.current && generation === routeGeneration.current) {
+        setActionIssue(toDiagnosticIssue("EXPORT_JOB_FAILED", error, { what: "重新导出未能开始。" }));
+      }
     } finally {
-      setBusy(false);
+      if (mountedRef.current && generation === routeGeneration.current) setBusy(false);
     }
   };
 
