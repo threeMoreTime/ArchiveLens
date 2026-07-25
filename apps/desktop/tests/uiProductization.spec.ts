@@ -257,16 +257,16 @@ describe("桌面端产品化 UI contract", () => {
     expect(exportPage).toContain("routeGeneration");
     expect(exportPage).toContain("requestSequence");
     expect(exportPage).toContain("mountedRef");
-    // loadJobs 必须接收 generation 并在写入前校验 taskId+generation+sequence+mounted
+    // loadJobs 必须接收 generation 并通过 shouldCommit 纯函数校验身份
     expect(exportPage).toContain("async (id: string, generation: number)");
-    expect(exportPage).toContain("generation !== routeGeneration.current");
-    expect(exportPage).toContain("seq !== requestSequence.current");
-    expect(exportPage).toContain("id !== taskId");
+    expect(exportPage).toContain("shouldCommit");
+    expect(exportPage).toContain("from \"../utils/requestGuard\"");
   });
 
   it("P1-4：cancel/retry 前校验 job 归属当前任务，陈旧 job 不作用于错误任务", () => {
     expect(exportPage).toContain("jobBelongsToCurrentTask");
-    expect(exportPage).toContain("job.task_id === taskId");
+    // 归属判定委托给 jobBelongsToTask 纯函数（fail closed）
+    expect(exportPage).toContain("jobBelongsToTask(job?.task_id, taskId)");
     // cancel 与 retry 都必须调用归属校验
     expect(exportPage).toContain("if (!jobBelongsToCurrentTask(target))");
     // retry 后校验 Engine 返回的真实 task_id 与当前页面一致

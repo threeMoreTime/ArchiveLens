@@ -5,6 +5,7 @@ import type { ExportJob, ExportJobStatus, ExportRecord, ResultsPage, TaskSummary
 import { InlineFeedback, LoadingState, PageHeader } from "../components/feedback";
 import { DiagnosticErrorNotice } from "../components/DiagnosticErrorNotice";
 import { toDiagnosticIssue, type DiagnosticIssue } from "../utils/diagnosticIssue";
+import { shouldCommit, jobBelongsToTask } from "../utils/requestGuard";
 import { formatDateTime, taskDisplayName, taskSourceLabel, taskStatusView } from "../utils/presentation";
 
 type ExportFormat = "json" | "html";
@@ -72,10 +73,10 @@ export default function ExportPage() {
     try {
       const result = await window.archiveLens.export.listJobs(id, { limit: 50, offset: 0 });
       // 仅当 taskId、routeGeneration、requestSequence 均匹配且组件仍挂载时才写入。
-      if (!mountedRef.current || generation !== routeGeneration.current || seq !== requestSequence.current || id !== taskId) return;
+      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: taskId ?? "", currentGeneration: routeGeneration.current, currentSequence: requestSequence.current, mounted: mountedRef.current })) return;
       setJobs(result.items);
       const exports = await window.archiveLens.export.list(id, { limit: 10, offset: 0 });
-      if (!mountedRef.current || generation !== routeGeneration.current || seq !== requestSequence.current || id !== taskId) return;
+      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: taskId ?? "", currentGeneration: routeGeneration.current, currentSequence: requestSequence.current, mounted: mountedRef.current })) return;
       setHistory(exports.items);
     } catch {
       // 作业或历史读取失败不阻塞主流程；下次轮询/事件再刷新
@@ -144,10 +145,9 @@ export default function ExportPage() {
   const cleanupActive = Boolean(task?.cleanup_status);
 
   // 校验 job 归属当前路由 taskId，防止切换任务后对陈旧 job 执行 cancel/retry。
-  const jobBelongsToCurrentTask = (job: ExportJob | undefined): boolean => {
-    if (!job || !taskId) return false;
-    return job.task_id === taskId;
-  };
+  const jobBelongsToCurrentTask = (job: ExportJob | undefined): boolean => (
+    jobBelongsToTask(job?.task_id, taskId)
+  );
 
   const startExport = async (format: ExportFormat) => {
     if (!taskId || busy) return;
