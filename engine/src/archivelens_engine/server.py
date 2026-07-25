@@ -69,7 +69,14 @@ from .protocol import (
     safe_parse,
 )
 from .runtime.task_control import TaskControl
-from .runtime.task_state import LEGAL_TRANSITIONS, TERMINAL_TASK_STATUSES, TaskStateConflict, can_resume
+from .runtime.task_state import (
+    LEGAL_TRANSITIONS,
+    TERMINAL_TASK_STATUSES,
+    TaskStateConflict,
+    can_cancel,
+    can_pause,
+    can_resume,
+)
 from .search_terms import EXACT_LITERAL_SEARCH_MODE, normalize_search_text, unicode_sequence
 from .source_preflight import PreflightCancelled, preflight_folder
 
@@ -912,12 +919,18 @@ class Server:
                     "possible_missed_hits": True,
                 }],
             )
+            # 全局异常一律进入 failed 终态（保留已处理结果）。
+            # 已处理部分页时标记 TASK_FAILED_PARTIAL：保留事实（有部分结果），
+            # 但不暗示可恢复——failed 在状态机中不可转出，resume 会拒绝。
+            # 不再使用误导性的 TASK_RECOVERABLE（与 failed 终态矛盾）。
+            current_task = self.store.get_task(task_id)
+            processed_pages = int(current_task["processed_pages"]) if current_task else 0
             self.store.update_task(
                 task_id,
                 status="failed",
                 failure_count=1,
                 finished_at=now_iso(),
-                error_code="TASK_RECOVERABLE" if self.store.get_task(task_id)["processed_pages"] > 0 else None,
+                error_code="TASK_FAILED_PARTIAL" if processed_pages > 0 else None,
                 error_message=str(exc),
             )
             self.emit_task_event(
@@ -1401,14 +1414,26 @@ def _h_tasks_list(server: Server, params: dict) -> dict:
 
 def _h_tasks_pause(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
+    task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    current = str(task["status"])
+    if not can_pause(current):
+        # 幂等：已暂停的任务直接返回当前状态，不发伪 pausing 事件
+        if current == "paused":
+            return {"task_id": task_id, "status": "paused"}
+        raise ProtocolError(
+            ErrorCode.TASK_STATE_CONFLICT,
+            "当前任务状态不支持暂停。",
+            {"current": current, "allowed": ["running"]},
+        )
     tc = server._task_controls.get(task_id)
+    # 先完成状态转换；只有转换成功后才通知 worker，避免 worker 已收 pause 请求
+    # 而数据库状态未变（请求与状态不一致）。
+    server._transition(task_id, "pausing")
     if tc is not None:
         # 协作式：请求暂停；扫描线程在当前页完成后发 task.paused（真正暂停）
         tc.request_pause()
-    try:
-        server._transition(task_id, "pausing")
-    except ProtocolError:
-        pass
     task = server.store.get_task(task_id)
     server.emit_task_event(
         "task.pausing",
@@ -1434,7 +1459,7 @@ def _h_tasks_resume(server: Server, params: dict) -> dict:
     current = str(task["status"])
     if not can_resume(current):
         guidance = (
-            "失败任务不能直接继续；请使用原任务参数重新创建任务。"
+            "失败任务不能继续；请使用原任务参数重新创建任务。"
             if current == "failed"
             else "陈旧任务必须先转换为可恢复状态后才能继续。"
             if current == "stale"
@@ -1468,14 +1493,21 @@ def _h_tasks_resume(server: Server, params: dict) -> dict:
 
 def _h_tasks_cancel(server: Server, params: dict) -> dict:
     task_id = _require(params, "task_id", str)
-    tc = server._task_controls.get(task_id)
     task = server.store.get_task(task_id)
+    if task is None:
+        raise ProtocolError(ErrorCode.TASK_NOT_FOUND, f"任务不存在: {task_id}")
+    current = str(task["status"])
+    # 终态任务（completed/failed/cancelled）不可再 cancel；避免覆盖完成时间与终态。
+    if not can_cancel(current):
+        return {"task_id": task_id, "status": current}
+    tc = server._task_controls.get(task_id)
     if tc is not None:
         tc.request_cancel()
         try:
             server._transition(task_id, "stopping")
         except ProtocolError:
             pass
+        task = server.store.get_task(task_id)
         server.emit_task_event(
             "task.cancelling",
             task_id,

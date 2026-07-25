@@ -122,6 +122,29 @@ describe("ErrorRegistry", () => {
     const ok = registry.recordRendererReport({ operation: "tasks.list", message: "短消息", task_id: "t1" });
     expect(ok).toMatchObject({ source: "renderer", operation: "tasks.list", task_id: "t1" });
   });
+
+  it("stack 超限与 details 超限同样拒绝", () => {
+    const registry = new ErrorRegistry();
+    expect(() => registry.recordRendererReport({ operation: "x", message: "ok", stack: "s".repeat(20001) }))
+      .toThrow(DiagnosticPayloadTooLargeError);
+    expect(() => registry.recordRendererReport({
+      operation: "x",
+      message: "ok",
+      details: { big: "d".repeat(8001) },
+    })).toThrow(DiagnosticPayloadTooLargeError);
+  });
+
+  it("可选字段缺失时使用默认值（code→RENDERER_ERROR、details→{}、stack→null、task_id→null）", () => {
+    const registry = new ErrorRegistry();
+    const snap = registry.recordRendererReport({ operation: "review.action", message: "仅必要字段" });
+    expect(snap.code).toBe("RENDERER_ERROR");
+    expect(snap.task_id).toBeNull();
+    expect(snap.stack).toBeNull();
+    expect(snap.details).toEqual({});
+    // clear 后 snapshot 归 null
+    registry.clear();
+    expect(registry.snapshot()).toBeNull();
+  });
 });
 
 describe("开发者模式门禁", () => {
@@ -256,5 +279,132 @@ describe("readLogTail", () => {
     const { lines, errors } = await readLogTail(directory, 300);
     expect(errors).toEqual([]);
     expect(lines).toEqual(["[2026-07-22T00:00:00.000Z] 仅有 app"]);
+  });
+});
+
+describe("collectTaskSection 缺失/异常字段兜底", () => {
+  it("tasks.get 返回缺失/类型错误字段时使用 null/0 兜底，不抛错", async () => {
+    const deps = baseDeps({
+      sidecar: {
+        isReady: true,
+        call: async <T,>(method: string): Promise<T> => {
+          if (method === "app.info") return { engine_version: "9" } as T;
+          if (method === "diagnostics.run") return { checks: [] } as T;
+          if (method === "tasks.get") return {
+            status: 123,                 // 非字符串 → null + "unknown" 回退
+            workspace_dir: null,         // 非字符串 → null
+            ocr_model_id: undefined,     // 缺失 → null
+            ocr_indexed_pages: "abc",    // 非数字 → null
+            ocr_corpus_version: NaN,     // NaN → null
+            processed_pages: true,       // 非数字 → null → 0
+            failures: "not-an-array",    // 非数组 → []
+          } as T;
+          if (method === "results.query") return {} as T;       // layout_rebuild 缺失 → null
+          if (method === "exports.listJobs") return {} as T;    // items 缺失 → []
+          throw new Error(`unexpected ${method}`);
+        },
+      },
+    });
+    const snapshot = await collectDeveloperSnapshot(deps, { task_id: "t-missing" });
+    const task = snapshot.current_task!;
+    expect(task.status).toBe("unknown");
+    expect(task.workspace_path).toBeNull();
+    expect(task.ocr_model_id).toBeNull();
+    expect(task.ocr_indexed_pages).toBeNull();
+    expect(task.ocr_corpus_version).toBeNull();
+    expect(task.processed_pages).toBe(0);
+    expect(task.total_pages).toBe(0);
+    expect(task.occurrence_count).toBe(0);
+    expect(task.layout_rebuild).toBeNull();
+    expect(task.failures).toEqual([]);
+    expect(task.last_failed_export).toBeNull();
+  });
+
+  it("tasks.get 失败时 current_task 标记 unavailable 并保留 task_id", async () => {
+    const deps = baseDeps({
+      sidecar: {
+        isReady: true,
+        call: async <T,>(method: string): Promise<T> => {
+          if (method === "app.info") return { engine_version: "9" } as T;
+          if (method === "diagnostics.run") return { checks: [] } as T;
+          if (method === "tasks.get") throw new Error("任务不存在");
+          if (method === "results.query") return { layout_rebuild: { x: 1 } } as T;
+          if (method === "exports.listJobs") return { items: [{ status: "interrupted" }] } as T;
+          throw new Error(`unexpected ${method}`);
+        },
+      },
+      snapshotForTask: () => ({ time: "t", source: "engine", operation: "op", task_id: "t-missing", code: "X", message: "m", details: {}, stack: null }),
+    });
+    const snapshot = await collectDeveloperSnapshot(deps, { task_id: "t-missing" });
+    expect(snapshot.current_task?.status).toBe("unavailable");
+    expect(snapshot.current_task?.task_id).toBe("t-missing");
+    expect(snapshot.collection_errors.some((e) => e.section === "current_task")).toBe(true);
+  });
+
+  it("results.query 与 exports.listJobs 各自失败时记入 collection_errors", async () => {
+    const deps = baseDeps({
+      sidecar: {
+        isReady: true,
+        call: async <T,>(method: string): Promise<T> => {
+          if (method === "app.info") return { engine_version: "9" } as T;
+          if (method === "diagnostics.run") return { checks: [] } as T;
+          if (method === "tasks.get") return { status: "running", processed_pages: 2, total_pages: 4 } as T;
+          if (method === "results.query") throw new Error("layout 查询失败");
+          if (method === "exports.listJobs") throw new Error("exports 查询失败");
+          throw new Error(`unexpected ${method}`);
+        },
+      },
+    });
+    const snapshot = await collectDeveloperSnapshot(deps, { task_id: "t-err" });
+    expect(snapshot.collection_errors.some((e) => e.section === "current_task.layout_rebuild")).toBe(true);
+    expect(snapshot.collection_errors.some((e) => e.section === "current_task.exports")).toBe(true);
+    expect(snapshot.current_task?.layout_rebuild).toBeNull();
+    expect(snapshot.current_task?.last_failed_export).toBeNull();
+  });
+});
+
+describe("脱敏与报告边界补充", () => {
+  it("redactText 覆盖 POSIX 用户目录与空输入", () => {
+    expect(redactText("/home/bob/logs", "bob", "")).not.toContain("bob");
+    expect(redactText("/Users/carol/data", "carol", "")).not.toContain("carol");
+    expect(redactText("", "any", "any")).toBe("");
+    expect(redactText("无用户信息的纯文本", "", "")).toBe("无用户信息的纯文本");
+  });
+
+  it("buildRedactedSummary 在 checks 为空、含 collection_errors、无 current_task 时仍生成", async () => {
+    const deps = baseDeps({
+      sidecar: {
+        isReady: false,
+        call: async <T,>(method: string): Promise<T> => {
+          if (method === "app.info") return {} as T;
+          if (method === "diagnostics.run") throw new Error("诊断不可用");
+          throw new Error(`unexpected ${method}`);
+        },
+      },
+    });
+    const snapshot = await collectDeveloperSnapshot(deps, {});
+    const text = buildRedactedSummary(snapshot);
+    expect(text).toContain("未获取到检查结果");
+    expect(text).toContain("未选择当前任务");
+    expect(text).toContain("当前没有已登记的错误");
+    expect(text).toContain("采集告警");
+  });
+
+  it("buildFullPathSummary 在无 current_task 与无 last_known_error 时仍生成", async () => {
+    const snapshot = await collectDeveloperSnapshot(baseDeps(), {});
+    const text = buildFullPathSummary(snapshot);
+    expect(text).toContain("未选择当前任务");
+    expect(text).toContain(USER_DATA);
+  });
+
+  it("buildAiDebugReport 在 not_available 含 error 时展示错误", () => {
+    const report = buildAiDebugReport(
+      { generated_at: "t" } as never,
+      { status: "not_available", error: "引擎未连接" },
+      [],
+      [{ section: "app.log", message: "读取失败" }],
+    );
+    expect(report).toContain("not_available（引擎未连接）");
+    expect(report).toContain("[日志读取错误] app.log：读取失败");
   });
 });

@@ -48,11 +48,13 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(s.status, "queued")
 
     def test_completed_and_cancelled_have_no_outgoing(self) -> None:
-        # completed / cancelled 是真正无出口的终态；
-        # failed 虽属终态（finished_at 已设），但允许用户手动重试 → queued/recoverable。
+        # completed / failed / cancelled 都是真正无出口的终态。
+        # failed 不再允许转出：resume 合同只接受 paused/recoverable，
+        # 旧设计（failed→queued/recoverable）与 resume 拒绝 failed 矛盾。
+        # 用户重试应使用原参数创建新任务，而不是复活 failed 任务。
         self.assertEqual(LEGAL_TRANSITIONS["completed"], frozenset())
         self.assertEqual(LEGAL_TRANSITIONS["cancelled"], frozenset())
-        self.assertIn("queued", LEGAL_TRANSITIONS["failed"])
+        self.assertEqual(LEGAL_TRANSITIONS["failed"], frozenset())
 
     def test_started_at_set_on_first_running(self) -> None:
         s = TaskState(task_id="t1", status="paused")

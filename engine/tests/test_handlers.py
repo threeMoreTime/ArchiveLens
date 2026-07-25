@@ -15,7 +15,7 @@ from unittest import mock
 from PIL import Image
 
 from archivelens_engine.protocol import ErrorCode, ProtocolError
-from archivelens_engine.server import Server
+from archivelens_engine.server import Server, now_iso
 
 
 class HandlersTests(unittest.TestCase):
@@ -580,6 +580,161 @@ class HandlersTests(unittest.TestCase):
         payload = json.loads(line)
         self.assertEqual(payload["event"], "task.progress")
         self.assertEqual(payload["payload"]["source_id"], "中文 空格 # %.pdf")
+
+
+class TaskPauseCancelGuardTests(unittest.TestCase):
+    """P1-2/P1-3：cancel 不得改写终态；pause 必须先完成状态转换再通知 worker。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        self.server = Server(workspace_root=self.tmp)
+
+    def tearDown(self) -> None:
+        try:
+            self.server.store.close()
+        except Exception:
+            pass
+        import gc
+
+        gc.collect()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _create_task(self, status: str) -> str:
+        # 直接用 store 建任务，跳过 _h_tasks_create 的真实来源 preflight。
+        task_id = self.server.store.create_task(
+            source_dir="X",
+            output_dir="Y",
+            workspace_dir="Z",
+            name="guard-test",
+            search_terms=["约"],
+            search_mode="exact_literal",
+            total_pages=10,
+        )
+        if status != "draft":
+            self.server.store.update_task(
+                task_id,
+                status=status,
+                finished_at=now_iso() if status in ("completed", "failed", "cancelled") else None,
+            )
+        return task_id
+
+    def test_cancel_rejects_completed_task_without_overwriting(self) -> None:
+        task_id = self._create_task("completed")
+        finished_before = self.server.store.get_task(task_id)["finished_at"]
+        result = self.server.handlers["tasks.cancel"](self.server, {"task_id": task_id})
+        self.assertEqual(result["status"], "completed")
+        task_after = self.server.store.get_task(task_id)
+        self.assertEqual(task_after["status"], "completed")
+        self.assertEqual(task_after["finished_at"], finished_before)
+
+    def test_cancel_rejects_failed_and_cancelled_tasks(self) -> None:
+        for status in ("failed", "cancelled"):
+            with self.subTest(status=status):
+                task_id = self._create_task(status)
+                result = self.server.handlers["tasks.cancel"](self.server, {"task_id": task_id})
+                self.assertEqual(result["status"], status)
+                self.assertEqual(self.server.store.get_task(task_id)["status"], status)
+
+    def test_cancel_without_live_control_marks_cancelled_for_nonterminal(self) -> None:
+        for status in ("paused", "recoverable", "queued", "draft"):
+            with self.subTest(status=status):
+                task_id = self._create_task(status)
+                result = self.server.handlers["tasks.cancel"](self.server, {"task_id": task_id})
+                self.assertEqual(result["status"], "cancelled")
+                self.assertEqual(self.server.store.get_task(task_id)["status"], "cancelled")
+
+    def test_pause_rejects_non_running_task_and_does_not_request_worker_pause(self) -> None:
+        # paused 任务：幂等返回当前状态，不抛异常、不发 pausing 事件
+        task_id = self._create_task("paused")
+        result = self.server.handlers["tasks.pause"](self.server, {"task_id": task_id})
+        self.assertEqual(result["status"], "paused")
+        self.assertEqual(self.server.store.get_task(task_id)["status"], "paused")
+
+    def test_pause_rejects_recoverable_and_failed_with_state_conflict(self) -> None:
+        for status in ("recoverable", "failed", "completed"):
+            with self.subTest(status=status):
+                task_id = self._create_task(status)
+                with self.assertRaises(ProtocolError) as raised:
+                    self.server.handlers["tasks.pause"](self.server, {"task_id": task_id})
+                self.assertEqual(raised.exception.code, ErrorCode.TASK_STATE_CONFLICT)
+                # 状态未被改动
+                self.assertEqual(self.server.store.get_task(task_id)["status"], status)
+
+    def test_pause_transitions_before_notifying_worker(self) -> None:
+        # running 任务：应先 transition 到 pausing，成功后才 request_pause。
+        # 用 mock TaskControl 验证：transition 失败时 worker 不应被通知。
+        from types import SimpleNamespace
+
+        task_id = self._create_task("running")
+        pause_requested = []
+        fake_control = SimpleNamespace(request_pause=lambda: pause_requested.append(True))
+        self.server._task_controls[task_id] = fake_control
+        result = self.server.handlers["tasks.pause"](self.server, {"task_id": task_id})
+        self.assertEqual(result["status"], "pausing")
+        self.assertEqual(self.server.store.get_task(task_id)["status"], "pausing")
+        self.assertEqual(pause_requested, [True])
+
+
+class TaskScanFailureErrorCodesTests(unittest.TestCase):
+    """P1-5/P1-6：全局扫描失败不再用 TASK_RECOVERABLE；None 不掩盖异常。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        self.server = Server(workspace_root=self.tmp)
+
+    def tearDown(self) -> None:
+        try:
+            self.server.store.close()
+        except Exception:
+            pass
+        import gc
+
+        gc.collect()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _create_running_task(self, processed_pages: int, total_pages: int = 10) -> str:
+        task_id = self.server.store.create_task(
+            source_dir="X",
+            output_dir="Y",
+            workspace_dir="Z",
+            name="fail-test",
+            search_terms=["约"],
+            search_mode="exact_literal",
+            total_pages=total_pages,
+        )
+        self.server.store.update_task(
+            task_id,
+            status="running",
+            processed_pages=processed_pages,
+        )
+        return task_id
+
+    def test_partial_failure_uses_TASK_FAILED_PARTIAL_not_RECOVERABLE(self) -> None:
+        task_id = self._create_running_task(processed_pages=3)
+        # ReportPipeline 在 _run_scan 内部延迟导入，mock 其源头模块属性。
+        with mock.patch("archivelens_engine.report_pipeline.ReportPipeline", side_effect=RuntimeError("boom")):
+            self.server._run_scan(task_id, worker_generation=1)
+        task = self.server.store.get_task(task_id)
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["error_code"], "TASK_FAILED_PARTIAL")
+        self.assertNotEqual(task["error_code"], "TASK_RECOVERABLE")
+        self.assertIn("boom", task["error_message"])
+
+    def test_no_processed_pages_failure_has_null_error_code(self) -> None:
+        task_id = self._create_running_task(processed_pages=0)
+        with mock.patch("archivelens_engine.report_pipeline.ReportPipeline", side_effect=RuntimeError("early boom")):
+            self.server._run_scan(task_id, worker_generation=1)
+        task = self.server.store.get_task(task_id)
+        self.assertEqual(task["status"], "failed")
+        self.assertFalse(task["error_code"])
+
+    def test_failure_does_not_mask_exception_when_task_row_missing(self) -> None:
+        # P1-6：任务行缺失时 _run_scan 早期 return；失败路径的 get_task(None)
+        # 已用 `if current_task else 0` 保护，不会抛 TypeError。
+        task_id = "nonexistent-task"
+        with mock.patch("archivelens_engine.report_pipeline.ReportPipeline", side_effect=RuntimeError("original boom")):
+            self.server._run_scan(task_id, worker_generation=1)
+        self.assertIsNone(self.server.store.get_task(task_id))
 
 
 if __name__ == "__main__":

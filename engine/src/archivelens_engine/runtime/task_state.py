@@ -47,7 +47,7 @@ LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
     "recoverable": frozenset({"queued", "cancelled", "running"}),
     "stale": frozenset({"recoverable", "cancelled"}),
     "completed": frozenset(),
-    "failed": frozenset({"queued", "cancelled", "recoverable"}),
+    "failed": frozenset(),
     "cancelled": frozenset(),
 }
 

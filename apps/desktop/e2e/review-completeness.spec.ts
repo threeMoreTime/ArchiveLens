@@ -418,10 +418,10 @@ test("E2E-03：全局高亮、任务覆盖与恢复跟随在重启后保持一�
     await expect(page.getByRole("button", { name: "确认清理安全临时残留" })).toBeVisible();
     await page.getByRole("button", { name: "取消", exact: true }).click();
     await expect(page.getByRole("button", { name: "清理安全临时残留", exact: true })).toBeVisible();
+    // 环境诊断已迁入隐藏开发者页面：设置页不再提供"环境诊断"链接或"打开环境诊断"按钮。
+    // 技术诊断入口默认不可见（需在设置页底部连点版本号 7 次解锁）。
     await expect(page.getByRole("link", { name: "环境诊断" })).toHaveCount(0);
-    await page.getByRole("button", { name: "打开环境诊断" }).click();
-    await expect(page.getByRole("heading", { name: "环境诊断" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "设置" })).toHaveClass(/active/);
+    await expect(page.getByRole("button", { name: "打开环境诊断" })).toHaveCount(0);
     await page.getByRole("link", { name: "设置" }).click();
     await page.getByRole("tab", { name: "全局默认" }).click();
     await page.getByRole("button", { name: "淡蓝" }).click();

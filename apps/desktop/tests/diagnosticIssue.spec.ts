@@ -33,6 +33,26 @@ describe("diagnosticIssue", () => {
     expect(extractBackendErrorCode(new Error("no known code"))).toBeNull();
   });
 
+  it("extractBackendErrorCode 处理非字符串 code 属性、字符串错误、null/非对象", () => {
+    // code 属性为非字符串 → 跳过属性分支，走 message 匹配
+    expect(extractBackendErrorCode({ code: 123 })).toBeNull();
+    // 错误本身是字符串
+    expect(extractBackendErrorCode("失败码 TASK_NOT_FOUND")).toBe("TASK_NOT_FOUND");
+    expect(extractBackendErrorCode("无码字符串")).toBeNull();
+    // null / 非对象
+    expect(extractBackendErrorCode(null)).toBeNull();
+    expect(extractBackendErrorCode(undefined)).toBeNull();
+  });
+
+  it("toDiagnosticIssue 对非 Error 输入（字符串/未知）生成默认 rawMessage 且无 stack", () => {
+    const fromString = toDiagnosticIssue("EXPORT_JOB_FAILED", "纯字符串错误");
+    expect(fromString.rawMessage).toBe("纯字符串错误");
+    expect(fromString.rawStack).toBeUndefined();
+    const fromUnknown = toDiagnosticIssue("EXPORT_JOB_FAILED", { weird: true });
+    expect(fromUnknown.rawMessage).toBe("未知错误");
+    expect(fromUnknown.rawStack).toBeUndefined();
+  });
+
   it("toRendererErrorReport 携带操作、任务、码与原始消息/调用栈", () => {
     const error = new Error("raw detail");
     const issue = toDiagnosticIssue("SETTINGS_SAVE_FAILED", error);
