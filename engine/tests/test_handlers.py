@@ -676,16 +676,70 @@ class TaskPauseCancelGuardTests(unittest.TestCase):
 
     def test_cancel_transitions_before_notifying_worker(self) -> None:
         # running 任务且有活跃 worker：应先 transition 到 stopping 成功后才 request_cancel。
+        # 关键：request_cancel 被调用的瞬间，数据库必须已经是 stopping。
+        from types import SimpleNamespace
+
+        task_id = self._create_task("running")
+        status_at_request = []
+        cancel_requested = []
+
+        def _request_cancel():
+            # 即时读取数据库：worker 收到取消请求时状态必须已是 stopping。
+            current = self.server.store.get_task(task_id)
+            status_at_request.append(str(current["status"]) if current else None)
+            cancel_requested.append(True)
+
+        fake_control = SimpleNamespace(request_cancel=_request_cancel)
+        self.server._task_controls[task_id] = fake_control
+        result = self.server.handlers["tasks.cancel"](self.server, {"task_id": task_id})
+        self.assertEqual(result["status"], "stopping")
+        self.assertEqual(self.server.store.get_task(task_id)["status"], "stopping")
+        self.assertEqual(cancel_requested, [True])
+        self.assertEqual(status_at_request, ["stopping"])
+
+    def test_cancel_transition_failure_does_not_notify_worker(self) -> None:
+        # 转换失败（并发已转走 / 非法转换）：不得通知 worker、不得发 cancelling 事件、
+        # 数据库状态不变、handler 返回最新真实状态。
         from types import SimpleNamespace
 
         task_id = self._create_task("running")
         cancel_requested = []
         fake_control = SimpleNamespace(request_cancel=lambda: cancel_requested.append(True))
         self.server._task_controls[task_id] = fake_control
+        # 预先把状态改为 completed（终态），使 running→stopping 在 _transition 里
+        # 因 current 已变而失败。模拟并发场景。
+        self.server.store.update_task(task_id, status="completed")
+        events_before = list(self.server._event_log) if hasattr(self.server, "_event_log") else []
         result = self.server.handlers["tasks.cancel"](self.server, {"task_id": task_id})
-        self.assertEqual(result["status"], "stopping")
-        self.assertEqual(self.server.store.get_task(task_id)["status"], "stopping")
-        self.assertEqual(cancel_requested, [True])
+        # can_cancel(completed)=False，直接返回，不走 transition/request_cancel
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(cancel_requested, [])
+        self.assertEqual(self.server.store.get_task(task_id)["status"], "completed")
+
+    def test_cancel_skips_worker_when_transition_raises_conflict(self) -> None:
+        # 有活跃 worker 但 _transition 抛 TASK_STATE_CONFLICT（current 不是 running）：
+        # 不得 request_cancel、不得发 task.cancelling、返回当前真实状态。
+        from types import SimpleNamespace
+        from unittest import mock
+        from archivelens_engine.protocol import ErrorCode as EC
+
+        task_id = self._create_task("running")
+        cancel_requested = []
+        fake_control = SimpleNamespace(request_cancel=lambda: cancel_requested.append(True))
+        self.server._task_controls[task_id] = fake_control
+        # 让 _transition 抛 TASK_STATE_CONFLICT
+        with mock.patch.object(
+            self.server,
+            "_transition",
+            side_effect=ProtocolError(EC.TASK_STATE_CONFLICT, "conflict"),
+        ):
+            result = self.server.handlers["tasks.cancel"](self.server, {"task_id": task_id})
+        # 未通知 worker
+        self.assertEqual(cancel_requested, [])
+        # 数据库仍是 running（transition 失败未改写）
+        self.assertEqual(self.server.store.get_task(task_id)["status"], "running")
+        # 返回的是当前真实状态
+        self.assertEqual(result["status"], "running")
 
     def test_cancel_without_worker_goes_through_state_machine(self) -> None:
         # 无活跃 worker 的 paused 任务：经 _transition 走状态机到 cancelled，

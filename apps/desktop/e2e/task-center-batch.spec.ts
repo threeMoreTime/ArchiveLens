@@ -189,3 +189,92 @@ test("task center batches revalidate, continue after failure, and retry safely",
     await rm(runRoot, { recursive: true, force: true });
   }
 });
+
+test("1080px 窄窗口下任务中心核心交互无指针拦截", async () => {
+  // 不固定到 1280：在 1080×760（贴近低分辨率笔记本）下验证表格、复选框、
+  // 批量栏和行操作按钮无 pointer interception。表格 min-width 996px 在 1080 下
+  // 仍可完整显示，但工具栏会水平滚动——此测试确保滚动/层叠不遮挡可点击元素。
+  const runRoot = await mkdtemp(path.join(os.tmpdir(), "archivelens-task-1080-"));
+  const userDataDir = path.join(runRoot, "user-data");
+  const sourceDir = path.join(runRoot, "source");
+  await mkdir(userDataDir, { recursive: true });
+  await mkdir(sourceDir, { recursive: true });
+  await writeFile(path.join(runRoot, ".archivelens-test-owned"), "task-1080\n", "utf-8");
+  await copyFile(SOURCE_FIXTURE, path.join(sourceDir, "a.png"));
+
+  let app: ElectronApplication | null = null;
+  try {
+    const python = await resolvePythonExecutable();
+    app = await electron.launch({
+      args: [APP_DIR],
+      cwd: APP_DIR,
+      env: {
+        ...process.env,
+        ARCHIVELENS_E2E: "1",
+        ARCHIVELENS_USER_DATA_DIR: userDataDir,
+        AL_DEBUG: "1",
+        AL_ENGINE_DEV: python,
+        AL_ENGINE_SRC: ENGINE_SRC,
+        AL_SLOWFAKE_PAGES: "1",
+      },
+    });
+    const page = await app.firstWindow();
+    await page.waitForLoadState("domcontentloaded");
+    await page.setViewportSize({ width: 1080, height: 760 });
+    await waitForSidecar(page);
+
+    // 建立两个任务，确保表格有数据行可交互。
+    const ids = await page.evaluate(async (dir) => {
+      const api = (window as any).archiveLens;
+      const a = await api.tasks.create({ source_dir: dir, search_text: "档案" });
+      const b = await api.tasks.create({ source_dir: dir, search_text: "文献" });
+      return [a.task_id, b.task_id] as string[];
+    }, sourceDir);
+
+    await openTaskCenter(page);
+    await expect(page.getByRole("table", { name: "全部任务" })).toBeVisible();
+
+    // 1080×760（< 1180px 断点）下任务中心表格进入卡片式布局：表头视觉隐藏
+    // （sr-only），每行作为卡片，单行复选框可见可点。这是既有的产品响应式设计。
+    // 此测试验证卡片模式下真实用户交互无指针拦截。
+
+    // 单行复选框（可见方框 indicator 在视口内）可点击，选中后批量栏同步出现。
+    // 点击 Fluent Checkbox 的可见 wrapper（.fui-Checkbox），它承载 indicator 方框。
+    const firstRowCheckbox = page.locator(".al-task-table-row").first().locator(".fui-Checkbox");
+    await firstRowCheckbox.click();
+    await expect(page.getByLabel("批量任务操作")).toContainText("已选择 1 个任务");
+
+    // 第二行复选框可点击，选中数量同步为 2。
+    const secondRowCheckbox = page.locator(".al-task-table-row").nth(1).locator(".fui-Checkbox");
+    await secondRowCheckbox.click();
+    await expect(page.getByLabel("批量任务操作")).toContainText("已选择 2 个任务");
+    await expect(page.getByLabel("批量操作预检")).toBeVisible();
+
+    // 行操作按钮可点击（卡片模式的操作区）。
+    const firstRowAction = page.locator(".al-task-table-row").first().getByRole("button").first();
+    await expect(firstRowAction).toBeEnabled();
+
+    // 取消第一行选择，批量栏同步更新为 1。
+    await firstRowCheckbox.click();
+    await expect(page.getByLabel("批量任务操作")).toContainText("已选择 1 个任务");
+
+    // 清理创建的任务（draft/活跃任务需先取消再删除）。
+    await page.evaluate(async (taskIds) => {
+      const api = (window as any).archiveLens;
+      for (const id of taskIds) {
+        try { await api.tasks.cancel(id); } catch { /* 已终态则忽略 */ }
+        try {
+          for (let i = 0; i < 20; i++) {
+            const t = await api.tasks.get(id);
+            if (["cancelled", "completed", "failed"].includes(t.status)) break;
+            await new Promise((r) => setTimeout(r, 200));
+          }
+        } catch { /* ignore */ }
+        try { await api.tasks.delete(id); } catch { /* ignore */ }
+      }
+    }, ids);
+  } finally {
+    await app?.close().catch(() => undefined);
+    await rm(runRoot, { recursive: true, force: true });
+  }
+});

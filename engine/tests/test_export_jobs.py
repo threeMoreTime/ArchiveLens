@@ -561,6 +561,31 @@ class ExportJobInteractionTests(unittest.TestCase):
         history_after = len(self.server.store.list_exports(task_id=tid, limit=10, offset=0))
         self.assertEqual(history_before, history_after)
 
+    def test_retry_inherits_real_task_id_from_export_id(self) -> None:
+        # P1-4：retry 必须从 export_id 反查原 job 的真实 task_id，不信任前端归属。
+        # 前端可能因竞态传入陈旧 export_id；Engine 必须用 job 自身 task_id 创建重试。
+        tid, _original = _seed_exportable_task(self.server, self.tmp)
+        with patch("archivelens_engine.server.write_offline_review_report", side_effect=_fake_writer(self.server, cancel_at="building")):
+            first = self.server.handlers["exports.create"](self.server, {"task_id": tid, "format": "html"})
+            _wait_terminal(self.server, first["export_id"])
+        original_job = self.server.store.get_export_job(first["export_id"])
+        self.assertEqual(original_job["task_id"], tid)
+        with patch("archivelens_engine.server.write_offline_review_report", side_effect=_fake_writer(self.server)):
+            retry = self.server.handlers["exports.retry"](self.server, {"export_id": first["export_id"]})
+        # retry 返回的 task_id 必须等于原 job 的真实 task_id（非前端传入）。
+        self.assertEqual(retry["task_id"], tid)
+        self.assertEqual(retry["task_id"], original_job["task_id"])
+        _wait_terminal(self.server, retry["export_id"])
+
+    def test_retry_and_cancel_fail_closed_on_unknown_export_id(self) -> None:
+        # P1-4：异常/不存在的 export_id 必须 fail closed，不得创建幽灵作业。
+        with self.assertRaises(ProtocolError) as ctx:
+            self.server.handlers["exports.retry"](self.server, {"export_id": "exp_nonexistent"})
+        self.assertEqual(ctx.exception.code, ErrorCode.TASK_NOT_FOUND)
+        with self.assertRaises(ProtocolError) as ctx2:
+            self.server.handlers["exports.cancel"](self.server, {"export_id": "exp_nonexistent"})
+        self.assertEqual(ctx2.exception.code, ErrorCode.TASK_NOT_FOUND)
+
 
 class ExportJobRestartTests(unittest.TestCase):
     def test_running_job_becomes_interrupted_and_temp_cleaned_on_restart(self) -> None:

@@ -8,8 +8,8 @@ const sourceFiles = [
   "packages/ipc-schema/src/**/*.ts",
 ];
 const testFiles = [
-  "apps/desktop/tests/**/*.ts",
-  "apps/desktop/e2e/**/*.ts",
+  "apps/desktop/tests/**/*.{ts,tsx}",
+  "apps/desktop/e2e/**/*.{ts,tsx}",
 ];
 const allTypeScriptFiles = [...sourceFiles, ...testFiles];
 

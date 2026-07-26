@@ -125,3 +125,87 @@ test("导出作业：真实 OCR 任务创建 HTML/JSON job、进度、完成与�
     await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
   }
 });
+
+test("P1-4：切换导出任务时旧任务的异步请求与事件不污染新页面", async () => {
+  const userDataDir = await makeOwnedTempDir("userData", "export-race");
+  const sourceDir = await makeOwnedTempDir("source", "export-race");
+  await copyFile(FIXTURE, path.join(sourceDir, "race-a.pdf"));
+  await copyFile(FIXTURE, path.join(sourceDir, "race-b.pdf"));
+  const pythonExe = await resolvePythonExecutable();
+  const app: ElectronApplication = await electron.launch({
+    args: [APP_DIR],
+    cwd: APP_DIR,
+    env: {
+      ...process.env,
+      ARCHIVELENS_E2E: "1",
+      ARCHIVELENS_USER_DATA_DIR: userDataDir,
+      AL_DEBUG: "1",
+      AL_ENGINE_DEV: pythonExe,
+      AL_ENGINE_SRC: ENGINE_SRC,
+    },
+  });
+  try {
+    const win = await app.firstWindow();
+    await win.waitForLoadState("domcontentloaded");
+    await win.setViewportSize({ width: 1280, height: 760 });
+    await waitForSidecar(win);
+
+    // 创建两个任务并完成 OCR，各自有独立的导出作业。
+    const fileA = path.join(sourceDir, "race-a.pdf");
+    const fileB = path.join(sourceDir, "race-b.pdf");
+    const ids = await win.evaluate(async (files: { a: string; b: string }) => {
+      const api = (window as any).archiveLens;
+      const ta = await api.tasks.create({ source_type: "files", source_files: [files.a], search_text: "档" });
+      await api.tasks.start(ta.task_id);
+      const tb = await api.tasks.create({ source_type: "files", source_files: [files.b], search_text: "案" });
+      await api.tasks.start(tb.task_id);
+      return { a: ta.task_id as string, b: tb.task_id as string };
+    }, { a: fileA, b: fileB });
+    await expect.poll(async () => win.evaluate(async (tids) => {
+      const api = (window as any).archiveLens;
+      const sa = (await api.tasks.get(tids.a)).status;
+      const sb = (await api.tasks.get(tids.b)).status;
+      return sa === "completed" && sb === "completed";
+    }, ids), { timeout: 120_000 }).toBe(true);
+
+    // 在任务 A 上创建一个 JSON 导出作业（会触发后续 listJobs 异步请求与事件）。
+    await win.evaluate(async (tid) => {
+      await (window as any).archiveLens.export.create({ task_id: tid, format: "json" });
+    }, ids.a);
+    await win.evaluate((id) => { window.location.hash = `#/export/${id}`; }, ids.a);
+    await expect(win.getByRole("heading", { name: "导出结果" })).toBeVisible();
+    // 等 A 的作业出现
+    await expect.poll(async () => win.evaluate(async (id) => {
+      const list = await (window as any).archiveLens.export.listJobs(id);
+      return list.items.length;
+    }, ids.a), { timeout: 30_000 }).toBeGreaterThan(0);
+
+    // 立即切换到任务 B：A 的在途 listJobs 请求与 export.progress 事件可能随后到达。
+    await win.evaluate((id) => { window.location.hash = `#/export/${id}`; }, ids.b);
+    await expect.poll(() => win.evaluate(() => window.location.hash)).toBe(`#/export/${ids.b}`);
+
+    // 等待足够时间让 A 的旧请求/事件落定（若守卫缺失会用 A 的作业覆盖 B 页面）。
+    await win.waitForTimeout(1500);
+
+    // 关键断言：B 页面渲染的作业数必须等于 B 的真实作业数，且不含 A 的作业。
+    // A 与 B 是不同任务，export_id 集合不相交。
+    const aJobs = await win.evaluate(async (id) => {
+      return await (window as any).archiveLens.export.listJobs(id);
+    }, ids.a);
+    const bJobsFromApi = await win.evaluate(async (id) => {
+      return await (window as any).archiveLens.export.listJobs(id);
+    }, ids.b);
+    const aExportIds = new Set(aJobs.items.map((j: any) => j.export_id));
+    const bExportIds = new Set(bJobsFromApi.items.map((j: any) => j.export_id));
+    const overlap = [...aExportIds].filter((id) => bExportIds.has(id as string));
+    expect(overlap).toEqual([]);
+
+    // B 页面 DOM 渲染的作业卡片数应等于 B 的真实作业数（A 的旧请求未污染）。
+    await expect.poll(() => win.evaluate(() => document.querySelectorAll(".al-export-job-row").length), { timeout: 10_000 })
+      .toBe(bJobsFromApi.items.length);
+  } finally {
+    await app.close().catch(() => undefined);
+    await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined);
+    await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+});

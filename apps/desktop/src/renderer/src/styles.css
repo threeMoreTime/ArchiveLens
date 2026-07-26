@@ -451,7 +451,6 @@ kbd { display:inline-block; padding:1px 5px; border:1px solid #cdbfae; border-bo
 .al-task-center-table .al-task-table-head, .al-task-center-table .al-task-table-row { grid-template-columns:120px minmax(240px,1.6fr) 170px 130px 150px 176px; }
 .al-task-table-row.selected { background:#fff8e8; }
 .al-task-select-cell { display:flex; align-items:center; justify-content:center; min-width:0; }
-.al-task-table-head .al-task-select-cell { justify-content:flex-start; overflow:visible; }
 .al-task-result-cell { display:grid; gap:var(--s1); }
 .al-task-result-cell small { color:var(--muted); }
 .al-task-row-actions { display:flex; flex-wrap:wrap; gap:var(--s1); }

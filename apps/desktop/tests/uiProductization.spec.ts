@@ -180,6 +180,32 @@ describe("桌面端产品化 UI contract", () => {
     expect(styles).toContain(".al-search-layer-ocr-top-k");
   });
 
+  it("P1-1：检索页订阅当前任务事件并自动刷新语料状态，带防抖与身份守卫", () => {
+    // 订阅事件并过滤当前 taskId
+    expect(searchPage).toContain("window.archiveLens.subscribe.onEvent");
+    expect(searchPage).toContain("event.task_id !== taskId");
+    // 语料刷新事件（Engine 真实事件名）
+    expect(searchPage).toContain("task.completed");
+    expect(searchPage).toContain("task.failed");
+    expect(searchPage).toContain("task.cancelled");
+    // reloadCorpus 带身份守卫（复用 requestGuard）
+    expect(searchPage).toContain("reloadCorpus");
+    expect(searchPage).toContain("shouldCommit");
+    // 防抖定时器
+    expect(searchPage).toContain("CORPUS_REFRESH_DEBOUNCE_MS");
+    expect(searchPage).toContain("corpusDebounceRef");
+  });
+
+  it("P1-1：检索执行接入身份守卫，初始 corpus 在请求前捕获独立 sequence", () => {
+    // executeSearch 的成功/失败/完成均经 shouldCommit 守卫
+    expect(searchPage).toContain("searchRouteGeneration");
+    expect(searchPage).toContain("searchRequestSequence");
+    expect(searchPage).toContain("searchMountedRef");
+    expect(searchPage).toContain("commitGuard");
+    // 初始 corpus 在 Promise.all 发出前捕获 sequence（不读当前值冒充请求身份）
+    expect(searchPage).toContain("initialCorpusSeq");
+  });
+
   it("移除清晰度档位并保留可折叠、可联动的版面模式样例", () => {
     expect(reviewHighlightSettings).not.toContain("qualityExpanded");
     expect(reviewHighlightSettings).toContain("layoutExpanded");
@@ -250,6 +276,32 @@ describe("桌面端产品化 UI contract", () => {
 
   it("切换导出任务时不会沿用上一任务的导出成功状态", () => {
     expect(exportPage).toContain("setJobs([]);");
+  });
+
+  it("P1-4：导出页为所有异步请求建立 taskId+routeGeneration 身份守卫，初始加载与作业刷新 sequence 分离", () => {
+    // 路由代次守卫：taskId 变化时递增，使旧请求作废
+    expect(exportPage).toContain("routeGeneration");
+    expect(exportPage).toContain("mountedRef");
+    // 初始页面加载（task/summary/loading）与作业刷新（jobs/history）使用独立 sequence，
+    // 避免初始加载期间收到 export 事件触发 loadJobs 递增 sequence 导致永久 loading。
+    expect(exportPage).toContain("initialLoadSeq");
+    expect(exportPage).toContain("jobsSequence");
+    // loadJobs 必须接收 generation 并通过 shouldCommit 纯函数校验身份
+    expect(exportPage).toContain("async (id: string, generation: number)");
+    expect(exportPage).toContain("shouldCommit");
+    expect(exportPage).toContain("from \"../utils/requestGuard\"");
+  });
+
+  it("P1-4：cancel/retry 前校验 job 归属当前任务，陈旧 job 不作用于错误任务", () => {
+    expect(exportPage).toContain("jobBelongsToCurrentTask");
+    // 归属判定委托给 jobBelongsToTask 纯函数（用同步 ref，fail closed）
+    expect(exportPage).toContain("jobBelongsToTask(job?.task_id, currentTaskIdRef.current)");
+    // cancel 与 retry 都必须调用归属校验
+    expect(exportPage).toContain("if (!jobBelongsToCurrentTask(target))");
+    // retry 后校验 Engine 返回的真实 task_id 与当前页面一致（用同步 ref）
+    expect(exportPage).toContain("created.task_id !== currentTaskIdRef.current");
+    // retry mismatch 分支先确认 generation/mounted，避免旧请求结果污染新页面
+    expect(exportPage).toContain("generation !== routeGeneration.current");
   });
 
   it("任务中心用可扩展菜单承载生命周期操作和安全删除", () => {
