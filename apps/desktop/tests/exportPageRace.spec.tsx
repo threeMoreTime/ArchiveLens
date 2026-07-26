@@ -1,31 +1,31 @@
 /**
  * @vitest-environment jsdom
  *
- * P1-4 ExportPage 组件级竞态测试（发现 3/5 的真实组件验证）。
+ * P1-4 ExportPage 组件级竞态测试（审查最终收口）。
  *
- * 渲染真实 ExportPage，用 deferred（pending Promise）让初始加载保持 pending，
- * 期间发送 export 事件触发 loadJobs，验证：
- *   发现 3：初始加载期间收到 export 事件不导致页面永久停留在 loading
- *   发现 5：retry mismatch 分支的 generation/mounted 守卫
+ * 发现 3：初始加载 deferred pending + export 事件触发 → loading 正常关闭
+ * 发现 5：pending retry 切换路由 → mismatch 不污染新页面
  */
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import React from "react";
-import { render, screen, waitFor, act } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { render, screen, waitFor, act, cleanup } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   if (!window.matchMedia) {
-    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, onchange: null, dispatchEvent: () => false })) as any;
+    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeEventListener: () => {}, onchange: null, dispatchEvent: () => false })) as any;
   }
   if (!(globalThis as any).ResizeObserver) {
     (globalThis as any).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
   }
+  // jsdom 缺少 NodeFilter（TreeWalker API），testing-library 的 getByRole 需要。
+  if (!(globalThis as any).NodeFilter) {
+    (globalThis as any).NodeFilter = { SHOW_ALL: 0xFFFFFFFF, FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3 };
+  }
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -37,14 +37,7 @@ function makeMockApi() {
   return {
     tasks: { get: vi.fn(), openDirectory: vi.fn(() => Promise.resolve({ ok: true })) },
     results: { query: vi.fn() },
-    export: {
-      list: vi.fn(),
-      listJobs: vi.fn(),
-      create: vi.fn(),
-      cancel: vi.fn(),
-      retry: vi.fn(),
-      openDirectory: vi.fn(() => Promise.resolve({ ok: true })),
-    },
+    export: { list: vi.fn(), listJobs: vi.fn(), create: vi.fn(), cancel: vi.fn(), retry: vi.fn(), openDirectory: vi.fn(() => Promise.resolve({ ok: true })) },
     subscribe: { onEvent: vi.fn(() => () => {}) },
   };
 }
@@ -62,21 +55,22 @@ beforeEach(async () => {
   ExportPageForTest = mod.default;
 });
 
-function mountExportPage(taskId: string, api: ReturnType<typeof makeMockApi>) {
+function mountWithNavigator(taskId: string, api: ReturnType<typeof makeMockApi>) {
   (window as any).archiveLens = api;
-  return render(
+  let navigateFn: ((to: string) => void) | null = null;
+  const NavigatorBridge = () => { const nav = useNavigate(); navigateFn = (to: string) => nav(to); return null; };
+  const utils = render(
     <MemoryRouter initialEntries={[`/export/${taskId}`]}>
-      <Routes>
-        <Route path="/export/:taskId" element={<ExportPageForTest />} />
-      </Routes>
+      <NavigatorBridge />
+      <Routes><Route path="/export/:taskId" element={<ExportPageForTest />} /></Routes>
     </MemoryRouter>,
   );
+  return { ...utils, navigate: (to: string) => navigateFn!(to) };
 }
 
 describe("ExportPage 初始加载期间 export 事件不致永久 loading（发现 3，真实 deferred）", () => {
   it("初始 Promise.all pending → 发 export 事件触发 loadJobs → 释放初始请求 → loading 正常关闭", async () => {
     const api = makeMockApi();
-    // 初始 Promise.all 的各请求保持 pending（用 deferred 控制）
     const taskReq = deferred(fullTask("task-a"));
     const resultsReq = deferred(fullResultsPage());
     const listReq = deferred({ task_id: "task-a", items: [], limit: 10, offset: 0 });
@@ -87,28 +81,22 @@ describe("ExportPage 初始加载期间 export 事件不致永久 loading（发�
     api.export.list.mockReturnValue(listReq.promise);
     api.export.listJobs.mockReturnValue(listJobsReq.promise);
 
-    // 记录事件订阅回调
     let eventCb: ((e: { task_id?: string | null; event: string }) => void) | null = null;
     api.subscribe.onEvent.mockImplementation((cb: any) => { eventCb = cb; return () => {}; });
 
-    mountExportPage("task-a", api);
-
-    // 确认事件回调已注册
+    mountWithNavigator("task-a", api);
     await waitFor(() => expect(eventCb).not.toBeNull());
 
-    // 初始加载进行中（Promise.all pending）——发 export 事件
-    // loadJobs 用 jobsSequence（独立于 initialLoadSeq），不应废弃初始加载
-    // listJobs 在事件回调里被调用（loadJobs 发起新的 listJobs 请求）
+    // 初始加载进行中——发 export 事件
     const eventJobsReq = deferred({ task_id: "task-a", items: [], limit: 50, offset: 0, total: 0 });
     api.export.listJobs.mockReturnValue(eventJobsReq.promise);
     api.export.list.mockResolvedValue({ task_id: "task-a", items: [], limit: 10, offset: 0 });
-
     act(() => { eventCb?.({ task_id: "task-a", event: "export.progress" }); });
 
-    // 事件触发的 loadJobs 调用了 listJobs（第二次调用）
+    // 事件触发的 loadJobs 调用了 listJobs（第 2 次）
     await waitFor(() => expect(api.export.listJobs).toHaveBeenCalledTimes(2), { timeout: 5000 });
 
-    // 释放初始 Promise.all 的各请求
+    // 释放初始 Promise.all
     await act(async () => {
       taskReq.resolve(fullTask("task-a"));
       resultsReq.resolve(fullResultsPage());
@@ -116,13 +104,47 @@ describe("ExportPage 初始加载期间 export 事件不致永久 loading（发�
       listJobsReq.resolve({ task_id: "task-a", items: [], limit: 50, offset: 0, total: 0 });
     });
 
-    // 关键断言：loading 正常关闭（不永久停留）——initialLoadSeq 未被 loadJobs 干扰
-    await waitFor(() => {
-      const loading = screen.queryByText(/正在读取/);
-      return loading === null;
-    }, { timeout: 5000 });
-
-    // 页面渲染了导出标题（初始加载成功写入 task/summary）
+    // loading 正常关闭
+    await waitFor(() => expect(screen.queryByText(/正在读取/)).toBeNull(), { timeout: 5000 });
     expect(screen.getByText("导出结果")).toBeTruthy();
+  });
+});
+
+describe("ExportPage pending retry 切换路由不污染新页面（发现 5，组件级）", () => {
+  it("/export/A retry pending → navigate /export/B → 释放 retry（mismatch）→ B 不显示 mismatch 错误", async () => {
+    const api = makeMockApi();
+    api.tasks.get.mockResolvedValue(fullTask("task-a"));
+    api.results.query.mockResolvedValue(fullResultsPage());
+    api.export.list.mockResolvedValue({ task_id: "task-a", items: [], limit: 10, offset: 0 });
+    api.export.listJobs.mockResolvedValue({ task_id: "task-a", items: [{ export_id: "exp-a", task_id: "task-a", format: "html", status: "failed", current_stage: "failed", progress_completed: 0, progress_total: 0, output_path: "", error_code: "X", error_message: "", cancel_requested: false, retry_of: "", cleanup_status: "completed" as const, cleanup_error_code: "", cleanup_error_message: "", cleanup_attempt_count: 0, created_at: "", started_at: "", finished_at: "" }], limit: 50, offset: 0, total: 1 });
+
+    // retry 保持 pending
+    const retryReq = deferred({ export_id: "exp-new", task_id: "task-a", format: "html", status: "queued", retry_of: "exp-a" });
+    api.export.retry.mockReturnValue(retryReq.promise);
+
+    const { navigate } = mountWithNavigator("task-a", api);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "导出结果" })).toBeTruthy(), { timeout: 5000 });
+
+    // 点击"重新导出"触发 retry
+    const retryButton = await waitFor(() => screen.getByRole("button", { name: /重新导出/ }), { timeout: 5000 });
+    await act(async () => { retryButton.click(); });
+    expect(api.export.retry).toHaveBeenCalledWith("exp-a");
+
+    // 导航到 /export/B
+    api.tasks.get.mockResolvedValue(fullTask("task-b"));
+    api.results.query.mockResolvedValue({ ...fullResultsPage(), task_id: "task-b" });
+    api.export.list.mockResolvedValue({ task_id: "task-b", items: [], limit: 10, offset: 0 });
+    api.export.listJobs.mockResolvedValue({ task_id: "task-b", items: [], limit: 50, offset: 0, total: 0 });
+    await act(async () => { navigate("/export/task-b"); });
+
+    // 释放 retry 结果（task_id 仍为 task-a，与当前 task-b 不匹配）
+    await act(async () => {
+      retryReq.resolve({ export_id: "exp-new", task_id: "task-a", format: "html", status: "queued", retry_of: "exp-a" });
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+
+    // 关键断言：B 页面不显示 mismatch 错误（generation 守卫阻止了 setActionIssue）
+    expect(screen.queryByText(/归属异常/)).toBeNull();
+    expect(screen.queryByText(/归属的任务与当前页面不一致/)).toBeNull();
   });
 });

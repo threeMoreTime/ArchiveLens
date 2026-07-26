@@ -153,13 +153,13 @@ export default function SearchPage() {
       const nextCorpus = await window.archiveLens.search.getCorpusStatus(id);
       if (!shouldCommit(
         { taskId: id, generation, sequence: seq },
-        { currentTaskId: taskId, currentGeneration: corpusRouteGeneration.current, currentSequence: corpusRequestSequence.current, mounted: corpusMountedRef.current },
+        { currentTaskId: currentTaskIdRef.current, currentGeneration: corpusRouteGeneration.current, currentSequence: corpusRequestSequence.current, mounted: corpusMountedRef.current },
       )) return;
       setCorpus(nextCorpus);
     } catch {
       // 语料状态读取失败不阻塞：保留上次已知状态，下次事件再刷新。
     }
-  }, [taskId]);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -196,11 +196,13 @@ export default function SearchPage() {
       window.archiveLens.settings.get(),
       window.archiveLens.search.listSessions(taskId, 100),
     ]).then(([nextTask, nextCorpus, settings, history]) => {
-      if (!active) return;
+      // 同步检查 taskId：路由切换后 passive effect 重跑前，闭包 taskId 仍是旧值，
+      // 但 currentTaskIdRef.current 已更新为新的——若不一致说明已切任务，丢弃全部结果。
+      if (!active || currentTaskIdRef.current !== taskId) return;
       setTask(nextTask);
       const commitOk = shouldCommit(
         { taskId, generation: corpusGeneration, sequence: initialCorpusSeq },
-        { currentTaskId: taskId, currentGeneration: corpusRouteGeneration.current, currentSequence: corpusRequestSequence.current, mounted: corpusMountedRef.current },
+        { currentTaskId: currentTaskIdRef.current, currentGeneration: corpusRouteGeneration.current, currentSequence: corpusRequestSequence.current, mounted: corpusMountedRef.current },
       );
       // 首次加载的 corpus 也经身份守卫写入，避免旧任务覆盖。
       if (commitOk) {

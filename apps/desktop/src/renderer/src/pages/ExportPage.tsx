@@ -78,16 +78,17 @@ export default function ExportPage() {
     const seq = ++jobsSequence.current;
     try {
       const result = await window.archiveLens.export.listJobs(id, { limit: 50, offset: 0 });
-      // 仅当 taskId、routeGeneration、jobsSequence 均匹配且组件仍挂载时才写入。
-      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: taskId ?? "", currentGeneration: routeGeneration.current, currentSequence: jobsSequence.current, mounted: mountedRef.current })) return;
+      // 用 currentTaskIdRef.current（同步更新）而非闭包 taskId，消除路由切换后
+      // passive effect 执行前的窗口。
+      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: currentTaskIdRef.current ?? "", currentGeneration: routeGeneration.current, currentSequence: jobsSequence.current, mounted: mountedRef.current })) return;
       setJobs(result.items);
       const exports = await window.archiveLens.export.list(id, { limit: 10, offset: 0 });
-      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: taskId ?? "", currentGeneration: routeGeneration.current, currentSequence: jobsSequence.current, mounted: mountedRef.current })) return;
+      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: currentTaskIdRef.current ?? "", currentGeneration: routeGeneration.current, currentSequence: jobsSequence.current, mounted: mountedRef.current })) return;
       setHistory(exports.items);
     } catch {
       // 作业或历史读取失败不阻塞主流程；下次轮询/事件再刷新
     }
-  }, [taskId]);
+  }, []);
 
   useEffect(() => {
     // taskId 变化时递增 routeGeneration，使所有在途的旧请求作废。
@@ -116,17 +117,19 @@ export default function ExportPage() {
       window.archiveLens.export.list(taskId, { limit: 10, offset: 0 }),
       window.archiveLens.export.listJobs(taskId),
     ]).then(([nextTask, nextSummary, exports, jobList]) => {
-      if (!mountedRef.current || generation !== routeGeneration.current || seq !== initialLoadSeq.current) return;
+      // 同步检查 taskId：路由切换后 passive effect 重跑前，currentTaskIdRef 已更新，
+      // 闭包 taskId 仍是旧值——不一致则丢弃全部结果。
+      if (!mountedRef.current || generation !== routeGeneration.current || seq !== initialLoadSeq.current || currentTaskIdRef.current !== taskId) return;
       setTask(nextTask);
       setSummary(nextSummary);
       setHistory(exports.items);
       setJobs(jobList.items);
     }).catch((error: unknown) => {
-      if (mountedRef.current && generation === routeGeneration.current && seq === initialLoadSeq.current) {
+      if (mountedRef.current && generation === routeGeneration.current && seq === initialLoadSeq.current && currentTaskIdRef.current === taskId) {
         setLoadIssue(toDiagnosticIssue("EXPORT_LOAD_FAILED", error));
       }
     }).finally(() => {
-      if (mountedRef.current && generation === routeGeneration.current && seq === initialLoadSeq.current) setLoading(false);
+      if (mountedRef.current && generation === routeGeneration.current && seq === initialLoadSeq.current && currentTaskIdRef.current === taskId) setLoading(false);
     });
     return () => { routeGeneration.current += 1; };
   }, [reloadToken, taskId]);
