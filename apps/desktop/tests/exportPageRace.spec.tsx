@@ -148,3 +148,40 @@ describe("ExportPage pending retry 切换路由不污染新页面（发现 5，�
     expect(screen.queryByText(/归属的任务与当前页面不一致/)).toBeNull();
   });
 });
+
+describe("ExportPage 切换任务后 busy 恢复（P1 hotfix，组件级）", () => {
+  it("cancel pending → navigate A→B → B 的导出按钮恢复可用（busy=false）", async () => {
+    const api = makeMockApi();
+    api.tasks.get.mockResolvedValue(fullTask("task-a"));
+    api.results.query.mockResolvedValue(fullResultsPage());
+    api.export.list.mockResolvedValue({ task_id: "task-a", items: [], limit: 10, offset: 0 });
+    api.export.listJobs.mockResolvedValue({ task_id: "task-a", items: [{ export_id: "exp-a", task_id: "task-a", format: "html", status: "queued", current_stage: "queued", progress_completed: 0, progress_total: 0, output_path: "", error_code: "", error_message: "", cancel_requested: false, retry_of: "", cleanup_status: "pending" as const, cleanup_error_code: "", cleanup_error_message: "", cleanup_attempt_count: 0, created_at: "", started_at: null, finished_at: null }], limit: 50, offset: 0, total: 1 });
+
+    // cancel 保持 pending
+    const cancelReq = deferred({ export_id: "exp-a", status: "cancelling" });
+    api.export.cancel.mockReturnValue(cancelReq.promise);
+
+    const { navigate } = mountWithNavigator("task-a", api);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "导出结果" })).toBeTruthy(), { timeout: 5000 });
+
+    // 点击取消（触发 busy=true，cancel pending）
+    const cancelButton = await waitFor(() => screen.getByRole("button", { name: /取消导出/ }), { timeout: 5000 });
+    await act(async () => { cancelButton.click(); });
+    expect(api.export.cancel).toHaveBeenCalledWith("exp-a");
+
+    // 导航到 B
+    api.tasks.get.mockResolvedValue(fullTask("task-b"));
+    api.results.query.mockResolvedValue({ ...fullResultsPage(), task_id: "task-b" });
+    api.export.list.mockResolvedValue({ task_id: "task-b", items: [], limit: 10, offset: 0 });
+    api.export.listJobs.mockResolvedValue({ task_id: "task-b", items: [], limit: 50, offset: 0, total: 0 });
+    await act(async () => { navigate("/export/task-b"); });
+
+    // 关键断言：B 页面的导出按钮可用（busy 已重置为 false）
+    await waitFor(() => {
+      const startButton = screen.queryByRole("button", { name: /开始导出/ });
+      return startButton && !startButton.hasAttribute("disabled");
+    }, { timeout: 5000 });
+    const startButton = screen.getByRole("button", { name: /开始导出/ });
+    expect(startButton.hasAttribute("disabled")).toBe(false);
+  });
+});
