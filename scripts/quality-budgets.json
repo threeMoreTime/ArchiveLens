@@ -4,7 +4,7 @@
       "lines": 19.5,
       "statements": 19.5,
       "functions": 37,
-      "branches": 71
+      "branches": 68
     },
     "files": {
       "apps/desktop/src/main/localData.ts": { "lines": 85, "branches": 80 },

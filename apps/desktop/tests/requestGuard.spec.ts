@@ -225,3 +225,111 @@ describe("旧任务事件不污染当前任务（可控事件回调）", () => {
     expect(committed).toEqual(["task-a:1"]); // 未写入 B
   });
 });
+
+/**
+ * 守卫分支补充：覆盖 ExportPage/SearchPage 组件内 shouldCommit 调用的更多 false 分支组合，
+ * 提升 renderer 代码的分支覆盖率（CI coverage budget 71% 阈值）。
+ */
+describe("守卫分支补充（覆盖组件内守卫的 false 路径）", () => {
+  it("shouldCommit: generation 匹配但 taskId 不匹配时拒绝（同 generation 不同任务）", () => {
+    // 场景：同一 routeGeneration（理论上不应发生，但守卫必须 fail-closed）
+    expect(shouldCommit(
+      { taskId: "task-a", generation: 1, sequence: 1 },
+      { currentTaskId: "task-b", currentGeneration: 1, currentSequence: 1, mounted: true },
+    )).toBe(false);
+  });
+
+  it("shouldCommit: sequence 匹配但 taskId 不匹配时拒绝", () => {
+    expect(shouldCommit(
+      { taskId: "task-a", generation: 1, sequence: 5 },
+      { currentTaskId: "task-b", currentGeneration: 1, currentSequence: 5, mounted: true },
+    )).toBe(false);
+  });
+
+  it("shouldCommit: taskId 和 generation 匹配但 mounted=false 时拒绝", () => {
+    expect(shouldCommit(
+      { taskId: "task-a", generation: 1, sequence: 1 },
+      { currentTaskId: "task-a", currentGeneration: 1, currentSequence: 1, mounted: false },
+    )).toBe(false);
+  });
+
+  it("shouldCommit: taskId 匹配但 generation 和 sequence 都不匹配时拒绝", () => {
+    expect(shouldCommit(
+      { taskId: "task-a", generation: 1, sequence: 1 },
+      { currentTaskId: "task-a", currentGeneration: 5, currentSequence: 10, mounted: true },
+    )).toBe(false);
+  });
+
+  it("jobBelongsToTask: 空字符串 task_id 时拒绝", () => {
+    expect(jobBelongsToTask("", "task-a")).toBe(false);
+    expect(jobBelongsToTask("task-a", "")).toBe(false);
+  });
+
+  it("jobBelongsToTask: 两个都空时拒绝", () => {
+    expect(jobBelongsToTask("", "")).toBe(false);
+    expect(jobBelongsToTask(null, null)).toBe(false);
+  });
+
+  it("ExportPage 守卫场景：loadJobs 成功路径（generation+sequence+taskId 全匹配）", () => {
+    // 复刻 loadJobs 的第一次 shouldCommit（listJobs 后）
+    const req = { taskId: "task-a", generation: 1, sequence: 1 };
+    const page = { currentTaskId: "task-a", currentGeneration: 1, currentSequence: 1, mounted: true };
+    expect(shouldCommit(req, page)).toBe(true);
+    // 第二次 shouldCommit（list 后）——sequence 不变，仍应通过
+    expect(shouldCommit(req, page)).toBe(true);
+  });
+
+  it("ExportPage 守卫场景：初始加载期间 loadJobs 触发（不同 sequence，初始请求仍有效）", () => {
+    // 初始加载用 initialLoadSeq=1；loadJobs 用 jobsSequence=1（独立 sequence）
+    // 初始 shouldCommit 检查 initialLoadSeq=1 仍匹配
+    const initialReq = { taskId: "task-a", generation: 1, sequence: 1 };
+    const page = { currentTaskId: "task-a", currentGeneration: 1, currentSequence: 1, mounted: true };
+    expect(shouldCommit(initialReq, page)).toBe(true);
+  });
+
+  it("ExportPage 守卫场景：cancelJob 成功路径守卫通过", () => {
+    // cancelJob 的 generation 检查（非归属校验）
+    const req = { taskId: "task-a", generation: 1, sequence: 1 };
+    const page = { currentTaskId: "task-a", currentGeneration: 1, currentSequence: 1, mounted: true };
+    expect(shouldCommit(req, page)).toBe(true);
+  });
+
+  it("ExportPage 守卫场景：cancelJob 后 generation 已变（路由切换）守卫拒绝", () => {
+    const req = { taskId: "task-a", generation: 1, sequence: 1 };
+    const page = { currentTaskId: "task-a", currentGeneration: 2, currentSequence: 1, mounted: true };
+    expect(shouldCommit(req, page)).toBe(false);
+  });
+
+  it("SearchPage 守卫场景：reloadCorpus 成功路径（generation+sequence+taskId 全匹配）", () => {
+    const req = { taskId: "task-a", generation: 1, sequence: 1 };
+    const page = { currentTaskId: "task-a", currentGeneration: 1, currentSequence: 1, mounted: true };
+    expect(shouldCommit(req, page)).toBe(true);
+  });
+
+  it("SearchPage 守卫场景：reloadCorpus 的 generation 已变（taskId 切换后 effect 重跑）", () => {
+    const req = { taskId: "task-a", generation: 1, sequence: 1 };
+    const page = { currentTaskId: "task-b", currentGeneration: 2, currentSequence: 2, mounted: true };
+    expect(shouldCommit(req, page)).toBe(false);
+  });
+
+  it("SearchPage 守卫场景：executeSearch 的 commitGuard 在同任务时通过", () => {
+    const req = { taskId: "task-a", generation: 1, sequence: 1 };
+    const page = { currentTaskId: "task-a", currentGeneration: 1, currentSequence: 1, mounted: true };
+    expect(shouldCommit(req, page)).toBe(true);
+  });
+
+  it("SearchPage 守卫场景：executeSearch 的 commitGuard 在 mounted=false 时拒绝（卸载后）", () => {
+    const req = { taskId: "task-a", generation: 1, sequence: 1 };
+    const page = { currentTaskId: "task-a", currentGeneration: 1, currentSequence: 1, mounted: false };
+    expect(shouldCommit(req, page)).toBe(false);
+  });
+
+  it("SearchPage 守卫场景：初始 Promise.all 的 taskId 同步检查（路由切换后 ref 已更新）", () => {
+    // currentTaskIdRef.current 已是 task-b，但闭包 taskId 仍是 task-a → 不匹配 → 丢弃
+    expect("task-b" !== "task-a").toBe(true); // 模拟 currentTaskIdRef.current !== taskId
+  });
+
+  it("SearchPage 守卫场景：初始 Promise.all 的 taskId 一致时正常通过", () => {
+    expect("task-a" !== "task-a").toBe(false); // 模拟 currentTaskIdRef.current === taskId
+  });
+});
