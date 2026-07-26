@@ -106,6 +106,9 @@ export default function ExportPage() {
     setLoadIssue(null);
     setActionIssue(null);
     setSelectedFormat("html");
+    // P1 修复：切换任务时重置 busy。旧请求（create/cancel/retry）的 finally 因
+    // generation 不匹配不会执行 setBusy(false)，若不在此重置，新任务页面永久禁用。
+    setBusy(false);
     if (!taskId) {
       setLoading(false);
       return () => { routeGeneration.current += 1; };

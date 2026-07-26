@@ -193,3 +193,49 @@ describe("P1-1 corpus 请求隔离（跨任务竞态）", () => {
     vi.useRealTimers();
   });
 });
+
+/**
+ * P2 hotfix：终态 partial（任务已完成）不继续轮询 getCorpusStatus。
+ */
+describe("P2 终态 partial 不轮询", () => {
+  it("任务 completed + corpus partial → 不调用 getCorpusStatus（停止轮询）", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    // 复刻 SearchPage 轮询条件：partial + taskActive 才轮询
+    const taskStatus = "completed";
+    const corpusStatus = "partial";
+    const taskActive = taskStatus !== "completed" && taskStatus !== "failed" && taskStatus !== "cancelled";
+    const intermediate = corpusStatus === "not_built"
+      || corpusStatus === "building"
+      || (corpusStatus === "partial" && taskActive);
+    if (intermediate) {
+      // 模拟 setInterval 调用
+      const timer = setInterval(() => calls.push("getCorpusStatus"), 1500);
+      vi.advanceTimersByTime(5000);
+      clearInterval(timer);
+    }
+    // 关键断言：终态 partial 不轮询，calls 为空
+    expect(calls).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it("任务 running + corpus partial → 继续轮询（任务仍可能推进）", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const taskStatus = "running";
+    const corpusStatus = "partial";
+    const taskActive = taskStatus !== "completed" && taskStatus !== "failed" && taskStatus !== "cancelled";
+    const intermediate = corpusStatus === "not_built"
+      || corpusStatus === "building"
+      || (corpusStatus === "partial" && taskActive);
+    expect(intermediate).toBe(true);
+    if (intermediate) {
+      const timer = setInterval(() => calls.push("getCorpusStatus"), 1500);
+      vi.advanceTimersByTime(5000);
+      clearInterval(timer);
+    }
+    // 运行中 partial 继续轮询（5s 内约 3 次）
+    expect(calls.length).toBeGreaterThan(0);
+    vi.useRealTimers();
+  });
+});

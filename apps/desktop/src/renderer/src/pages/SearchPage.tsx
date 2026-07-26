@@ -243,18 +243,22 @@ export default function SearchPage() {
     };
   }, [taskId, reloadCorpus]);
 
-  // P1-1 兜底：corpus 处于中间态（not_built/building/partial）时轮询刷新，
-  // 覆盖"用户在 task.completed 事件发出后才进入检索页、错过事件"的时序场景，
-  // 以及语料 finalize 滞后于 task 终态的情况。corpus 变 ready/failed/legacy 或
-  // 组件卸载时停止轮询。事件订阅是主路径，轮询仅在中间态兜底。
+  // P1-1 兜底：corpus 处于中间态时轮询刷新，覆盖"用户在 task.completed 事件发出
+  // 后才进入检索页、错过事件"的时序，以及语料 finalize 滞后于 task 终态的情况。
+  // P2 修复：partial 在任务已终态（completed/failed/cancelled）时是稳定的最终语料
+  // （有失败页/缺失页），不再轮询；仅 not_built/building 或任务仍活跃时的 partial
+  // 才轮询。避免终态 partial 产生持续 IPC 和数据库读取。
   useEffect(() => {
     if (!taskId) return;
-    const intermediate = corpus?.status === "not_built" || corpus?.status === "building" || corpus?.status === "partial";
+    const taskActive = task?.status !== "completed" && task?.status !== "failed" && task?.status !== "cancelled";
+    const intermediate = corpus?.status === "not_built"
+      || corpus?.status === "building"
+      || (corpus?.status === "partial" && taskActive);
     if (!intermediate) return;
     const generation = corpusRouteGeneration.current;
     const timer = window.setInterval(() => { void reloadCorpus(taskId, generation); }, 1500);
     return () => window.clearInterval(timer);
-  }, [taskId, corpus?.status, reloadCorpus]);
+  }, [taskId, corpus?.status, task?.status, reloadCorpus]);
 
   // P1-1：订阅当前任务的生命周期事件，语料就绪/失败/取消后自动刷新 corpusStatus。
   // 只处理 event.task_id === 当前 taskId 的事件，其他任务事件立即忽略。
