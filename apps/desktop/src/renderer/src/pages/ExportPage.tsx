@@ -56,11 +56,13 @@ export default function ExportPage() {
   const [actionIssue, setActionIssue] = useState<DiagnosticIssue | null>(null);
   const [busy, setBusy] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
-  // 跨任务异步竞态守卫：routeGeneration 在 taskId 变化时递增，requestSequence 标记每次请求。
-  // 只有请求的 taskId+generation+sequence 均匹配当前页面时才允许写入 state，
-  // 避免旧任务在途请求/事件覆盖新页面、或对错误任务执行 cancel/retry。
+  // 跨任务异步竞态守卫：routeGeneration 在 taskId 变化时递增。
+  // 初始页面加载（task/summary/loading）与作业刷新（jobs/history）使用独立 sequence，
+  // 避免初始加载期间收到 export 事件触发 loadJobs 递增 sequence，导致初始 Promise.all
+  // 返回时因 sequence 不一致被放弃，页面永久停留在 loading。
   const routeGeneration = useRef(0);
-  const requestSequence = useRef(0);
+  const initialLoadSeq = useRef(0);
+  const jobsSequence = useRef(0);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -69,14 +71,14 @@ export default function ExportPage() {
   }, []);
 
   const loadJobs = useCallback(async (id: string, generation: number) => {
-    const seq = ++requestSequence.current;
+    const seq = ++jobsSequence.current;
     try {
       const result = await window.archiveLens.export.listJobs(id, { limit: 50, offset: 0 });
-      // 仅当 taskId、routeGeneration、requestSequence 均匹配且组件仍挂载时才写入。
-      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: taskId ?? "", currentGeneration: routeGeneration.current, currentSequence: requestSequence.current, mounted: mountedRef.current })) return;
+      // 仅当 taskId、routeGeneration、jobsSequence 均匹配且组件仍挂载时才写入。
+      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: taskId ?? "", currentGeneration: routeGeneration.current, currentSequence: jobsSequence.current, mounted: mountedRef.current })) return;
       setJobs(result.items);
       const exports = await window.archiveLens.export.list(id, { limit: 10, offset: 0 });
-      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: taskId ?? "", currentGeneration: routeGeneration.current, currentSequence: requestSequence.current, mounted: mountedRef.current })) return;
+      if (!shouldCommit({ taskId: id, generation, sequence: seq }, { currentTaskId: taskId ?? "", currentGeneration: routeGeneration.current, currentSequence: jobsSequence.current, mounted: mountedRef.current })) return;
       setHistory(exports.items);
     } catch {
       // 作业或历史读取失败不阻塞主流程；下次轮询/事件再刷新
@@ -87,8 +89,10 @@ export default function ExportPage() {
     // taskId 变化时递增 routeGeneration，使所有在途的旧请求作废。
     routeGeneration.current += 1;
     const generation = routeGeneration.current;
-    requestSequence.current += 1;
-    const seq = requestSequence.current;
+    // 初始页面加载使用独立 sequence，与 jobsSequence 分离：初始加载期间收到
+    // export 事件触发 loadJobs 不会递增 initialLoadSeq，初始 Promise.all 返回时
+    // 仍能正常写入 task/summary 并关闭 loading。
+    const seq = ++initialLoadSeq.current;
     setTask(null);
     setSummary(null);
     setHistory([]);
@@ -108,17 +112,17 @@ export default function ExportPage() {
       window.archiveLens.export.list(taskId, { limit: 10, offset: 0 }),
       window.archiveLens.export.listJobs(taskId),
     ]).then(([nextTask, nextSummary, exports, jobList]) => {
-      if (!mountedRef.current || generation !== routeGeneration.current || seq !== requestSequence.current) return;
+      if (!mountedRef.current || generation !== routeGeneration.current || seq !== initialLoadSeq.current) return;
       setTask(nextTask);
       setSummary(nextSummary);
       setHistory(exports.items);
       setJobs(jobList.items);
     }).catch((error: unknown) => {
-      if (mountedRef.current && generation === routeGeneration.current && seq === requestSequence.current) {
+      if (mountedRef.current && generation === routeGeneration.current && seq === initialLoadSeq.current) {
         setLoadIssue(toDiagnosticIssue("EXPORT_LOAD_FAILED", error));
       }
     }).finally(() => {
-      if (mountedRef.current && generation === routeGeneration.current && seq === requestSequence.current) setLoading(false);
+      if (mountedRef.current && generation === routeGeneration.current && seq === initialLoadSeq.current) setLoading(false);
     });
     return () => { routeGeneration.current += 1; };
   }, [reloadToken, taskId]);

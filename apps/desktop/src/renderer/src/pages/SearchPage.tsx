@@ -121,6 +121,11 @@ export default function SearchPage() {
   const corpusRouteGeneration = useRef(0);
   const corpusRequestSequence = useRef(0);
   const corpusMountedRef = useRef(true);
+  // P1-1：search.execute 请求身份守卫（与 corpus 分离，避免互相干扰）。
+  // 任务 A 的检索 pending 时切到 B，A 返回后不得写入 B 的 session/hits。
+  const searchRouteGeneration = useRef(0);
+  const searchRequestSequence = useRef(0);
+  const searchMountedRef = useRef(true);
   // corpus 防抖定时器：连续事件合并为一次 corpusStatus 刷新。
   const corpusDebounceRef = useRef<number | null>(null);
   const CORPUS_REFRESH_DEBOUNCE_MS = 300;
@@ -154,13 +159,20 @@ export default function SearchPage() {
 
   useEffect(() => {
     let active = true;
-    // taskId 变化：递增 routeGeneration 使旧 corpus 请求作废，重置挂载标志。
+    // taskId 变化：递增 routeGeneration 使旧 corpus/search 请求作废，重置挂载标志。
     corpusRouteGeneration.current += 1;
     const corpusGeneration = corpusRouteGeneration.current;
     corpusMountedRef.current = true;
+    searchRouteGeneration.current += 1;
+    searchMountedRef.current = true;
     setInitialLoading(true);
     setError("");
     setHistoryNotice("");
+    setSearching(false);
+    setHitsLoading(false);
+    setPageImage(null);
+    setPageImageError("");
+    setPageImageLoading(false);
     setTask(null);
     setCorpus(null);
     setSessions([]);
@@ -170,6 +182,10 @@ export default function SearchPage() {
     setTotal(0);
     setOffset(0);
     setSelectedHitId(null);
+    // 初始请求在发出前捕获独立 sequence（与 reloadCorpus 一致），避免 resolve 时
+    // 读取当前 sequence 冒充请求身份——若期间 reloadCorpus 已递增 sequence，
+    // 初始旧 corpus（如 building）会错误覆盖较新的 ready。
+    const initialCorpusSeq = ++corpusRequestSequence.current;
     Promise.all([
       window.archiveLens.tasks.get(taskId),
       window.archiveLens.search.getCorpusStatus(taskId),
@@ -179,7 +195,7 @@ export default function SearchPage() {
       if (!active) return;
       setTask(nextTask);
       const commitOk = shouldCommit(
-        { taskId, generation: corpusGeneration, sequence: corpusRequestSequence.current },
+        { taskId, generation: corpusGeneration, sequence: initialCorpusSeq },
         { currentTaskId: taskId, currentGeneration: corpusRouteGeneration.current, currentSequence: corpusRequestSequence.current, mounted: corpusMountedRef.current },
       );
       // 首次加载的 corpus 也经身份守卫写入，避免旧任务覆盖。
@@ -211,6 +227,7 @@ export default function SearchPage() {
     return () => {
       active = false;
       corpusMountedRef.current = false;
+      searchMountedRef.current = false;
       hitRequestRef.current += 1;
       imageRequestRef.current += 1;
       if (corpusDebounceRef.current !== null) {
@@ -375,24 +392,34 @@ export default function SearchPage() {
       setHistoryNotice("已打开当前语料版本中的已有结果，没有新增重复历史。");
       return;
     }
+    // 捕获请求身份：taskId、generation、sequence。pending 期间切换任务会使身份失效。
+    const searchGeneration = searchRouteGeneration.current;
+    const searchSeq = ++searchRequestSequence.current;
+    const requestTaskId = taskId;
+    const commitGuard = () => shouldCommit(
+      { taskId: requestTaskId, generation: searchGeneration, sequence: searchSeq },
+      { currentTaskId: taskId, currentGeneration: searchRouteGeneration.current, currentSequence: searchRequestSequence.current, mounted: searchMountedRef.current },
+    );
     setSearching(true);
     setError("");
     setHistoryNotice("");
     try {
       const session = await window.archiveLens.search.execute({
-        task_id: taskId,
+        task_id: requestTaskId,
         query_text: queryText,
         script_scope: scope,
       });
+      // 仅当请求身份仍匹配当前页面时才写入——任务 A 的检索返回后切到 B 不污染 B。
+      if (!commitGuard()) return;
       setQuery(queryText);
       setSessions((current) => prependSearchSession(current, session));
       setActiveSession(session);
       setActiveSessionId(session.search_session_id);
       setOffset(0);
     } catch (searchError: unknown) {
-      setError(`检索失败：${errorMessage(searchError)}`);
+      if (commitGuard()) setError(`检索失败：${errorMessage(searchError)}`);
     } finally {
-      setSearching(false);
+      if (commitGuard()) setSearching(false);
     }
   };
 

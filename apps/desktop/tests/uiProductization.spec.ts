@@ -196,6 +196,16 @@ describe("桌面端产品化 UI contract", () => {
     expect(searchPage).toContain("corpusDebounceRef");
   });
 
+  it("P1-1：检索执行接入身份守卫，初始 corpus 在请求前捕获独立 sequence", () => {
+    // executeSearch 的成功/失败/完成均经 shouldCommit 守卫
+    expect(searchPage).toContain("searchRouteGeneration");
+    expect(searchPage).toContain("searchRequestSequence");
+    expect(searchPage).toContain("searchMountedRef");
+    expect(searchPage).toContain("commitGuard");
+    // 初始 corpus 在 Promise.all 发出前捕获 sequence（不读当前值冒充请求身份）
+    expect(searchPage).toContain("initialCorpusSeq");
+  });
+
   it("移除清晰度档位并保留可折叠、可联动的版面模式样例", () => {
     expect(reviewHighlightSettings).not.toContain("qualityExpanded");
     expect(reviewHighlightSettings).toContain("layoutExpanded");
@@ -268,11 +278,14 @@ describe("桌面端产品化 UI contract", () => {
     expect(exportPage).toContain("setJobs([]);");
   });
 
-  it("P1-4：导出页为所有异步请求建立 taskId+routeGeneration+requestSequence 身份守卫", () => {
+  it("P1-4：导出页为所有异步请求建立 taskId+routeGeneration 身份守卫，初始加载与作业刷新 sequence 分离", () => {
     // 路由代次守卫：taskId 变化时递增，使旧请求作废
     expect(exportPage).toContain("routeGeneration");
-    expect(exportPage).toContain("requestSequence");
     expect(exportPage).toContain("mountedRef");
+    // 初始页面加载（task/summary/loading）与作业刷新（jobs/history）使用独立 sequence，
+    // 避免初始加载期间收到 export 事件触发 loadJobs 递增 sequence 导致永久 loading。
+    expect(exportPage).toContain("initialLoadSeq");
+    expect(exportPage).toContain("jobsSequence");
     // loadJobs 必须接收 generation 并通过 shouldCommit 纯函数校验身份
     expect(exportPage).toContain("async (id: string, generation: number)");
     expect(exportPage).toContain("shouldCommit");
