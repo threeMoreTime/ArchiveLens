@@ -44,6 +44,10 @@ function exportKindLabel(format: string): string {
 
 export default function ExportPage() {
   const { taskId } = useParams();
+  // 同步跟踪当前 taskId：路由变化时立即更新（不等 passive effect），
+  // 使 cancel/retry 守卫在 effect cleanup 前的窗口内识别任务已切换。
+  const currentTaskIdRef = useRef(taskId);
+  currentTaskIdRef.current = taskId;
   const nav = useNavigate();
   const [task, setTask] = useState<TaskSummary | null>(null);
   const [summary, setSummary] = useState<ResultsPage | null>(null);
@@ -148,9 +152,9 @@ export default function ExportPage() {
 
   const cleanupActive = Boolean(task?.cleanup_status);
 
-  // 校验 job 归属当前路由 taskId，防止切换任务后对陈旧 job 执行 cancel/retry。
+  // 校验 job 归属当前路由 taskId（用同步 ref，避免闭包 taskId 在路由切换窗口内失效）。
   const jobBelongsToCurrentTask = (job: ExportJob | undefined): boolean => (
-    jobBelongsToTask(job?.task_id, taskId)
+    jobBelongsToTask(job?.task_id, currentTaskIdRef.current)
   );
 
   const startExport = async (format: ExportFormat) => {
@@ -218,8 +222,10 @@ export default function ExportPage() {
     const generation = routeGeneration.current;
     try {
       const created = await window.archiveLens.export.retry(exportId);
+      // 请求返回后先确认仍属于当前路由代次且组件挂载，避免旧任务的 retry 结果污染新页面。
+      if (!mountedRef.current || generation !== routeGeneration.current) return;
       // Engine 从 export_id 反查真实 task_id 返回；前端校验归属一致，拒绝跨任务污染。
-      if (created.task_id !== taskId) {
+      if (created.task_id !== currentTaskIdRef.current) {
         setActionIssue(toDiagnosticIssue("EXPORT_ACTION_FAILED", new Error("重试导出归属的任务与当前页面不一致。"), { what: "重试导出归属异常，已刷新。" }));
         setReloadToken((value) => value + 1);
         return;

@@ -294,12 +294,14 @@ describe("桌面端产品化 UI contract", () => {
 
   it("P1-4：cancel/retry 前校验 job 归属当前任务，陈旧 job 不作用于错误任务", () => {
     expect(exportPage).toContain("jobBelongsToCurrentTask");
-    // 归属判定委托给 jobBelongsToTask 纯函数（fail closed）
-    expect(exportPage).toContain("jobBelongsToTask(job?.task_id, taskId)");
+    // 归属判定委托给 jobBelongsToTask 纯函数（用同步 ref，fail closed）
+    expect(exportPage).toContain("jobBelongsToTask(job?.task_id, currentTaskIdRef.current)");
     // cancel 与 retry 都必须调用归属校验
     expect(exportPage).toContain("if (!jobBelongsToCurrentTask(target))");
-    // retry 后校验 Engine 返回的真实 task_id 与当前页面一致
-    expect(exportPage).toContain("created.task_id !== taskId");
+    // retry 后校验 Engine 返回的真实 task_id 与当前页面一致（用同步 ref）
+    expect(exportPage).toContain("created.task_id !== currentTaskIdRef.current");
+    // retry mismatch 分支先确认 generation/mounted，避免旧请求结果污染新页面
+    expect(exportPage).toContain("generation !== routeGeneration.current");
   });
 
   it("任务中心用可扩展菜单承载生命周期操作和安全删除", () => {

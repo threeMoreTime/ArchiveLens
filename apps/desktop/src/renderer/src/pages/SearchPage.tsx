@@ -90,6 +90,10 @@ function layerClass(layer: OcrSearchHit["match_layer"]): string {
 
 export default function SearchPage() {
   const { taskId = "" } = useParams();
+  // 同步跟踪当前 taskId：路由变化时立即更新（不等 passive effect），
+  // 使 commitGuard 能在 effect cleanup 前的窗口内识别任务已切换。
+  const currentTaskIdRef = useRef(taskId);
+  currentTaskIdRef.current = taskId;
   const nav = useNavigate();
   const [task, setTask] = useState<TaskSummary | null>(null);
   const [corpus, setCorpus] = useState<OcrCorpusStatusResult | null>(null);
@@ -396,9 +400,11 @@ export default function SearchPage() {
     const searchGeneration = searchRouteGeneration.current;
     const searchSeq = ++searchRequestSequence.current;
     const requestTaskId = taskId;
+    // currentTaskId 用 ref（同步更新），避免路由变化后 passive effect 执行前
+    // 的窗口内闭包 taskId 仍是旧值导致守卫误判通过。
     const commitGuard = () => shouldCommit(
       { taskId: requestTaskId, generation: searchGeneration, sequence: searchSeq },
-      { currentTaskId: taskId, currentGeneration: searchRouteGeneration.current, currentSequence: searchRequestSequence.current, mounted: searchMountedRef.current },
+      { currentTaskId: currentTaskIdRef.current, currentGeneration: searchRouteGeneration.current, currentSequence: searchRequestSequence.current, mounted: searchMountedRef.current },
     );
     setSearching(true);
     setError("");
