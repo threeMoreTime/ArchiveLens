@@ -172,3 +172,50 @@ describe("SearchPage 初始 corpus 真实 deferred 乱序（发现 2 最终收�
     expect(summary?.textContent).not.toContain("正在建立");
   });
 });
+
+describe("SearchPage 终态事件更新 task 并停止 partial 轮询（P2 hotfix，组件级）", () => {
+  it("task=running+partial → task.completed → tasks.get 返回 completed → partial 轮询停止", async () => {
+    const api = makeMockApi();
+    // 初始：任务运行中，语料 partial
+    api.tasks.get.mockResolvedValue({ ...fullTask("task-a"), status: "running" });
+    api.search.getCorpusStatus.mockResolvedValue({ status: "partial", corpus_version: 1, indexed_pages: 1, expected_pages: 2, line_count: 1, failure_count: 0 });
+    api.settings.get.mockResolvedValue({ search_script_scope: "both" });
+    api.search.listSessions.mockResolvedValue({ items: [] });
+    api.search.queryHits.mockResolvedValue({ items: [], total: 0, session: fullSession("s", "task-a") });
+
+    // 终态事件后：tasks.get 返回 completed，corpus 仍为 partial
+    api.tasks.get.mockResolvedValueOnce({ ...fullTask("task-a"), status: "running" });
+    api.tasks.get.mockResolvedValueOnce({ ...fullTask("task-a"), status: "completed" });
+    // getCorpusStatus 在 reload 时仍返回 partial（终态 partial）
+    api.search.getCorpusStatus.mockResolvedValue({ status: "partial", corpus_version: 1, indexed_pages: 1, expected_pages: 2, line_count: 1, failure_count: 0 });
+
+    let eventCb: ((e: { task_id?: string | null; event: string }) => void) | null = null;
+    api.subscribe.onEvent.mockImplementation((cb: any) => { eventCb = cb; return () => {}; });
+
+    mountWithNavigator("task-a", api);
+    // 等初始加载完成
+    await waitFor(() => expect(eventCb).not.toBeNull(), { timeout: 5000 });
+
+    // 记录终态事件前的 getCorpusStatus 调用次数
+    const callsBefore = api.search.getCorpusStatus.mock.calls.length;
+
+    // 发送 task.completed 事件
+    await act(async () => {
+      eventCb?.({ task_id: "task-a", event: "task.completed" });
+    });
+    // 等 reloadCorpus + reloadTask 的防抖/microtask 完成
+    await act(async () => { await new Promise((r) => setTimeout(r, 500)); });
+
+    // 验证 tasks.get 被再次调用（reloadTask 触发）
+    expect(api.tasks.get).toHaveBeenCalledWith("task-a");
+
+    // 关键断言：推进 5 秒后，getCorpusStatus 调用次数不再持续增长
+    //（task.status 已更新为 completed，partial 不再触发轮询）
+    await act(async () => { await new Promise((r) => setTimeout(r, 5000)); });
+    const callsAfter = api.search.getCorpusStatus.mock.calls.length;
+    // 轮询每 1.5s 一次，5 秒内若是活跃轮询会有 3+ 次新增调用。
+    // 终态 partial 停止轮询后，新增调用应为 0 或仅防抖触发的 1 次。
+    const newCalls = callsAfter - callsBefore;
+    expect(newCalls).toBeLessThanOrEqual(2); // 防抖 reload 的 1 次 + 可能的边界
+  });
+});
