@@ -55,10 +55,19 @@ describe("开发者 DevTools 与日志门禁", () => {
     expect(aiSection).toContain("await requireDeveloperMode()");
   });
 
-  it("生产环境仍拦截 F12 与 Ctrl+Shift+I", () => {
+  it("生产环境移除默认菜单并拦截全平台 DevTools 快捷键", () => {
+    expect(mainWindow).toContain("Menu.setApplicationMenu(null)");
     expect(mainWindow).toContain("before-input-event");
+    // F12
     expect(mainWindow).toContain('input.key === "F12"');
-    expect(mainWindow).toContain('input.control && input.shift && input.key.toLowerCase() === "i"');
-    expect(mainWindow).toContain('!process.env["AL_DEBUG"] && !DEV_SERVER_URL');
+    // Ctrl+Shift+I/J/C/K
+    expect(mainWindow).toContain('["i", "j", "c", "k"]');
+    // macOS Cmd+Option+I/J/C
+    expect(mainWindow).toContain('input.meta && input.alt');
+    // 生产条件判断
+    expect(mainWindow).toContain("isProduction");
+    // AL_DEBUG 与开发服务器仍可绕过
+    expect(mainWindow).toContain("!process.env[\"AL_DEBUG\"]");
+    expect(mainWindow).toContain("!DEV_SERVER_URL");
   });
 });

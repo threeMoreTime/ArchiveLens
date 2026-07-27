@@ -264,14 +264,15 @@ describe("初始 task 快照不覆盖终态 reload（缺口 2，组件级）", (
 });
 
 describe("reloadTask 失败后重试（缺口 1，组件级）", () => {
-  it("terminal tasks.get 第一次失败、第二次成功后 partial 轮询停止", async () => {
+  it("初始加载成功 running → 终态刷新第一次失败 → 重试成功 completed → partial 轮询停止", async () => {
     const api = makeMockApi();
-    api.tasks.get.mockResolvedValue({ ...fullTask("task-a"), status: "running" });
+    // 初始加载：tasks.get 返回 running（初始加载成功）
+    api.tasks.get.mockResolvedValueOnce({ ...fullTask("task-a"), status: "running" });
     api.search.getCorpusStatus.mockResolvedValue({ status: "partial", corpus_version: 1, indexed_pages: 1, expected_pages: 2, line_count: 1, failure_count: 0 });
     api.settings.get.mockResolvedValue({ search_script_scope: "both" });
     api.search.listSessions.mockResolvedValue({ items: [] });
 
-    // reloadTask 第一次失败、第二次成功
+    // 终态事件 reloadTask：第一次失败（瞬态 IPC 错误），第二次成功
     api.tasks.get.mockRejectedValueOnce(new Error("transient IPC error"));
     api.tasks.get.mockResolvedValueOnce({ ...fullTask("task-a"), status: "completed" });
 
@@ -279,22 +280,26 @@ describe("reloadTask 失败后重试（缺口 1，组件级）", () => {
     api.subscribe.onEvent.mockImplementation((cb: any) => { eventCb = cb; return () => {}; });
 
     mountWithNavigator("task-a", api);
-    await waitFor(() => expect(eventCb).not.toBeNull(), { timeout: 5000 });
+    // 断言初始加载成功（running 已写入，搜索 body 可见）
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "任务内检索文字或词语" })).toBeTruthy(), { timeout: 5000 });
+    // 初始 tasks.get 被调用一次（初始加载成功写入 running）
+    expect(api.tasks.get).toHaveBeenCalledTimes(1);
 
     const callsBefore = api.search.getCorpusStatus.mock.calls.length;
 
-    // 发送 task.completed
+    // 发送 task.completed（触发 reloadTask：第一次失败 → 300ms 后重试 → 第二次成功）
     await act(async () => {
       eventCb?.({ task_id: "task-a", event: "task.completed" });
     });
 
-    // 等待重试完成（第一次 300ms 失败 → 第二次成功）
+    // 等待重试完成（300ms 延迟 + 重试请求）
     await act(async () => { await new Promise((r) => setTimeout(r, 2000)); });
 
-    // tasks.get 被多次调用（初始 + 失败的重试 + 成功）
-    expect(api.tasks.get).toHaveBeenCalledWith("task-a");
+    // 断言 tasks.get 被调用 3 次：初始 1 + reloadTask 失败 1 + 重试成功 1
+    expect(api.tasks.get).toHaveBeenCalledTimes(3);
+    expect(api.tasks.get).toHaveBeenLastCalledWith("task-a");
 
-    // 推进 5 秒，确认轮询已停止
+    // 推进 5 秒，确认终态 partial 轮询已停止
     await act(async () => { await new Promise((r) => setTimeout(r, 5000)); });
     const callsAfter = api.search.getCorpusStatus.mock.calls.length;
     expect(callsAfter - callsBefore).toBeLessThanOrEqual(2);
