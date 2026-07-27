@@ -130,6 +130,11 @@ export default function SearchPage() {
   const searchRouteGeneration = useRef(0);
   const searchRequestSequence = useRef(0);
   const searchMountedRef = useRef(true);
+  // P2 hotfix：task state 请求身份守卫。终态事件时需重新加载 tasks.get 更新
+  // task.status，使轮询 effect 能正确判断 partial 是否为终态。
+  const taskRouteGeneration = useRef(0);
+  const taskRequestSequence = useRef(0);
+  const taskMountedRef = useRef(true);
   // corpus 防抖定时器：连续事件合并为一次 corpusStatus 刷新。
   const corpusDebounceRef = useRef<number | null>(null);
   const CORPUS_REFRESH_DEBOUNCE_MS = 300;
@@ -161,6 +166,22 @@ export default function SearchPage() {
     }
   }, []);
 
+  // P2 hotfix：刷新 task state（终态事件时更新 task.status，使轮询 effect 判断
+  // partial 是否为终态）。带 taskId+generation+sequence+mounted 身份守卫。
+  const reloadTask = useCallback(async (id: string, generation: number) => {
+    const seq = ++taskRequestSequence.current;
+    try {
+      const nextTask = await window.archiveLens.tasks.get(id);
+      if (!shouldCommit(
+        { taskId: id, generation, sequence: seq },
+        { currentTaskId: currentTaskIdRef.current, currentGeneration: taskRouteGeneration.current, currentSequence: taskRequestSequence.current, mounted: taskMountedRef.current },
+      )) return;
+      setTask(nextTask);
+    } catch {
+      // task 读取失败不阻塞：保留上次已知状态。
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
     // taskId 变化：递增 routeGeneration 使旧 corpus/search 请求作废，重置挂载标志。
@@ -169,6 +190,8 @@ export default function SearchPage() {
     corpusMountedRef.current = true;
     searchRouteGeneration.current += 1;
     searchMountedRef.current = true;
+    taskRouteGeneration.current += 1;
+    taskMountedRef.current = true;
     setInitialLoading(true);
     setError("");
     setHistoryNotice("");
@@ -234,6 +257,7 @@ export default function SearchPage() {
       active = false;
       corpusMountedRef.current = false;
       searchMountedRef.current = false;
+      taskMountedRef.current = false;
       hitRequestRef.current += 1;
       imageRequestRef.current += 1;
       if (corpusDebounceRef.current !== null) {
@@ -267,6 +291,8 @@ export default function SearchPage() {
   useEffect(() => {
     if (!taskId) return;
     const generation = corpusRouteGeneration.current;
+    const taskGeneration = taskRouteGeneration.current;
+    const TERMINAL_EVENTS = ["task.completed", "task.failed", "task.cancelled"];
     const refreshCorpus = () => {
       if (corpusDebounceRef.current !== null) window.clearTimeout(corpusDebounceRef.current);
       corpusDebounceRef.current = window.setTimeout(() => {
@@ -283,9 +309,14 @@ export default function SearchPage() {
         "task.resumed", "task.occurrences_reconciled",
       ].includes(event.event)) {
         refreshCorpus();
+        // P2 hotfix：终态事件同时刷新 task state，使轮询 effect 能根据更新后的
+        // task.status 判断 partial 是否为终态，停止不必要的轮询。
+        if (TERMINAL_EVENTS.includes(event.event)) {
+          void reloadTask(taskId, taskGeneration);
+        }
       }
     });
-  }, [taskId, reloadCorpus]);
+  }, [taskId, reloadCorpus, reloadTask]);
 
   const loadHits = useCallback(async (sessionId: string, nextOffset: number) => {
     const requestId = ++hitRequestRef.current;
