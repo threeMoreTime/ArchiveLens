@@ -219,3 +219,84 @@ describe("SearchPage 终态事件更新 task 并停止 partial 轮询（P2 hotfi
     expect(newCalls).toBeLessThanOrEqual(2); // 防抖 reload 的 1 次 + 可能的边界
   });
 });
+
+describe("初始 task 快照不覆盖终态 reload（缺口 2，组件级）", () => {
+  it("reloadTask 先写入 completed → 初始 Promise.all 晚到 running → 不能覆盖", async () => {
+    const api = makeMockApi();
+    // 初始 Promise.all 的 tasks.get 保持 pending（晚到）
+    const initialTask = deferred(fullTask("task-a"));
+    api.tasks.get.mockReturnValueOnce(initialTask.promise);
+    api.search.getCorpusStatus.mockResolvedValue({ status: "partial", corpus_version: 1, indexed_pages: 1, expected_pages: 2, line_count: 1, failure_count: 0 });
+    api.settings.get.mockResolvedValue({ search_script_scope: "both" });
+    api.search.listSessions.mockResolvedValue({ items: [] });
+
+    // reloadTask 的 tasks.get 返回 completed
+    api.tasks.get.mockResolvedValueOnce({ ...fullTask("task-a"), status: "completed" });
+
+    let eventCb: ((e: { task_id?: string | null; event: string }) => void) | null = null;
+    api.subscribe.onEvent.mockImplementation((cb: any) => { eventCb = cb; return () => {}; });
+
+    mountWithNavigator("task-a", api);
+    await waitFor(() => expect(eventCb).not.toBeNull(), { timeout: 5000 });
+
+    // 在初始 Promise.all pending 时，发送 task.completed
+    // reloadTask 调用 tasks.get（第二次），返回 completed，写入 task
+    await act(async () => {
+      eventCb?.({ task_id: "task-a", event: "task.completed" });
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 500)); });
+
+    // 现在释放初始 Promise.all 的旧 running 快照
+    await act(async () => {
+      initialTask.resolve({ ...fullTask("task-a"), status: "running" });
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
+
+    // 关键断言：task.status 应仍为 completed（初始 running 被 task sequence 守卫拒绝）
+    // 检查 page summary 是否显示"完整可检索"或 partial 相关（task 终态）
+    // 由于 task=completed + corpus=partial，轮询应已停止
+    const callsBefore = api.search.getCorpusStatus.mock.calls.length;
+    await act(async () => { await new Promise((r) => setTimeout(r, 5000)); });
+    const callsAfter = api.search.getCorpusStatus.mock.calls.length;
+    // 终态 partial 不轮询：5 秒内新增调用应很少
+    expect(callsAfter - callsBefore).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("reloadTask 失败后重试（缺口 1，组件级）", () => {
+  it("terminal tasks.get 第一次失败、第二次成功后 partial 轮询停止", async () => {
+    const api = makeMockApi();
+    api.tasks.get.mockResolvedValue({ ...fullTask("task-a"), status: "running" });
+    api.search.getCorpusStatus.mockResolvedValue({ status: "partial", corpus_version: 1, indexed_pages: 1, expected_pages: 2, line_count: 1, failure_count: 0 });
+    api.settings.get.mockResolvedValue({ search_script_scope: "both" });
+    api.search.listSessions.mockResolvedValue({ items: [] });
+
+    // reloadTask 第一次失败、第二次成功
+    api.tasks.get.mockRejectedValueOnce(new Error("transient IPC error"));
+    api.tasks.get.mockResolvedValueOnce({ ...fullTask("task-a"), status: "completed" });
+
+    let eventCb: ((e: { task_id?: string | null; event: string }) => void) | null = null;
+    api.subscribe.onEvent.mockImplementation((cb: any) => { eventCb = cb; return () => {}; });
+
+    mountWithNavigator("task-a", api);
+    await waitFor(() => expect(eventCb).not.toBeNull(), { timeout: 5000 });
+
+    const callsBefore = api.search.getCorpusStatus.mock.calls.length;
+
+    // 发送 task.completed
+    await act(async () => {
+      eventCb?.({ task_id: "task-a", event: "task.completed" });
+    });
+
+    // 等待重试完成（第一次 300ms 失败 → 第二次成功）
+    await act(async () => { await new Promise((r) => setTimeout(r, 2000)); });
+
+    // tasks.get 被多次调用（初始 + 失败的重试 + 成功）
+    expect(api.tasks.get).toHaveBeenCalledWith("task-a");
+
+    // 推进 5 秒，确认轮询已停止
+    await act(async () => { await new Promise((r) => setTimeout(r, 5000)); });
+    const callsAfter = api.search.getCorpusStatus.mock.calls.length;
+    expect(callsAfter - callsBefore).toBeLessThanOrEqual(2);
+  });
+});

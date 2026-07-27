@@ -168,17 +168,34 @@ export default function SearchPage() {
 
   // P2 hotfix：刷新 task state（终态事件时更新 task.status，使轮询 effect 判断
   // partial 是否为终态）。带 taskId+generation+sequence+mounted 身份守卫。
+  // 失败后有限重试（300ms、1s、3s），受守卫约束——避免瞬态 IPC 错误导致
+  // task.status 永久停留 running、partial 永久轮询。
   const reloadTask = useCallback(async (id: string, generation: number) => {
-    const seq = ++taskRequestSequence.current;
-    try {
-      const nextTask = await window.archiveLens.tasks.get(id);
-      if (!shouldCommit(
-        { taskId: id, generation, sequence: seq },
-        { currentTaskId: currentTaskIdRef.current, currentGeneration: taskRouteGeneration.current, currentSequence: taskRequestSequence.current, mounted: taskMountedRef.current },
-      )) return;
-      setTask(nextTask);
-    } catch {
-      // task 读取失败不阻塞：保留上次已知状态。
+    const RETRY_DELAYS = [300, 1000, 3000];
+    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt += 1) {
+      const seq = ++taskRequestSequence.current;
+      try {
+        const nextTask = await window.archiveLens.tasks.get(id);
+        if (!shouldCommit(
+          { taskId: id, generation, sequence: seq },
+          { currentTaskId: currentTaskIdRef.current, currentGeneration: taskRouteGeneration.current, currentSequence: taskRequestSequence.current, mounted: taskMountedRef.current },
+        )) return;
+        setTask(nextTask);
+        return; // 成功写入，退出重试循环
+      } catch {
+        // 最后一次尝试仍失败：保留旧状态，放弃重试。
+        if (attempt >= RETRY_DELAYS.length) return;
+        // 等待后重试（仍受守卫约束：若期间已切任务或卸载，下次 shouldCommit 会拒绝）。
+        await new Promise<void>((resolve) => {
+          window.setTimeout(() => {
+            if (!shouldCommit(
+              { taskId: id, generation, sequence: seq },
+              { currentTaskId: currentTaskIdRef.current, currentGeneration: taskRouteGeneration.current, currentSequence: taskRequestSequence.current, mounted: taskMountedRef.current },
+            )) { resolve(); return; }
+            resolve();
+          }, RETRY_DELAYS[attempt]);
+        });
+      }
     }
   }, []);
 
@@ -213,6 +230,9 @@ export default function SearchPage() {
     // 读取当前 sequence 冒充请求身份——若期间 reloadCorpus 已递增 sequence，
     // 初始旧 corpus（如 building）会错误覆盖较新的 ready。
     const initialCorpusSeq = ++corpusRequestSequence.current;
+    // 初始 task 请求也捕获独立 sequence，避免晚到的初始 running 快照覆盖
+    // 终态事件 reloadTask 已写入的 completed。
+    const initialTaskSeq = ++taskRequestSequence.current;
     Promise.all([
       window.archiveLens.tasks.get(taskId),
       window.archiveLens.search.getCorpusStatus(taskId),
@@ -222,7 +242,14 @@ export default function SearchPage() {
       // 同步检查 taskId：路由切换后 passive effect 重跑前，闭包 taskId 仍是旧值，
       // 但 currentTaskIdRef.current 已更新为新的——若不一致说明已切任务，丢弃全部结果。
       if (!active || currentTaskIdRef.current !== taskId) return;
-      setTask(nextTask);
+      // task 写入也经 task sequence 守卫：若期间 reloadTask 已递增 sequence
+      // （终态事件先到达），初始旧 running 快照不能覆盖 completed。
+      if (shouldCommit(
+        { taskId, generation: corpusGeneration, sequence: initialTaskSeq },
+        { currentTaskId: currentTaskIdRef.current, currentGeneration: taskRouteGeneration.current, currentSequence: taskRequestSequence.current, mounted: taskMountedRef.current },
+      )) {
+        setTask(nextTask);
+      }
       const commitOk = shouldCommit(
         { taskId, generation: corpusGeneration, sequence: initialCorpusSeq },
         { currentTaskId: currentTaskIdRef.current, currentGeneration: corpusRouteGeneration.current, currentSequence: corpusRequestSequence.current, mounted: corpusMountedRef.current },
