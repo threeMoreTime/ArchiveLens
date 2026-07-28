@@ -12,6 +12,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import * as ts from "typescript";
 import { MethodNameSchema } from "@shared/index";
 
 // 测试文件位于 apps/desktop/tests/，仓库根在其上三级。
@@ -19,6 +20,8 @@ const REPO_ROOT = path.resolve(__dirname, "../../..");
 const BASELINE_PATH = path.resolve(REPO_ROOT, "contracts/ipc-method-audit.baseline.json");
 const IPC_SCHEMA_PATH = path.resolve(REPO_ROOT, "packages/ipc-schema/src/index.ts");
 const APPS_DESKTOP_SRC = path.resolve(REPO_ROOT, "apps/desktop/src");
+const MAIN_IPC_DIR = path.resolve(APPS_DESKTOP_SRC, "main/ipc");
+const MAIN_IPC_FILES = ["app.ts", "engine.ts", "settings.ts", "e2e.ts"];
 
 interface BaselineDifference {
   id: string;
@@ -175,6 +178,94 @@ function extractParseMethodResultCovered(schemaPath: string): Set<string> {
   return covered;
 }
 
+interface IpcMainRegistration {
+  channel: string;
+  file: string;
+  hasSidecarCall: boolean;
+  hasInspectTask: boolean;
+}
+
+/**
+ * 用 TypeScript Compiler API 扫描 apps/desktop/src/main/ipc/ 下所有
+ * ipcMain.handle("channel", callback) 注册点。
+ *
+ * 对每个回调 AST 节点递归检测：
+ *  - 是否直接调用 sidecar.call(...) / sidecar.request(...)；
+ *  - 是否调用 inspectTask(...)（e2e.ts 内部转发到 tasks.inspectState）。
+ *
+ * 分类口径（与 baseline 字段对齐）：
+ *  - 生产非 test 通道：回调含 sidecar.call/request → forwarded，否则 local；
+ *  - test.* 通道：回调含 sidecar.call/request 或 inspectTask 间接转发 → test_forwarded，
+ *    否则 test_local。
+ *
+ * 别名转发（如 app.cleanupTemporaryData → storage.cleanupTemporary）在回调体内直接
+ * 出现 sidecar.call，自然归 forwarded，无需特判。
+ */
+function extractIpcMainHandlers(): IpcMainRegistration[] {
+  const out: IpcMainRegistration[] = [];
+  for (const fn of MAIN_IPC_FILES) {
+    const filePath = path.join(MAIN_IPC_DIR, fn);
+    const text = readFileSync(filePath, "utf-8");
+    const sf = ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, /*setParentNodes*/ true);
+    const visit = (node: ts.Node) => {
+      // 识别 ipcMain.handle("ch", callback) 表达式语句
+      if (
+        ts.isExpressionStatement(node) &&
+        ts.isCallExpression(node.expression) &&
+        ts.isPropertyAccessExpression(node.expression.expression) &&
+        node.expression.expression.name.text === "handle" &&
+        ts.isIdentifier(node.expression.expression.expression) &&
+        node.expression.expression.expression.text === "ipcMain"
+      ) {
+        const call = node.expression;
+        const channelArg = call.arguments[0];
+        const callbackArg = call.arguments[1];
+        if (callbackArg && ts.isStringLiteral(channelArg)) {
+          const { hasSidecarCall, hasInspectTask } = classifyCallback(callbackArg);
+          out.push({
+            channel: channelArg.text,
+            file: fn,
+            hasSidecarCall,
+            hasInspectTask,
+          });
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return out;
+}
+
+/** 在回调 AST 节点内递归检测 sidecar.call/request 与 inspectTask 调用。 */
+function classifyCallback(root: ts.Node): { hasSidecarCall: boolean; hasInspectTask: boolean } {
+  let hasSidecarCall = false;
+  let hasInspectTask = false;
+  const visit = (node: ts.Node) => {
+    // sidecar.call(...) / sidecar.request(...)
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      (node.expression.name.text === "call" || node.expression.name.text === "request") &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === "sidecar"
+    ) {
+      hasSidecarCall = true;
+    }
+    // inspectTask(...)（e2e.ts 内部转发到 tasks.inspectState）
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "inspectTask"
+    ) {
+      hasInspectTask = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return { hasSidecarCall, hasInspectTask };
+}
+
 function sorted(arr: Iterable<string>): string[] {
   return [...arr].sort();
 }
@@ -215,7 +306,7 @@ describe("IPC 方法基线（Commit 1）— 五方集合锁定", () => {
     // 即使是允许的内部转发，也记录其数量便于审计（当前预期为 1：manager.ts call→request）
     expect(allowedDynamic.length).toBe(1);
 
-    expect(methods.size, "TS Engine 调用集合不应有重复").toBe(methods.size);
+    // methods 来自字面量提取（带 Set 去重），数量校验即等价于无重复。
     expect(methods.size).toBe(42);
     const { missing, extra } = diffSets(methods, baseline.typescript_engine_calls);
     expect({ missing, extra }).toEqual({ missing: [], extra: [] });
@@ -308,33 +399,120 @@ describe("IPC 方法基线（Commit 1）— 五方集合锁定", () => {
     ).toBe(14);
   });
 
-  it("Electron 本地通道集合与 baseline 一致（local 17 / forwarded 41 / test_local 8 / test_forwarded 5）", () => {
-    // 本测试校验 baseline 中记录的 Electron 通道集合内部一致性，
-    // 以及与 Engine 方法集的边界（local/test_local 不应与 engine method 重名）。
-    const local = new Set(baseline.electron_local_channels);
-    const forwarded = new Set(baseline.electron_forwarded_channels);
-    const testLocal = new Set(baseline.electron_test_local_channels);
-    const testForwarded = new Set(baseline.electron_test_forwarded_channels);
+  it("baseline 所有数组无重复项（去重不变量）", () => {
+    // 对 baseline 的所有数组字段逐项断言 new Set(values).size === values.length，
+    // 防止后续编辑在数组中引入重复项而集合比对仍误判通过。
+    const arrayKeys = [
+      "method_name_schema",
+      "typescript_engine_calls",
+      "parse_method_result_covered",
+      "python_handlers",
+      "electron_local_channels",
+      "electron_forwarded_channels",
+      "electron_test_local_channels",
+      "electron_test_forwarded_channels",
+    ] as const;
+    for (const key of arrayKeys) {
+      const values = baseline[key];
+      const unique = new Set(values).size;
+      expect(unique, `baseline.${key} 不应有重复项`).toBe(values.length);
+    }
+  });
 
-    expect(local.size).toBe(17);
-    expect(forwarded.size).toBe(41);
-    expect(testLocal.size).toBe(8);
-    expect(testForwarded.size).toBe(5);
+  it("Electron 通道与真实源码 ipcMain.handle 注册完全一致（AST 扫描）", () => {
+    // 用 TypeScript Compiler API 扫描 apps/desktop/src/main/ipc/ 下所有
+    // ipcMain.handle("channel", callback) 注册点，按回调 AST 分类，再与 baseline 比对。
+    // 这能在「新增/删除/重分类真实通道但忘记更新 baseline」时立即失败。
+    const registrations = extractIpcMainHandlers();
 
-    // 通道集合互不相交
-    const allChannels = [...local, ...forwarded, ...testLocal, ...testForwarded];
-    expect(new Set(allChannels).size, "Electron 通道集合不应有重叠").toBe(allChannels.length);
+    // 源码通道总数 = baseline 四类之和
+    const baselineTotal =
+      baseline.electron_local_channels.length +
+      baseline.electron_forwarded_channels.length +
+      baseline.electron_test_local_channels.length +
+      baseline.electron_test_forwarded_channels.length;
+    expect(registrations.length, "真实 ipcMain.handle 注册总数应与 baseline 一致").toBe(baselineTotal);
 
-    // Electron 本地通道与 test 通道不应直接是 Engine 方法名（local 在 Main 内完成）
-    const pythonSet = new Set(baseline.python_handlers);
-    const localCollideWithEngine = sorted([...local].filter((c) => pythonSet.has(c)));
+    // 源码通道不应有重复注册（同名 channel 注册两次属于回归风险）
+    const sourceChannels = registrations.map((r) => r.channel);
+    const sourceDupes = sorted(sourceChannels.filter((c, i) => sourceChannels.indexOf(c) !== i));
+    expect(sourceDupes, "源码中不应有重复注册的 ipcMain.handle channel").toEqual([]);
+
+    // 按回调分类口径分桶
+    const classified = {
+      local: new Set<string>(),
+      forwarded: new Set<string>(),
+      test_local: new Set<string>(),
+      test_forwarded: new Set<string>(),
+    };
+    for (const r of registrations) {
+      const isTest = r.channel.startsWith("test.");
+      let bucket: keyof typeof classified;
+      if (isTest) {
+        // test 通道：含 sidecar.call/request 或 inspectTask 间接转发 → test_forwarded
+        bucket = r.hasSidecarCall || r.hasInspectTask ? "test_forwarded" : "test_local";
+      } else {
+        // 生产通道：回调直接含 sidecar.call/request → forwarded，否则 local
+        bucket = r.hasSidecarCall ? "forwarded" : "local";
+      }
+      classified[bucket].add(r.channel);
+    }
+
+    // baseline 各桶数量
+    expect(classified.local.size, "electron_local 数量应为 17").toBe(17);
+    expect(classified.forwarded.size, "electron_forwarded 数量应为 41").toBe(41);
+    expect(classified.test_local.size, "electron_test_local 数量应为 8").toBe(8);
+    expect(classified.test_forwarded.size, "electron_test_forwarded 数量应为 5").toBe(5);
+
+    // 生产通道（local ∪ forwarded）与 baseline 完全一致，数量 58
+    const prodModeling = diffSets(
+      [...classified.local, ...classified.forwarded],
+      [...baseline.electron_local_channels, ...baseline.electron_forwarded_channels],
+    );
     expect(
-      localCollideWithEngine,
-      "electron_local 不应是 Engine 方法（应与 Python handler 集不相交）",
-    ).toEqual([]);
+      prodModeling,
+      "生产 ipcMain.handle 通道（local ∪ forwarded）与 baseline 不一致\n" +
+        `  Missing in baseline: ${prodModeling.missing.join(", ") || "(无)"}\n` +
+        `  Unexpected in baseline: ${prodModeling.extra.join(", ") || "(无)"}`,
+    ).toEqual({ missing: [], extra: [] });
 
-    // test_local 不应是 Engine 方法
-    const testLocalCollide = sorted([...testLocal].filter((c) => pythonSet.has(c)));
-    expect(testLocalCollide, "electron_test_local 不应是 Engine 方法").toEqual([]);
+    // E2E 通道（test_local ∪ test_forwarded）与 baseline 完全一致，数量 13
+    const testModeling = diffSets(
+      [...classified.test_local, ...classified.test_forwarded],
+      [...baseline.electron_test_local_channels, ...baseline.electron_test_forwarded_channels],
+    );
+    expect(
+      testModeling,
+      "E2E ipcMain.handle 通道（test_local ∪ test_forwarded）与 baseline 不一致\n" +
+        `  Missing in baseline: ${testModeling.missing.join(", ") || "(无)"}\n` +
+        `  Unexpected in baseline: ${testModeling.extra.join(", ") || "(无)"}`,
+    ).toEqual({ missing: [], extra: [] });
+
+    // 分桶精确比对：local / forwarded / test_local / test_forwarded 各自一致
+    const bucketPairs: Array<[Set<string>, string[], string]> = [
+      [classified.local, baseline.electron_local_channels, "local"],
+      [classified.forwarded, baseline.electron_forwarded_channels, "forwarded"],
+      [classified.test_local, baseline.electron_test_local_channels, "test_local"],
+      [classified.test_forwarded, baseline.electron_test_forwarded_channels, "test_forwarded"],
+    ];
+    for (const [actual, expected, name] of bucketPairs) {
+      const d = diffSets(actual, expected);
+      expect(
+        d,
+        `分桶 ${name} 与 baseline 不一致\n` +
+          `  Missing in baseline: ${d.missing.join(", ") || "(无)"}\n` +
+          `  Unexpected in baseline: ${d.extra.join(", ") || "(无)"}`,
+      ).toEqual({ missing: [], extra: [] });
+    }
+
+    // 边界：electron_local 与 test_local 不应是 Engine 方法（local 在 Main 内完成）
+    const pythonSet = new Set(baseline.python_handlers);
+    const localCollide = sorted(
+      [...classified.local, ...classified.test_local].filter((c) => pythonSet.has(c)),
+    );
+    expect(
+      localCollide,
+      "electron_local ∪ electron_test_local 不应是 Engine 方法",
+    ).toEqual([]);
   });
 });
