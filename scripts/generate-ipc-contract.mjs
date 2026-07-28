@@ -65,7 +65,9 @@ function main() {
   if (checkMode) {
     let onDisk = "";
     if (existsSync(OUTPUT)) {
-      onDisk = readFileSync(OUTPUT, "utf-8");
+      // 规范化换行：git autocrlf 可能在 checkout 时把 LF 转成 CRLF，
+      // 比对基于逻辑内容（统一为 LF），避免跨平台误报不一致。
+      onDisk = readFileSync(OUTPUT, "utf-8").replace(/\r\n/g, "\n");
     }
     if (onDisk !== generated) {
       console.error(`[ipc-contract] 生成文件与磁盘不一致: ${path.relative(REPO_ROOT, OUTPUT)}`);
