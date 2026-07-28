@@ -154,8 +154,8 @@ jobs:
       - name: Validate generated IPC contract is up to date
         run: pnpm check:ipc-contract-generated
 
-      - name: Test IPC contract generator validation
-        run: pnpm test:ipc-contract-generator
+      - name: Test IPC contract generator validation with coverage
+        run: pnpm test:ipc-contract-generator:coverage
 
       - name: Validate TypeScript IPC contract and consistency
         run: pnpm test:contract
