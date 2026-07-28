@@ -25,6 +25,12 @@
       "engine/src/archivelens_engine/html_export.py": { "lines": 91, "branches": 81 }
     }
   },
+  "ipcSchemaCoverage": {
+    "lines": 95,
+    "statements": 95,
+    "functions": 95,
+    "branches": 90
+  },
   "bundles": {
     "rendererJs": { "warningRaw": 1300000, "failureRaw": 1330000, "warningGzip": 270000, "failureGzip": 280000 },
     "rendererCss": { "warningRaw": 52000, "failureRaw": 60000, "warningGzip": 9800, "failureGzip": 11000 },

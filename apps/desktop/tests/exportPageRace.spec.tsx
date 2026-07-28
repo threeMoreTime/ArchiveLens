@@ -11,10 +11,14 @@ import React from "react";
 import { render, screen, waitFor, act, cleanup } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 
+// 竞态测试在大模块冷加载 + 全量并发 fork CPU 争用下偶发破默认 hookTimeout(10s)。
+// 与 searchPageRace.spec.tsx 对齐，给首屏渲染与组件轮询充足的确定性窗口。
+vi.setConfig({ hookTimeout: 30000, testTimeout: 30000 });
+
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   if (!window.matchMedia) {
-    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeEventListener: () => {}, onchange: null, dispatchEvent: () => false })) as any;
+    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, onchange: null, dispatchEvent: () => false })) as any;
   }
   if (!(globalThis as any).ResizeObserver) {
     (globalThis as any).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
@@ -25,12 +29,29 @@ beforeEach(() => {
   }
 });
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  // 这些测试全程使用 real timers（组件轮询依赖真实 setInterval）；
+  // cleanup() 触发 React effect cleanup，组件内的 setInterval/clearInterval 已停止。
+  // 不无条件调用 vi.runOnlyPendingTimers()（未启用 fake timers 时会抛错）。
+  vi.restoreAllMocks();
+});
 
+// 增强 deferred：跟踪 settled 状态，测试结束前断言全部 settle，避免 pending promise 残留。
 function deferred<T>() {
-  let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => { resolve = r; });
-  return { promise, resolve };
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  let settled = false;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = (v) => { settled = true; res(v); };
+    reject = (r) => { settled = true; rej(r); };
+  });
+  return { promise, resolve, reject, get settled() { return settled; } };
+}
+
+/** flush microtask 队列，替代固定 setTimeout 等待。 */
+function flushMicrotasks() {
+  return act(async () => { await Promise.resolve(); });
 }
 
 function makeMockApi() {
@@ -96,13 +117,21 @@ describe("ExportPage 初始加载期间 export 事件不致永久 loading（发�
     // 事件触发的 loadJobs 调用了 listJobs（第 2 次）
     await waitFor(() => expect(api.export.listJobs).toHaveBeenCalledTimes(2), { timeout: 5000 });
 
-    // 释放初始 Promise.all
+    // 释放初始 Promise.all（含事件触发的 eventJobsReq，避免 pending 残留）
     await act(async () => {
       taskReq.resolve(fullTask("task-a"));
       resultsReq.resolve(fullResultsPage());
       listReq.resolve({ task_id: "task-a", items: [], limit: 10, offset: 0 });
       listJobsReq.resolve({ task_id: "task-a", items: [], limit: 50, offset: 0, total: 0 });
+      eventJobsReq.resolve({ task_id: "task-a", items: [], limit: 50, offset: 0, total: 0 });
     });
+
+    // 断言全部 deferred 已 settle（无 pending 残留）
+    expect(taskReq.settled).toBe(true);
+    expect(resultsReq.settled).toBe(true);
+    expect(listReq.settled).toBe(true);
+    expect(listJobsReq.settled).toBe(true);
+    expect(eventJobsReq.settled).toBe(true);
 
     // loading 正常关闭
     await waitFor(() => expect(screen.queryByText(/正在读取/)).toBeNull(), { timeout: 5000 });
@@ -141,7 +170,11 @@ describe("ExportPage pending retry 切换路由不污染新页面（发现 5，�
     await act(async () => {
       retryReq.resolve({ export_id: "exp-new", task_id: "task-a", format: "html", status: "queued", retry_of: "exp-a" });
     });
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    // flush microtask 替代固定 setTimeout，让组件处理 late-arriving result
+    await flushMicrotasks();
+
+    // 断言 retry deferred 已 settle
+    expect(retryReq.settled).toBe(true);
 
     // 关键断言：B 页面不显示 mismatch 错误（generation 守卫阻止了 setActionIssue）
     expect(screen.queryByText(/归属异常/)).toBeNull();
@@ -183,5 +216,10 @@ describe("ExportPage 切换任务后 busy 恢复（P1 hotfix，组件级）", ()
     }, { timeout: 5000 });
     const startButton = screen.getByRole("button", { name: /开始导出/ });
     expect(startButton.hasAttribute("disabled")).toBe(false);
+
+    // 释放 cancel deferred（避免 pending promise 残留）
+    cancelReq.resolve({ export_id: "exp-a", status: "cancelling" });
+    await flushMicrotasks();
+    expect(cancelReq.settled).toBe(true);
   });
 });
