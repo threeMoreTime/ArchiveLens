@@ -393,52 +393,9 @@ class Server:
 
     # ---- handler 注册 ----
     def _register_defaults(self) -> None:
-        self.handlers.update(
-            {
-                "app.info": _h_app_info,
-                "app.shutdown": _h_shutdown,
-                "diagnostics.run": _h_diagnostics,
-                "tasks.create": _h_tasks_create,
-                "tasks.preflight": _h_tasks_preflight,
-                "tasks.preflightGet": _h_tasks_preflight_get,
-                "tasks.preflightCancel": _h_tasks_preflight_cancel,
-                "tasks.start": _h_tasks_start,
-                "tasks.get": _h_tasks_get,
-                "tasks.list": _h_tasks_list,
-                "tasks.pause": _h_tasks_pause,
-                "tasks.resume": _h_tasks_resume,
-                "tasks.cancel": _h_tasks_cancel,
-                "tasks.delete": _h_tasks_delete,
-                "tasks.cleanupTarget": _h_tasks_cleanup_target,
-                "tasks.inspectState": _h_tasks_inspect_state,
-                "demo.create": _h_demo_create,
-                "results.query": _h_results_query,
-                "results.getDetail": _h_results_detail,
-                "search.corpusStatus": _h_search_corpus_status,
-                "search.execute": _h_search_execute,
-                "search.sessions": _h_search_sessions,
-                "search.hits": _h_search_hits,
-                "search.preparePageImage": _h_search_prepare_page_image,
-                "review.preparePageImage": _h_review_prepare_page_image,
-                "review.layoutContext": _h_review_layout_context,
-                "review.previewLayoutContext": _h_review_preview_layout_context,
-                "review.updateLayoutOverride": _h_review_update_layout_override,
-                "review.rebuildLayoutContexts": _h_review_rebuild_layout_contexts,
-                "review.updateDecision": _h_review_decision,
-                "review.updateDecisions": _h_review_decisions,
-                "review.updateNote": _h_review_note,
-                "export.json": _h_export_json,
-                "export.review": _h_export_review,
-                "export.html": _h_export_html,
-                "exports.list": _h_exports_list,
-                "exports.create": _h_exports_create,
-                "exports.get": _h_exports_get,
-                "exports.listJobs": _h_exports_list_jobs,
-                "exports.cancel": _h_exports_cancel,
-                "exports.retry": _h_exports_retry,
-                "storage.cleanupTemporary": _h_storage_cleanup_temporary,
-            }
-        )
+        # 注册内容由模块级 ENGINE_HANDLERS 提供（见文件末尾），
+        # 以便测试与 contracts/engine-methods.json 交叉校验。
+        self.handlers.update(ENGINE_HANDLERS)
 
     # ---- 状态转换辅助 ----
     def _transition(self, task_id: str, target: str) -> None:
@@ -3505,8 +3462,60 @@ def _h_exports_list(server: Server, params: dict) -> dict:
     return {"task_id": task_id, "items": items, "limit": limit, "offset": offset}
 
 
+# ---- Engine handler 注册表（P1-8 Commit 2） ----
+#
+# 42 个 Engine 方法的唯一注册表，由 contracts/engine-methods.json 经
+# engine/tests/test_ipc_method_baseline.py 与本表交叉校验。注册内容、顺序与
+# _register_defaults 原字典完全一致，仅提升为模块级常量以供测试与外部核验。
+# 不在此处做任何 Python 动态反射；JSON 负责声明与核验，不参与运行时执行。
+ENGINE_HANDLERS: dict[str, Handler] = {
+    "app.info": _h_app_info,
+    "app.shutdown": _h_shutdown,
+    "diagnostics.run": _h_diagnostics,
+    "tasks.create": _h_tasks_create,
+    "tasks.preflight": _h_tasks_preflight,
+    "tasks.preflightGet": _h_tasks_preflight_get,
+    "tasks.preflightCancel": _h_tasks_preflight_cancel,
+    "tasks.start": _h_tasks_start,
+    "tasks.get": _h_tasks_get,
+    "tasks.list": _h_tasks_list,
+    "tasks.pause": _h_tasks_pause,
+    "tasks.resume": _h_tasks_resume,
+    "tasks.cancel": _h_tasks_cancel,
+    "tasks.delete": _h_tasks_delete,
+    "tasks.cleanupTarget": _h_tasks_cleanup_target,
+    "tasks.inspectState": _h_tasks_inspect_state,
+    "demo.create": _h_demo_create,
+    "results.query": _h_results_query,
+    "results.getDetail": _h_results_detail,
+    "search.corpusStatus": _h_search_corpus_status,
+    "search.execute": _h_search_execute,
+    "search.sessions": _h_search_sessions,
+    "search.hits": _h_search_hits,
+    "search.preparePageImage": _h_search_prepare_page_image,
+    "review.preparePageImage": _h_review_prepare_page_image,
+    "review.layoutContext": _h_review_layout_context,
+    "review.previewLayoutContext": _h_review_preview_layout_context,
+    "review.updateLayoutOverride": _h_review_update_layout_override,
+    "review.rebuildLayoutContexts": _h_review_rebuild_layout_contexts,
+    "review.updateDecision": _h_review_decision,
+    "review.updateDecisions": _h_review_decisions,
+    "review.updateNote": _h_review_note,
+    "export.json": _h_export_json,
+    "export.review": _h_export_review,
+    "export.html": _h_export_html,
+    "exports.list": _h_exports_list,
+    "exports.create": _h_exports_create,
+    "exports.get": _h_exports_get,
+    "exports.listJobs": _h_exports_list_jobs,
+    "exports.cancel": _h_exports_cancel,
+    "exports.retry": _h_exports_retry,
+    "storage.cleanupTemporary": _h_storage_cleanup_temporary,
+}
+
+
 def run_server(config: EngineConfig | None = None, workspace_root: str | Path | None = None) -> None:
     Server(config=config, workspace_root=workspace_root).run()
 
 
-__all__ = ["Server", "Handler", "run_server"]
+__all__ = ["Server", "Handler", "ENGINE_HANDLERS", "run_server"]

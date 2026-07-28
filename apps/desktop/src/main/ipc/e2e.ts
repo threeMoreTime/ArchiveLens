@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { SidecarManager } from "../sidecar/manager";
 import type { LifecycleController } from "../lifecycle/controller";
 import { getTrayState, restoreTrayWindow } from "../tray";
+import { TaskInspectStateResultSchema } from "@shared/index";
 
 const closeActionSchema = z.enum([
   "minimize",
@@ -15,38 +16,6 @@ const closeActionSchema = z.enum([
 
 const taskIdSchema = z.object({
   task_id: z.string().min(1),
-});
-
-const inspectStateSchema = z.object({
-  task: z.record(z.string(), z.unknown()),
-  task_id: z.string().min(1),
-  source_id: z.string().min(1),
-  processed_page_ids: z.array(z.number().int().positive()),
-  occurrence_ids: z.array(z.string().min(1)),
-  checkpoint: z
-    .object({
-      task_id: z.string().min(1),
-      source_id: z.string().min(1),
-      last_completed_page: z.number().int().nonnegative(),
-      next_page: z.number().int().positive(),
-      processed_page_ids: z.array(z.number().int().positive()),
-      worker_generation: z.number().int().nonnegative(),
-      updated_at: z.string().min(1),
-    })
-    .nullable(),
-  events: z.array(
-    z.object({
-      event_id: z.string().min(1),
-      task_id: z.string().min(1),
-      source_id: z.string(),
-      sequence: z.number().int().positive(),
-      event_type: z.string().min(1),
-      payload: z.record(z.string(), z.unknown()),
-      worker_generation: z.number().int().nonnegative(),
-      created_at: z.string().min(1),
-    }),
-  ),
-  occurrence_count: z.number().int().nonnegative(),
 });
 
 function getMainWindowState() {
@@ -66,7 +35,7 @@ export function registerE2eHandlers(sidecar: SidecarManager, lifecycle: Lifecycl
 
   async function inspectTask(task_id: string) {
     const raw = await sidecar.call("tasks.inspectState", { task_id });
-    return inspectStateSchema.parse(raw);
+    return TaskInspectStateResultSchema.parse(raw);
   }
 
   ipcMain.handle("test.lifecycle.requestClose", async () => lifecycle.requestClose());

@@ -8,6 +8,7 @@ import {
   TaskSearchEventPayloadSchema,
   WireMessageSchema,
   parseMethodResult,
+  type EngineMethodName,
   type Response,
   type Event,
 } from "@shared/index";
@@ -316,7 +317,7 @@ export class SidecarManager extends EventEmitter {
 
   /** 发起一次请求，关联响应；超时拒绝。 */
   request(
-    method: string,
+    method: EngineMethodName,
     params: Record<string, unknown> = {},
     timeoutMs = DEFAULT_REQ_TIMEOUT_MS,
   ): Promise<Response> {
@@ -348,7 +349,7 @@ export class SidecarManager extends EventEmitter {
   }
 
   /** 便捷调用：解析成功响应 result，错误响应抛 EngineError。 */
-  async call<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
+  async call<T = unknown>(method: EngineMethodName, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
     const resp = await this.request(method, params, timeoutMs);
     if (!resp.ok) {
       errorRegistry.record({

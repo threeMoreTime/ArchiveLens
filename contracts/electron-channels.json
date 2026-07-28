@@ -1,0 +1,407 @@
+{
+  "schema_version": 1,
+  "description": "ArchiveLens Electron Main/Preload IPC 通道正式契约（P1-8 Commit 2）。71 个通道的唯一真相源。electron_local/test_local 在 Main 内完成不经过 Python；electron_forwarded/test_forwarded 在 handler 内经 Sidecar 转发到 Engine 方法。test_* 仅在 ARCHIVELENS_E2E=1 注册与暴露。",
+  "channels": [
+    {
+      "channel": "app.cleanupTemporaryData",
+      "kind": "electron_forwarded",
+      "engine_method": "storage.cleanupTemporary",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.copyAiDebugInfo",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.copyDiagnosticSummary",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.getDeveloperSnapshot",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.getEnvironment",
+      "kind": "electron_forwarded",
+      "engine_method": "diagnostics.run",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.getInfo",
+      "kind": "electron_forwarded",
+      "engine_method": "app.info",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.getLocalDataSummary",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.getVersion",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.openLogDirectory",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.openRendererDevTools",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.openUserDataDirectory",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "app.reportRendererError",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "demo.create",
+      "kind": "electron_forwarded",
+      "engine_method": "demo.create",
+      "preload_exposed": true
+    },
+    {
+      "channel": "dialog.selectFile",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "dialog.selectFiles",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "dialog.selectFolder",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "export.html",
+      "kind": "electron_forwarded",
+      "engine_method": "export.html",
+      "preload_exposed": true
+    },
+    {
+      "channel": "export.json",
+      "kind": "electron_forwarded",
+      "engine_method": "export.json",
+      "preload_exposed": true
+    },
+    {
+      "channel": "export.review",
+      "kind": "electron_forwarded",
+      "engine_method": "export.review",
+      "preload_exposed": true
+    },
+    {
+      "channel": "exports.cancel",
+      "kind": "electron_forwarded",
+      "engine_method": "exports.cancel",
+      "preload_exposed": true
+    },
+    {
+      "channel": "exports.create",
+      "kind": "electron_forwarded",
+      "engine_method": "exports.create",
+      "preload_exposed": true
+    },
+    {
+      "channel": "exports.get",
+      "kind": "electron_forwarded",
+      "engine_method": "exports.get",
+      "preload_exposed": true
+    },
+    {
+      "channel": "exports.list",
+      "kind": "electron_forwarded",
+      "engine_method": "exports.list",
+      "preload_exposed": true
+    },
+    {
+      "channel": "exports.listJobs",
+      "kind": "electron_forwarded",
+      "engine_method": "exports.listJobs",
+      "preload_exposed": true
+    },
+    {
+      "channel": "exports.openDirectory",
+      "kind": "electron_forwarded",
+      "engine_method": "exports.get",
+      "preload_exposed": true
+    },
+    {
+      "channel": "exports.retry",
+      "kind": "electron_forwarded",
+      "engine_method": "exports.retry",
+      "preload_exposed": true
+    },
+    {
+      "channel": "results.getDetail",
+      "kind": "electron_forwarded",
+      "engine_method": "results.getDetail",
+      "preload_exposed": true
+    },
+    {
+      "channel": "results.query",
+      "kind": "electron_forwarded",
+      "engine_method": "results.query",
+      "preload_exposed": true
+    },
+    {
+      "channel": "review.layoutContext",
+      "kind": "electron_forwarded",
+      "engine_method": "review.layoutContext",
+      "preload_exposed": true
+    },
+    {
+      "channel": "review.preparePageImage",
+      "kind": "electron_forwarded",
+      "engine_method": "review.preparePageImage",
+      "preload_exposed": true
+    },
+    {
+      "channel": "review.previewLayoutContext",
+      "kind": "electron_forwarded",
+      "engine_method": "review.previewLayoutContext",
+      "preload_exposed": true
+    },
+    {
+      "channel": "review.rebuildLayoutContexts",
+      "kind": "electron_forwarded",
+      "engine_method": "review.rebuildLayoutContexts",
+      "preload_exposed": true
+    },
+    {
+      "channel": "review.updateDecision",
+      "kind": "electron_forwarded",
+      "engine_method": "review.updateDecision",
+      "preload_exposed": true
+    },
+    {
+      "channel": "review.updateDecisions",
+      "kind": "electron_forwarded",
+      "engine_method": "review.updateDecisions",
+      "preload_exposed": true
+    },
+    {
+      "channel": "review.updateLayoutOverride",
+      "kind": "electron_forwarded",
+      "engine_method": "review.updateLayoutOverride",
+      "preload_exposed": true
+    },
+    {
+      "channel": "review.updateNote",
+      "kind": "electron_forwarded",
+      "engine_method": "review.updateNote",
+      "preload_exposed": true
+    },
+    {
+      "channel": "search.corpusStatus",
+      "kind": "electron_forwarded",
+      "engine_method": "search.corpusStatus",
+      "preload_exposed": true
+    },
+    {
+      "channel": "search.execute",
+      "kind": "electron_forwarded",
+      "engine_method": "search.execute",
+      "preload_exposed": true
+    },
+    {
+      "channel": "search.hits",
+      "kind": "electron_forwarded",
+      "engine_method": "search.hits",
+      "preload_exposed": true
+    },
+    {
+      "channel": "search.preparePageImage",
+      "kind": "electron_forwarded",
+      "engine_method": "search.preparePageImage",
+      "preload_exposed": true
+    },
+    {
+      "channel": "search.sessions",
+      "kind": "electron_forwarded",
+      "engine_method": "search.sessions",
+      "preload_exposed": true
+    },
+    {
+      "channel": "settings.get",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "settings.getDeveloperMode",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "settings.setDeveloperMode",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "settings.update",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.cancel",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.cancel",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.create",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.create",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.delete",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.delete",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.get",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.get",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.list",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.list",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.openCleanupDir",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.cleanupTarget",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.openDirectory",
+      "kind": "electron_local",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.pause",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.pause",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.preflight",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.preflight",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.preflightCancel",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.preflightCancel",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.preflightGet",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.preflightGet",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.resume",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.resume",
+      "preload_exposed": true
+    },
+    {
+      "channel": "tasks.start",
+      "kind": "electron_forwarded",
+      "engine_method": "tasks.start",
+      "preload_exposed": true
+    },
+    {
+      "channel": "test.engine.getPid",
+      "kind": "electron_test_local",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.lifecycle.getState",
+      "kind": "electron_test_local",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.lifecycle.requestClose",
+      "kind": "electron_test_local",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.lifecycle.selectCloseAction",
+      "kind": "electron_test_local",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.sidecar.simulateCrash",
+      "kind": "electron_test_local",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.task.getCheckpoint",
+      "kind": "electron_test_forwarded",
+      "engine_method": "tasks.inspectState",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.task.getEventSequence",
+      "kind": "electron_test_forwarded",
+      "engine_method": "tasks.inspectState",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.task.getOccurrenceIds",
+      "kind": "electron_test_forwarded",
+      "engine_method": "tasks.inspectState",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.task.getProcessedPageIds",
+      "kind": "electron_test_forwarded",
+      "engine_method": "tasks.inspectState",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.task.getState",
+      "kind": "electron_test_forwarded",
+      "engine_method": "tasks.inspectState",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.tray.getState",
+      "kind": "electron_test_local",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.tray.restoreWindow",
+      "kind": "electron_test_local",
+      "preload_exposed_in_e2e_only": true
+    },
+    {
+      "channel": "test.window.getState",
+      "kind": "electron_test_local",
+      "preload_exposed_in_e2e_only": true
+    }
+  ]
+}
