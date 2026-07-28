@@ -11,6 +11,11 @@ import React from "react";
 import { render, screen, waitFor, act, cleanup } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 
+// 竞态测试在大模块冷加载 + 全量并发 fork CPU 争用下偶发破默认 hookTimeout(10s)。
+// 组件内部有 setInterval(1500ms) 轮询与 RETRY_DELAYS(300/1000/3000ms) 重试，
+// 测试需等待真实时间流逝以验证轮询停止行为。给充足确定性窗口。
+vi.setConfig({ hookTimeout: 30000, testTimeout: 30000 });
+
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   if (!window.matchMedia) {
@@ -24,12 +29,27 @@ beforeEach(() => {
   }
 });
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  // 全程 real timers（组件轮询依赖真实 setInterval）；cleanup() 触发 effect cleanup 停止轮询。
+  vi.restoreAllMocks();
+});
 
+// 增强 deferred：跟踪 settled 状态，测试结束前断言全部 settle。
 function deferred<T>() {
-  let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => { resolve = r; });
-  return { promise, resolve };
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  let settled = false;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = (v) => { settled = true; res(v); };
+    reject = (r) => { settled = true; rej(r); };
+  });
+  return { promise, resolve, reject, get settled() { return settled; } };
+}
+
+/** flush microtask 队列，替代固定 setTimeout 短等待。 */
+function flushMicrotasks() {
+  return act(async () => { await Promise.resolve(); });
 }
 
 function makeMockApi() {
@@ -88,8 +108,6 @@ async function setInputAndSubmit(value: string) {
 }
 
 describe("SearchPage executeSearch 同实例路由切换隔离（发现 1/4 最终收口）", () => {
-  // 完整套件中轮询 setInterval 与其他测试竞争，给充足超时。
-  vi.setConfig({ hookTimeout: 30000, testTimeout: 30000 });
   it("/search/A execute pending → navigate /search/B → 释放 A → B 不被 A 的 session 污染", async () => {
     const api = makeMockApi();
     api.tasks.get.mockResolvedValue(fullTask("task-a"));
@@ -114,7 +132,9 @@ describe("SearchPage executeSearch 同实例路由切换隔离（发现 1/4 最�
 
     // 释放任务 A 的 execute 结果（晚于路由切换）
     await act(async () => { aExecute.resolve(fullSession("sess-a", "task-a")); });
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    // flush microtask 替代固定 setTimeout(50)，让组件处理 late-arriving session
+    await flushMicrotasks();
+    expect(aExecute.settled).toBe(true);
 
     // 关键断言：A 的 session（sess-a）未触发 queryHits——commitGuard 的
     // currentTaskIdRef.current 检查（task-b !== task-a）阻止了 setActiveSessionId。
@@ -250,7 +270,9 @@ describe("初始 task 快照不覆盖终态 reload（缺口 2，组件级）", (
     await act(async () => {
       initialTask.resolve({ ...fullTask("task-a"), status: "running" });
     });
-    await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
+    // flush microtask 替代固定 setTimeout(200)，让组件处理 late-arriving task
+    await flushMicrotasks();
+    expect(initialTask.settled).toBe(true);
 
     // 关键断言：task.status 应仍为 completed（初始 running 被 task sequence 守卫拒绝）
     // 检查 page summary 是否显示"完整可检索"或 partial 相关（task 终态）
