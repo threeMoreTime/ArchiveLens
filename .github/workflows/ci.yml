@@ -160,6 +160,9 @@ jobs:
       - name: Validate TypeScript IPC contract and consistency
         run: pnpm test:contract
 
+      - name: Validate IPC schema coverage
+        run: pnpm test:ipc-schema-coverage
+
       - name: Validate Python IPC historical baseline
         env:
           PYTHONPATH: engine/src;.
