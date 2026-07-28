@@ -23,6 +23,7 @@ import {
   ENGINE_PUBLIC_METHOD_NAMES,
   ENGINE_INTERNAL_METHOD_NAMES,
   ENGINE_TEST_METHOD_NAMES,
+  ENGINE_RESULT_PARSERS,
 } from "@shared/index";
 
 // 测试文件位于 apps/desktop/tests/，仓库根在其上三级。
@@ -30,7 +31,6 @@ const REPO_ROOT = path.resolve(__dirname, "../../..");
 const BASELINE_PATH = path.resolve(REPO_ROOT, "contracts/ipc-method-audit.baseline.json");
 const ENGINE_CONTRACT_PATH = path.resolve(REPO_ROOT, "contracts/engine-methods.json");
 const ELECTRON_CONTRACT_PATH = path.resolve(REPO_ROOT, "contracts/electron-channels.json");
-const IPC_SCHEMA_PATH = path.resolve(REPO_ROOT, "packages/ipc-schema/src/index.ts");
 const APPS_DESKTOP_SRC = path.resolve(REPO_ROOT, "apps/desktop/src");
 const MAIN_IPC_DIR = path.resolve(APPS_DESKTOP_SRC, "main/ipc");
 
@@ -171,39 +171,6 @@ function extractTsEngineCalls(srcRoot: string): {
     }
   }
   return { methods, dynamicHits };
-}
-
-/** 从 ipc-schema 截取 parseMethodResult 函数体提取覆盖方法名。 */
-function extractParseMethodResultCovered(schemaPath: string): Set<string> {
-  const src = readFileSync(schemaPath, "utf-8");
-  const start = src.indexOf("export function parseMethodResult(");
-  expect(start, "parseMethodResult 函数应存在于 ipc-schema").toBeGreaterThan(-1);
-  const braceOpen = src.indexOf("{", start);
-  let depth = 0;
-  let end = -1;
-  for (let i = braceOpen; i < src.length; i++) {
-    const ch = src[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        end = i + 1;
-        break;
-      }
-    }
-  }
-  expect(end, "parseMethodResult 函数体应正确闭合").toBeGreaterThan(-1);
-  const body = src.slice(braceOpen, end);
-  const covered = new Set<string>();
-  for (const m of body.matchAll(/===\s*"([^"]+)"/g)) {
-    covered.add(m[1]);
-  }
-  for (const m of body.matchAll(/\[\s*([^\]]*?)\s*\]\.includes\(method\)/g)) {
-    for (const s of m[1].matchAll(/"([^"]+)"/g)) {
-      covered.add(s[1]);
-    }
-  }
-  return covered;
 }
 
 interface IpcMainRegistration {
@@ -457,18 +424,27 @@ describe("IPC 正式契约 — Electron 通道（Commit 2 后当前状态）", (
   });
 });
 
-describe("IPC 契约基线 — Commit 3 待解决差异（parser 仍未穷尽）", () => {
+describe("IPC 契约基线 — parser 覆盖（历史 28 → 当前 42）", () => {
   const baseline = loadJson<HistoricalBaseline>(BASELINE_PATH);
 
-  it("Commit 2 未改 parseMethodResult，实时覆盖仍为 28，缺口仍为 14", () => {
-    const covered = extractParseMethodResultCovered(IPC_SCHEMA_PATH);
-    expect(covered.size, "parseMethodResult 当前覆盖应为 28（Commit 3 升至 42）").toBe(28);
-    const { missing, extra } = diffSets(covered, baseline.parse_method_result_covered);
-    expect({ missing, extra }).toEqual({ missing: [], extra: [] });
+  it("历史快照：parse_method_result_covered = 28（707690c1 审计记录，不变）", () => {
+    // 历史 baseline 记录的是 Commit 1 时的 parseMethodResult 旧 if 链覆盖。
+    // 该历史值保持不变；Commit 3 已将实时覆盖升级为穷尽 registry。
+    expect(baseline.parse_method_result_covered.length).toBe(28);
+  });
 
-    // 缺口 = 当前 42 个 Engine 方法 - 28 覆盖 = 14
+  it("当前实现：ENGINE_RESULT_PARSERS 覆盖全部 42 个 Engine 方法，缺口为 0", () => {
+    // Commit 3 后 parseMethodResult 由 ENGINE_RESULT_PARSERS 驱动，
+    // 不再有旧 if 链与 return value fail-open。
+    const parserKeys = new Set(Object.keys(ENGINE_RESULT_PARSERS));
     const engineMethods = new Set(ENGINE_METHOD_NAMES);
-    const gap = sorted([...engineMethods].filter((m) => !covered.has(m)));
-    expect(gap.length, "缺 parser 的 Engine 方法数量应为 14（Commit 3 补齐）").toBe(14);
+    expect(parserKeys.size).toBe(42);
+    expect(engineMethods.size).toBe(42);
+    // 当前覆盖 == Engine 方法集合（无缺口）
+    const d = diffSets(parserKeys, engineMethods);
+    expect(d, `parser 覆盖与 Engine 方法不一致\n  Missing: ${d.missing}\n  Extra: ${d.extra}`).toEqual({ missing: [], extra: [] });
+    // 缺口为 0
+    const gap = sorted([...engineMethods].filter((m) => !parserKeys.has(m)));
+    expect(gap, "Commit 3 后 parser 缺口应为 0").toEqual([]);
   });
 });

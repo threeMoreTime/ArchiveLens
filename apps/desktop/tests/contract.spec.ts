@@ -824,4 +824,61 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
       expect(v).toBeDefined();
     }
   });
+
+  it("P1-8 Commit 3：parseMethodResult 穷尽接入 Commit 2 新 schema（成功路径）", () => {
+    // 旧 28 个方法行为保持（抽样校验，完整矩阵在 ipcResultParser.spec.ts）
+    expect(() => parseMethodResult("tasks.get", {
+      task_id: "task-1", status: "running", search_text: "档", search_terms: ["档"],
+      search_mode: "exact_literal", processed_pages: 0, total_pages: 1, occurrence_count: 0,
+      worker_generation: 1, last_event_sequence: 0,
+    })).not.toThrow();
+    expect(() => parseMethodResult("review.layoutContext", {
+      task_id: "task-1", occurrence_id: "occ-1", context: { version: 1 },
+    })).toThrow(); // context 需完整 LayoutContext，简陋 fixture 应失败（证明真实校验）
+
+    // Commit 3 新接入的方法
+    expect(() => parseMethodResult("app.info", {
+      engine_version: "0.1.0", protocol_version: 4, python_executable: "/p",
+    })).not.toThrow();
+    expect(() => parseMethodResult("app.shutdown", { status: "shutting_down" })).not.toThrow();
+    expect(() => parseMethodResult("demo.create", {
+      task_id: "t1", workspace_dir: "/w", status: "completed", occurrence_count: 0, is_demo: true,
+    })).not.toThrow();
+    expect(() => parseMethodResult("diagnostics.run", {
+      engine_version: "0.1", python_version: "3.11", python_executable: "/p", platform: "win32", overall: "PASS", checks: [],
+    })).not.toThrow();
+    expect(() => parseMethodResult("tasks.start", { task_id: "t1", status: "running" })).not.toThrow();
+    expect(() => parseMethodResult("tasks.pause", { task_id: "t1", status: "pausing" })).not.toThrow();
+    expect(() => parseMethodResult("tasks.resume", { task_id: "t1", status: "running" })).not.toThrow();
+    expect(() => parseMethodResult("tasks.cancel", { task_id: "t1", status: "cancelled" })).not.toThrow();
+    expect(() => parseMethodResult("results.getDetail", { occurrence_id: "occ-1" })).not.toThrow();
+    expect(() => parseMethodResult("review.updateNote", {
+      occurrence_id: "occ-1", note: "批注", updated_at: "2026-07-28T00:00:00Z",
+    })).not.toThrow();
+    expect(() => parseMethodResult("export.json", { path: "/o.json", occurrence_count: 1 })).not.toThrow();
+    expect(() => parseMethodResult("export.review", { path: "/o.review", record_count: 1 })).not.toThrow();
+    expect(() => parseMethodResult("export.html", { path: "/o.html", occurrence_count: 1, file_size_bytes: 10 })).not.toThrow();
+    expect(() => parseMethodResult("tasks.inspectState", {
+      task: {}, task_id: "t1", source_id: "s1", processed_page_ids: [], occurrence_ids: [],
+      checkpoint: null, events: [], occurrence_count: 0,
+    })).not.toThrow();
+  });
+
+  it("P1-8 Commit 3：parseMethodResult 拒绝未知 method 与 Electron local method", () => {
+    expect(() => parseMethodResult("bogus.method", {})).toThrow();
+    // Electron local / 残留 schema 项不应作为 Engine method 解析
+    expect(() => parseMethodResult("settings.get", {})).toThrow();
+    expect(() => parseMethodResult("settings.update", {})).toThrow();
+    expect(() => parseMethodResult("files.openOriginal", {})).toThrow();
+    expect(() => parseMethodResult("files.openFolder", {})).toThrow();
+  });
+
+  it("P1-8 Commit 3：parseMethodResult 拒绝非对象顶层结果（证明无 identity parser）", () => {
+    // 所有 Engine 结果当前都是对象 envelope；null/原始值必须被拒绝
+    expect(() => parseMethodResult("app.info", null)).toThrow();
+    expect(() => parseMethodResult("app.info", "string")).toThrow();
+    expect(() => parseMethodResult("app.info", 123)).toThrow();
+    expect(() => parseMethodResult("app.info", true)).toThrow();
+    expect(() => parseMethodResult("app.info", [])).toThrow();
+  });
 });

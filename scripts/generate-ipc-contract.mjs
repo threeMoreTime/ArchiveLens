@@ -287,12 +287,33 @@ function generateTypeScript(engine) {
   emit("ENGINE_PARAM_SCHEMA_IDS", engine.paramSchemaIds, "参数 schema 语义 ID（params.kind=schema 引用）");
   emit("ENGINE_RESULT_SCHEMA_IDS", engine.resultSchemaIds, "结果 schema 语义 ID（result.kind=schema 引用）");
 
+  // ENGINE_METHOD_RESULT_CONTRACT：method → { kind, schemaId? } 映射，
+  // 由契约 result 字段直接派生。parseMethodResult 的 parser 通过此映射
+  // 从 RESULT_SCHEMA_REGISTRY 取 schema，禁止在 index.ts 手写第二份映射。
+  lines.push("/** 每个 Engine 方法的结果契约（由 engine-methods.json result 字段派生）。 */");
+  lines.push("export const ENGINE_METHOD_RESULT_CONTRACT = {");
+  for (const m of engine.methods) {
+    const r = m.result;
+    if (r.kind === "schema") {
+      lines.push(`  ${JSON.stringify(m.method)}: { kind: "schema", schemaId: ${JSON.stringify(r.schema_id)} },`);
+    } else if (r.kind === "empty_object") {
+      lines.push(`  ${JSON.stringify(m.method)}: { kind: "empty_object" },`);
+    } else {
+      // 生成器已校验 result.kind 合法，此处不可达；保留以防御未来扩展。
+      throw new Error(`未处理的 result.kind: ${r.kind} (method=${m.method})`);
+    }
+  }
+  lines.push("} as const;");
+  lines.push("");
+
   lines.push("export type EngineMethodName = typeof ENGINE_METHOD_NAMES[number];");
   lines.push("export type EnginePublicMethodName = typeof ENGINE_PUBLIC_METHOD_NAMES[number];");
   lines.push("export type EngineInternalMethodName = typeof ENGINE_INTERNAL_METHOD_NAMES[number];");
   lines.push("export type EngineTestMethodName = typeof ENGINE_TEST_METHOD_NAMES[number];");
   lines.push("export type EngineParamSchemaId = typeof ENGINE_PARAM_SCHEMA_IDS[number];");
   lines.push("export type EngineResultSchemaId = typeof ENGINE_RESULT_SCHEMA_IDS[number];");
+  lines.push("export type EngineMethodResultContract = typeof ENGINE_METHOD_RESULT_CONTRACT;");
+  lines.push("export type EngineMethodResultKind = EngineMethodResultContract[EngineMethodName][\"kind\"];");
   lines.push("");
   lines.push("export type EngineMethodVisibility =");
   lines.push('  | "engine_public"');
