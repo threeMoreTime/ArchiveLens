@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "protocol_version": 4,
+  "description": "ArchiveLens Engine IPC 方法正式契约（P1-8 Commit 2）。42 个方法的唯一真相源；TypeScript 端经 scripts/generate-ipc-contract.mjs 生成强类型代码，Python 端经测试比对 ENGINE_HANDLERS。python_handler 字段仅供 Python 测试使用，不暴露到 Renderer。",
+  "engine_methods": [
+    {
+      "method": "app.info",
+      "visibility": "engine_internal",
+      "params": { "kind": "empty_object" },
+      "result": { "kind": "schema", "schema_id": "AppInfoResult" },
+      "python_handler": "_h_app_info"
+    },
+    {
+      "method": "app.shutdown",
+      "visibility": "engine_internal",
+      "params": { "kind": "empty_object" },
+      "result": { "kind": "schema", "schema_id": "AppShutdownResult" },
+      "python_handler": "_h_shutdown"
+    },
+    {
+      "method": "demo.create",
+      "visibility": "engine_public",
+      "params": { "kind": "empty_object" },
+      "result": { "kind": "schema", "schema_id": "DemoCreateResult" },
+      "python_handler": "_h_demo_create"
+    },
+    {
+      "method": "diagnostics.run",
+      "visibility": "engine_internal",
+      "params": { "kind": "empty_object" },
+      "result": { "kind": "schema", "schema_id": "DiagnosticsResult" },
+      "python_handler": "_h_diagnostics"
+    },
+    {
+      "method": "export.html",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ExportHtmlResult" },
+      "python_handler": "_h_export_html"
+    },
+    {
+      "method": "export.json",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ExportJsonResult" },
+      "python_handler": "_h_export_json"
+    },
+    {
+      "method": "export.review",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ExportReviewResult" },
+      "python_handler": "_h_export_review"
+    },
+    {
+      "method": "exports.cancel",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ExportJobActionResult" },
+      "python_handler": "_h_exports_cancel"
+    },
+    {
+      "method": "exports.create",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ExportJobCreateResult" },
+      "python_handler": "_h_exports_create"
+    },
+    {
+      "method": "exports.get",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ExportJob" },
+      "python_handler": "_h_exports_get"
+    },
+    {
+      "method": "exports.list",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ExportsListResult" },
+      "python_handler": "_h_exports_list"
+    },
+    {
+      "method": "exports.listJobs",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ExportJobsListResult" },
+      "python_handler": "_h_exports_list_jobs"
+    },
+    {
+      "method": "exports.retry",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ExportJobCreateResult" },
+      "python_handler": "_h_exports_retry"
+    },
+    {
+      "method": "results.getDetail",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "OccurrenceDetail" },
+      "python_handler": "_h_results_detail"
+    },
+    {
+      "method": "results.query",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ResultsQueryResult" },
+      "python_handler": "_h_results_query"
+    },
+    {
+      "method": "review.layoutContext",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "ReviewLayoutContextParams" },
+      "result": { "kind": "schema", "schema_id": "ReviewLayoutContextResult" },
+      "python_handler": "_h_review_layout_context"
+    },
+    {
+      "method": "review.preparePageImage",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ReviewPageImageResult" },
+      "python_handler": "_h_review_prepare_page_image"
+    },
+    {
+      "method": "review.previewLayoutContext",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "ReviewPreviewLayoutContextParams" },
+      "result": { "kind": "schema", "schema_id": "ReviewLayoutContextResult" },
+      "python_handler": "_h_review_preview_layout_context"
+    },
+    {
+      "method": "review.rebuildLayoutContexts",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "ReviewRebuildLayoutContextsParams" },
+      "result": { "kind": "schema", "schema_id": "LayoutRebuildProgress" },
+      "python_handler": "_h_review_rebuild_layout_contexts"
+    },
+    {
+      "method": "review.updateDecision",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "ReviewUpdateDecisionParams" },
+      "result": { "kind": "schema", "schema_id": "ReviewUpdateDecisionResult" },
+      "python_handler": "_h_review_decision"
+    },
+    {
+      "method": "review.updateDecisions",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "ReviewUpdateDecisionsParams" },
+      "result": { "kind": "schema", "schema_id": "ReviewUpdateDecisionsResult" },
+      "python_handler": "_h_review_decisions"
+    },
+    {
+      "method": "review.updateLayoutOverride",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "ReviewUpdateLayoutOverrideParams" },
+      "result": { "kind": "schema", "schema_id": "ReviewUpdateLayoutOverrideResult" },
+      "python_handler": "_h_review_update_layout_override"
+    },
+    {
+      "method": "review.updateNote",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "ReviewUpdateNoteResult" },
+      "python_handler": "_h_review_note"
+    },
+    {
+      "method": "search.corpusStatus",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "TaskIdOnlyParams" },
+      "result": { "kind": "schema", "schema_id": "OcrCorpusStatusResult" },
+      "python_handler": "_h_search_corpus_status"
+    },
+    {
+      "method": "search.execute",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "OcrSearchExecuteParams" },
+      "result": { "kind": "schema", "schema_id": "OcrSearchSession" },
+      "python_handler": "_h_search_execute"
+    },
+    {
+      "method": "search.hits",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "OcrSearchHitsParams" },
+      "result": { "kind": "schema", "schema_id": "OcrSearchHitsResult" },
+      "python_handler": "_h_search_hits"
+    },
+    {
+      "method": "search.preparePageImage",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "OcrSearchPreparePageImageParams" },
+      "result": { "kind": "schema", "schema_id": "ReviewPageImageResult" },
+      "python_handler": "_h_search_prepare_page_image"
+    },
+    {
+      "method": "search.sessions",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "OcrSearchSessionsParams" },
+      "result": { "kind": "schema", "schema_id": "OcrSearchSessionsResult" },
+      "python_handler": "_h_search_sessions"
+    },
+    {
+      "method": "storage.cleanupTemporary",
+      "visibility": "engine_public",
+      "params": { "kind": "empty_object" },
+      "result": { "kind": "schema", "schema_id": "StorageCleanupResult" },
+      "python_handler": "_h_storage_cleanup_temporary"
+    },
+    {
+      "method": "tasks.cancel",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "TaskActionResult" },
+      "python_handler": "_h_tasks_cancel"
+    },
+    {
+      "method": "tasks.cleanupTarget",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "TaskCleanupTargetResult" },
+      "python_handler": "_h_tasks_cleanup_target"
+    },
+    {
+      "method": "tasks.create",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "TaskCreateParams" },
+      "result": { "kind": "schema", "schema_id": "TaskCreateResult" },
+      "python_handler": "_h_tasks_create"
+    },
+    {
+      "method": "tasks.delete",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "TaskDeleteResult" },
+      "python_handler": "_h_tasks_delete"
+    },
+    {
+      "method": "tasks.get",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "TaskSummary" },
+      "python_handler": "_h_tasks_get"
+    },
+    {
+      "method": "tasks.inspectState",
+      "visibility": "engine_test",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "TaskInspectStateResult" },
+      "python_handler": "_h_tasks_inspect_state"
+    },
+    {
+      "method": "tasks.list",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "TasksListResult" },
+      "python_handler": "_h_tasks_list"
+    },
+    {
+      "method": "tasks.pause",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "TaskActionResult" },
+      "python_handler": "_h_tasks_pause"
+    },
+    {
+      "method": "tasks.preflight",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "SourcePreflightStartParams" },
+      "result": { "kind": "schema", "schema_id": "SourcePreflightJob" },
+      "python_handler": "_h_tasks_preflight"
+    },
+    {
+      "method": "tasks.preflightCancel",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "SourcePreflightJobParams" },
+      "result": { "kind": "schema", "schema_id": "SourcePreflightJob" },
+      "python_handler": "_h_tasks_preflight_cancel"
+    },
+    {
+      "method": "tasks.preflightGet",
+      "visibility": "engine_public",
+      "params": { "kind": "schema", "schema_id": "SourcePreflightJobParams" },
+      "result": { "kind": "schema", "schema_id": "SourcePreflightJob" },
+      "python_handler": "_h_tasks_preflight_get"
+    },
+    {
+      "method": "tasks.resume",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "TaskActionResult" },
+      "python_handler": "_h_tasks_resume"
+    },
+    {
+      "method": "tasks.start",
+      "visibility": "engine_public",
+      "params": { "kind": "record" },
+      "result": { "kind": "schema", "schema_id": "TaskActionResult" },
+      "python_handler": "_h_tasks_start"
+    }
+  ]
+}

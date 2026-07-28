@@ -8,6 +8,12 @@
  * 不兼容变更必须同步递增 {@link PROTOCOL_VERSION}。
  */
 import { z } from "zod";
+import {
+  ENGINE_METHOD_NAMES,
+  type EngineMethodName,
+  type EngineParamSchemaId,
+  type EngineResultSchemaId,
+} from "./generated/engineMethods.generated";
 
 /** IPC 协议版本，必须与 Python 侧 `archivelens_engine.PROTOCOL_VERSION` 一致。 */
 export const PROTOCOL_VERSION = 4 as const;
@@ -293,54 +299,16 @@ export type Event = z.infer<typeof EventSchema>;
 export const WireMessageSchema = z.union([ResponseSchema, EventSchema]);
 
 // --------------------------------------------------------------------------- //
-// 方法名（Phase 2 仅实现 app.info / diagnostics.run；其余 Phase 3+ 扩展）
+// 方法名
+//
+// 由 contracts/engine-methods.json 经 scripts/generate-ipc-contract.mjs 生成
+// 的 ENGINE_METHOD_NAMES 派生。该 tuple 是 42 个 Engine 方法的唯一真相源，
+// 与 Python ENGINE_HANDLERS 一一对应。files.open*/settings.* 等 Electron 本地
+// 或残留项不再进入此集合；app.shutdown/tasks.inspectState/demo.create 已补入。
 // --------------------------------------------------------------------------- //
-export const MethodNameSchema = z.enum([
-  "app.info",
-  "diagnostics.run",
-  "tasks.create",
-  "tasks.preflight",
-  "tasks.preflightGet",
-  "tasks.preflightCancel",
-  "tasks.start",
-  "tasks.pause",
-  "tasks.resume",
-  "tasks.cancel",
-  "tasks.delete",
-  "tasks.cleanupTarget",
-  "tasks.list",
-  "tasks.get",
-  "results.query",
-  "results.getDetail",
-  "search.corpusStatus",
-  "search.execute",
-  "search.sessions",
-  "search.hits",
-  "search.preparePageImage",
-  "review.preparePageImage",
-  "review.layoutContext",
-  "review.previewLayoutContext",
-  "review.updateLayoutOverride",
-  "review.rebuildLayoutContexts",
-  "review.updateDecision",
-  "review.updateDecisions",
-  "review.updateNote",
-  "export.html",
-  "export.json",
-  "export.review",
-  "exports.list",
-  "exports.create",
-  "exports.get",
-  "exports.listJobs",
-  "exports.cancel",
-  "exports.retry",
-  "storage.cleanupTemporary",
-  "files.openOriginal",
-  "files.openFolder",
-  "settings.get",
-  "settings.update",
-]);
-export type MethodName = z.infer<typeof MethodNameSchema>;
+export const MethodNameSchema = z.enum(ENGINE_METHOD_NAMES);
+export type MethodName = EngineMethodName;
+export type { EngineMethodName };
 
 // --------------------------------------------------------------------------- //
 // 结果 schema（已实现的方法）
@@ -992,41 +960,258 @@ export const ReviewPageImageResultSchema = z.object({
 });
 export type ReviewPageImageResult = z.infer<typeof ReviewPageImageResultSchema>;
 
+// --------------------------------------------------------------------------- //
+// P1-8 Commit 2：为契约中 result.schema_id 补齐共享结果 schema。
+//
+// 这些 schema 在本轮只是声明并接入 registry；parseMethodResult 的穷尽 parser
+// 接入留给 Commit 3。字段均依据 Python handler 的真实返回（不虚构）。
+// --------------------------------------------------------------------------- //
+
+/** tasks.start / tasks.pause / tasks.resume / tasks.cancel 的返回。
+ *  task_id 非空；status 为状态机当前值（pausing/paused/running/stopping/cancelled 等）。 */
+export const TaskActionResultSchema = z.object({
+  task_id: z.string().min(1),
+  status: z.string().min(1),
+}).passthrough();
+export type TaskActionResult = z.infer<typeof TaskActionResultSchema>;
+
+/** app.shutdown 的返回（幂等重入时携带 already:true）。 */
+export const AppShutdownResultSchema = z.object({
+  status: z.literal("shutting_down"),
+  already: z.boolean().optional(),
+}).passthrough();
+export type AppShutdownResult = z.infer<typeof AppShutdownResultSchema>;
+
+/** demo.create 的返回（Python create_demo 真实字段）。 */
+export const DemoCreateResultSchema = z.object({
+  task_id: z.string().min(1),
+  workspace_dir: z.string(),
+  status: z.string().min(1),
+  occurrence_count: z.number().int().nonnegative(),
+  is_demo: z.literal(true),
+}).passthrough();
+export type DemoCreateResult = z.infer<typeof DemoCreateResultSchema>;
+
+/** tasks.inspectState 的返回（从 apps/desktop/src/main/ipc/e2e.ts 迁移，字段约束不弱化）。
+ *  Python handler 经 _require(task_id) + 可选 source_id 返回。 */
+export const TaskInspectStateCheckpointSchema = z.object({
+  task_id: z.string().min(1),
+  source_id: z.string().min(1),
+  last_completed_page: z.number().int().nonnegative(),
+  next_page: z.number().int().positive(),
+  processed_page_ids: z.array(z.number().int().positive()),
+  worker_generation: z.number().int().nonnegative(),
+  updated_at: z.string().min(1),
+}).nullable();
+
+export const TaskInspectStateEventSchema = z.object({
+  event_id: z.string().min(1),
+  task_id: z.string().min(1),
+  source_id: z.string(),
+  sequence: z.number().int().positive(),
+  event_type: z.string().min(1),
+  payload: z.record(z.string(), z.unknown()),
+  worker_generation: z.number().int().nonnegative(),
+  created_at: z.string().min(1),
+});
+
+export const TaskInspectStateResultSchema = z.object({
+  task: z.record(z.string(), z.unknown()),
+  task_id: z.string().min(1),
+  source_id: z.string().min(1),
+  processed_page_ids: z.array(z.number().int().positive()),
+  occurrence_ids: z.array(z.string().min(1)),
+  checkpoint: TaskInspectStateCheckpointSchema,
+  events: z.array(TaskInspectStateEventSchema),
+  occurrence_count: z.number().int().nonnegative(),
+});
+export type TaskInspectStateResult = z.infer<typeof TaskInspectStateResultSchema>;
+
+/** results.getDetail 的返回：occurrence 详情 dict（含 layout_context 字段）。
+ *  occurrence_id 为业务标识；其余字段用 passthrough 兼容 store 详情形状。 */
+export const OccurrenceDetailSchema = z.object({
+  occurrence_id: z.string().min(1),
+}).passthrough();
+export type OccurrenceDetail = z.infer<typeof OccurrenceDetailSchema>;
+
+/** review.updateNote 的返回。 */
+export const ReviewUpdateNoteResultSchema = z.object({
+  occurrence_id: z.string().min(1),
+  note: z.string(),
+  updated_at: z.string().min(1),
+}).passthrough();
+export type ReviewUpdateNoteResult = z.infer<typeof ReviewUpdateNoteResultSchema>;
+
+/** export.json 的返回。 */
+export const ExportJsonResultSchema = z.object({
+  path: z.string().min(1),
+  occurrence_count: z.number().int().nonnegative(),
+}).passthrough();
+export type ExportJsonResult = z.infer<typeof ExportJsonResultSchema>;
+
+/** export.review 的返回。 */
+export const ExportReviewResultSchema = z.object({
+  path: z.string().min(1),
+  record_count: z.number().int().nonnegative(),
+}).passthrough();
+export type ExportReviewResult = z.infer<typeof ExportReviewResultSchema>;
+
+/** export.html 的返回。 */
+export const ExportHtmlResultSchema = z.object({
+  path: z.string().min(1),
+  occurrence_count: z.number().int().nonnegative(),
+  file_size_bytes: z.number().int().nonnegative(),
+}).passthrough();
+export type ExportHtmlResult = z.infer<typeof ExportHtmlResultSchema>;
+
+/** 仅 task_id 的参数（search.corpusStatus 使用 OcrSearchSessionsParams.pick({task_id})）。 */
+export const TaskIdOnlyParamsSchema = z.object({
+  task_id: z.string().min(1),
+}).strict();
+
+// --------------------------------------------------------------------------- //
+// P1-8 Commit 2：参数/结果 schema registry。
+//
+// 由 TypeScript 编译器通过 satisfies Record<EngineParamSchemaId, z.ZodTypeAny>
+// 与 satisfies Record<EngineResultSchemaId, z.ZodTypeAny> 保证：契约中每个
+// schema_id 都有对应 Zod schema，且无多余/缺失。schema_id 联合类型来自生成文件，
+// 不再手工维护 enum。
+// --------------------------------------------------------------------------- //
+export const PARAM_SCHEMA_REGISTRY = {
+  OcrSearchExecuteParams: OcrSearchExecuteParamsSchema,
+  OcrSearchHitsParams: OcrSearchHitsParamsSchema,
+  OcrSearchPreparePageImageParams: OcrSearchPreparePageImageParamsSchema,
+  OcrSearchSessionsParams: OcrSearchSessionsParamsSchema,
+  ReviewLayoutContextParams: ReviewLayoutContextParamsSchema,
+  ReviewPreviewLayoutContextParams: ReviewPreviewLayoutContextParamsSchema,
+  ReviewRebuildLayoutContextsParams: ReviewRebuildLayoutContextsParamsSchema,
+  ReviewUpdateDecisionParams: ReviewUpdateDecisionParamsSchema,
+  ReviewUpdateDecisionsParams: ReviewUpdateDecisionsParamsSchema,
+  ReviewUpdateLayoutOverrideParams: ReviewUpdateLayoutOverrideParamsSchema,
+  SourcePreflightJobParams: SourcePreflightJobParamsSchema,
+  SourcePreflightStartParams: SourcePreflightStartParamsSchema,
+  TaskCreateParams: TaskCreateParamsSchema,
+  TaskIdOnlyParams: TaskIdOnlyParamsSchema,
+} satisfies Record<EngineParamSchemaId, z.ZodTypeAny>;
+
+export const RESULT_SCHEMA_REGISTRY = {
+  AppInfoResult: AppInfoResultSchema,
+  AppShutdownResult: AppShutdownResultSchema,
+  DemoCreateResult: DemoCreateResultSchema,
+  DiagnosticsResult: DiagnosticsResultSchema,
+  ExportHtmlResult: ExportHtmlResultSchema,
+  ExportJob: ExportJobSchema,
+  ExportJobActionResult: ExportJobActionResultSchema,
+  ExportJobCreateResult: ExportJobCreateResultSchema,
+  ExportJobsListResult: ExportJobsListResultSchema,
+  ExportJsonResult: ExportJsonResultSchema,
+  ExportReviewResult: ExportReviewResultSchema,
+  ExportsListResult: ExportsListResultSchema,
+  LayoutRebuildProgress: LayoutRebuildProgressSchema,
+  OccurrenceDetail: OccurrenceDetailSchema,
+  OcrCorpusStatusResult: OcrCorpusStatusResultSchema,
+  OcrSearchHitsResult: OcrSearchHitsResultSchema,
+  OcrSearchSession: OcrSearchSessionSchema,
+  OcrSearchSessionsResult: OcrSearchSessionsResultSchema,
+  ResultsQueryResult: ResultsQueryResultSchema,
+  ReviewLayoutContextResult: ReviewLayoutContextResultSchema,
+  ReviewPageImageResult: ReviewPageImageResultSchema,
+  ReviewUpdateDecisionResult: ReviewUpdateDecisionResultSchema,
+  ReviewUpdateDecisionsResult: ReviewUpdateDecisionsResultSchema,
+  ReviewUpdateLayoutOverrideResult: ReviewUpdateLayoutOverrideResultSchema,
+  ReviewUpdateNoteResult: ReviewUpdateNoteResultSchema,
+  SourcePreflightJob: SourcePreflightJobSchema,
+  StorageCleanupResult: StorageCleanupResultSchema,
+  TaskActionResult: TaskActionResultSchema,
+  TaskCleanupTargetResult: TaskCleanupTargetResultSchema,
+  TaskCreateResult: TaskCreateResultSchema,
+  TaskDeleteResult: TaskDeleteResultSchema,
+  TaskInspectStateResult: TaskInspectStateResultSchema,
+  TaskSummary: TaskSummarySchema,
+  TasksListResult: TasksListResultSchema,
+} satisfies Record<EngineResultSchemaId, z.ZodTypeAny>;
+
 export const TaskSearchEventPayloadSchema = z.object({
   search_text: z.string().min(1),
   search_terms: z.array(z.string().min(1)).min(1),
   search_mode: SearchModeSchema,
 }).passthrough();
 
+// --------------------------------------------------------------------------- //
+// P1-8 Commit 3/4：穷尽 Engine 结果解析。
+//
+// parseMethodResult 不再用 if 链 + return value 兜底，而是：
+//   1. MethodNameSchema.parse(method) 运行时拒绝未知方法；
+//   2. ENGINE_RESULT_PARSERS[method] 取对应 Zod schema 并 .parse。
+//
+// ENGINE_RESULT_PARSERS 是 Record<EngineMethodName, EngineResultParser>，编译期穷尽：
+// 删除任一项或新增非法项都会 typecheck 失败。不存在 identity parser、
+// passthroughResult、parseVoidResult、unknown as 或 fail-open return value。
+// --------------------------------------------------------------------------- //
+
+/**
+ * Engine 结果 parser 类型。ENGINE_RESULT_PARSERS 直接存储 Zod schema 对象
+ * （非闭包），parseMethodResult 通过 .parse 执行结构校验，避免 42 个闭包分配。
+ */
+export type EngineResultParser = z.ZodTypeAny;
+
+/**
+ * 42 个 Engine 方法的结果 schema 注册表，编译期穷尽、运行时 fail-closed。
+ * 每项直接引用 RESULT_SCHEMA_REGISTRY 中的真实 Zod schema（不经过工厂闭包，
+ * 避免 42 个 parser 函数分配）。parseMethodResult 通过 .parse 执行结构校验。
+ */
+export const ENGINE_RESULT_PARSERS = {
+  "app.info": RESULT_SCHEMA_REGISTRY.AppInfoResult,
+  "app.shutdown": RESULT_SCHEMA_REGISTRY.AppShutdownResult,
+  "demo.create": RESULT_SCHEMA_REGISTRY.DemoCreateResult,
+  "diagnostics.run": RESULT_SCHEMA_REGISTRY.DiagnosticsResult,
+  "export.html": RESULT_SCHEMA_REGISTRY.ExportHtmlResult,
+  "export.json": RESULT_SCHEMA_REGISTRY.ExportJsonResult,
+  "export.review": RESULT_SCHEMA_REGISTRY.ExportReviewResult,
+  "exports.cancel": RESULT_SCHEMA_REGISTRY.ExportJobActionResult,
+  "exports.create": RESULT_SCHEMA_REGISTRY.ExportJobCreateResult,
+  "exports.get": RESULT_SCHEMA_REGISTRY.ExportJob,
+  "exports.list": RESULT_SCHEMA_REGISTRY.ExportsListResult,
+  "exports.listJobs": RESULT_SCHEMA_REGISTRY.ExportJobsListResult,
+  "exports.retry": RESULT_SCHEMA_REGISTRY.ExportJobCreateResult,
+  "results.getDetail": RESULT_SCHEMA_REGISTRY.OccurrenceDetail,
+  "results.query": RESULT_SCHEMA_REGISTRY.ResultsQueryResult,
+  "review.layoutContext": RESULT_SCHEMA_REGISTRY.ReviewLayoutContextResult,
+  "review.preparePageImage": RESULT_SCHEMA_REGISTRY.ReviewPageImageResult,
+  "review.previewLayoutContext": RESULT_SCHEMA_REGISTRY.ReviewLayoutContextResult,
+  "review.rebuildLayoutContexts": RESULT_SCHEMA_REGISTRY.LayoutRebuildProgress,
+  "review.updateDecision": RESULT_SCHEMA_REGISTRY.ReviewUpdateDecisionResult,
+  "review.updateDecisions": RESULT_SCHEMA_REGISTRY.ReviewUpdateDecisionsResult,
+  "review.updateLayoutOverride": RESULT_SCHEMA_REGISTRY.ReviewUpdateLayoutOverrideResult,
+  "review.updateNote": RESULT_SCHEMA_REGISTRY.ReviewUpdateNoteResult,
+  "search.corpusStatus": RESULT_SCHEMA_REGISTRY.OcrCorpusStatusResult,
+  "search.execute": RESULT_SCHEMA_REGISTRY.OcrSearchSession,
+  "search.hits": RESULT_SCHEMA_REGISTRY.OcrSearchHitsResult,
+  "search.preparePageImage": RESULT_SCHEMA_REGISTRY.ReviewPageImageResult,
+  "search.sessions": RESULT_SCHEMA_REGISTRY.OcrSearchSessionsResult,
+  "storage.cleanupTemporary": RESULT_SCHEMA_REGISTRY.StorageCleanupResult,
+  "tasks.cancel": RESULT_SCHEMA_REGISTRY.TaskActionResult,
+  "tasks.cleanupTarget": RESULT_SCHEMA_REGISTRY.TaskCleanupTargetResult,
+  "tasks.create": RESULT_SCHEMA_REGISTRY.TaskCreateResult,
+  "tasks.delete": RESULT_SCHEMA_REGISTRY.TaskDeleteResult,
+  "tasks.get": RESULT_SCHEMA_REGISTRY.TaskSummary,
+  "tasks.inspectState": RESULT_SCHEMA_REGISTRY.TaskInspectStateResult,
+  "tasks.list": RESULT_SCHEMA_REGISTRY.TasksListResult,
+  "tasks.pause": RESULT_SCHEMA_REGISTRY.TaskActionResult,
+  "tasks.preflight": RESULT_SCHEMA_REGISTRY.SourcePreflightJob,
+  "tasks.preflightCancel": RESULT_SCHEMA_REGISTRY.SourcePreflightJob,
+  "tasks.preflightGet": RESULT_SCHEMA_REGISTRY.SourcePreflightJob,
+  "tasks.resume": RESULT_SCHEMA_REGISTRY.TaskActionResult,
+  "tasks.start": RESULT_SCHEMA_REGISTRY.TaskActionResult,
+} satisfies Record<EngineMethodName, EngineResultParser>;
+
+/**
+ * 解析 Engine 成功响应 result。未知方法经 MethodNameSchema 抛 Zod 错误，
+ * 已知方法调用对应 schema.parse 执行运行时结构校验。无 fail-open 透传。
+ */
 export function parseMethodResult(method: string, value: unknown): unknown {
-  if (method === "tasks.create") return TaskCreateResultSchema.parse(value);
-  if (["tasks.preflight", "tasks.preflightGet", "tasks.preflightCancel"].includes(method))
-    return SourcePreflightJobSchema.parse(value);
-  if (method === "tasks.delete") return TaskDeleteResultSchema.parse(value);
-  if (method === "tasks.cleanupTarget") return TaskCleanupTargetResultSchema.parse(value);
-  if (method === "tasks.get") return TaskSummarySchema.parse(value);
-  if (method === "tasks.list") return TasksListResultSchema.parse(value);
-  if (method === "exports.list") return ExportsListResultSchema.parse(value);
-  if (method === "exports.create") return ExportJobCreateResultSchema.parse(value);
-  if (method === "exports.get") return ExportJobSchema.parse(value);
-  if (method === "exports.listJobs") return ExportJobsListResultSchema.parse(value);
-  if (method === "exports.cancel") return ExportJobActionResultSchema.parse(value);
-  if (method === "exports.retry") return ExportJobCreateResultSchema.parse(value);
-  if (method === "storage.cleanupTemporary") return StorageCleanupResultSchema.parse(value);
-  if (method === "results.query") return ResultsQueryResultSchema.parse(value);
-  if (method === "search.corpusStatus") return OcrCorpusStatusResultSchema.parse(value);
-  if (method === "search.execute") return OcrSearchSessionSchema.parse(value);
-  if (method === "search.sessions") return OcrSearchSessionsResultSchema.parse(value);
-  if (method === "search.hits") return OcrSearchHitsResultSchema.parse(value);
-  if (method === "search.preparePageImage") return ReviewPageImageResultSchema.parse(value);
-  if (method === "review.preparePageImage") return ReviewPageImageResultSchema.parse(value);
-  if (["review.layoutContext", "review.previewLayoutContext"].includes(method))
-    return ReviewLayoutContextResultSchema.parse(value);
-  if (method === "review.updateLayoutOverride") return ReviewUpdateLayoutOverrideResultSchema.parse(value);
-  if (method === "review.rebuildLayoutContexts") return LayoutRebuildProgressSchema.parse(value);
-  if (method === "review.updateDecision") return ReviewUpdateDecisionResultSchema.parse(value);
-  if (method === "review.updateDecisions") return ReviewUpdateDecisionsResultSchema.parse(value);
-  return value;
+  const parsedMethod = MethodNameSchema.parse(method);
+  return ENGINE_RESULT_PARSERS[parsedMethod].parse(value);
 }
 
 // --------------------------------------------------------------------------- //
@@ -1206,5 +1391,23 @@ export const ClipboardCopyResultSchema = z.object({
   ocr_context_status: z.enum(["included", "not_available"]),
 });
 export type ClipboardCopyResult = z.infer<typeof ClipboardCopyResultSchema>;
+
+// P1-8 Commit 2/3：re-export 生成产物，供 Main/Preload/Renderer/测试统一消费。
+// MethodNameSchema、PARAM/RESULT_SCHEMA_REGISTRY、ENGINE_RESULT_PARSERS 已在上方
+// 基于这些符号派生。
+export {
+  ENGINE_METHOD_NAMES,
+  ENGINE_PUBLIC_METHOD_NAMES,
+  ENGINE_INTERNAL_METHOD_NAMES,
+  ENGINE_TEST_METHOD_NAMES,
+  ENGINE_PARAM_SCHEMA_IDS,
+  ENGINE_RESULT_SCHEMA_IDS,
+  ENGINE_METHOD_RESULT_CONTRACT,
+  type EnginePublicMethodName,
+  type EngineInternalMethodName,
+  type EngineTestMethodName,
+  type EngineMethodVisibility,
+  type EngineMethodResultEntry,
+} from "./generated/engineMethods.generated";
 
 export { z };

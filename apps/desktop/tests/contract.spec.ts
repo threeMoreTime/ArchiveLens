@@ -46,6 +46,22 @@ import {
   OcrSearchSessionSchema,
   SearchScriptScopeSchema,
   MethodNameSchema,
+  ENGINE_METHOD_NAMES,
+  ENGINE_PUBLIC_METHOD_NAMES,
+  ENGINE_INTERNAL_METHOD_NAMES,
+  ENGINE_TEST_METHOD_NAMES,
+  TaskActionResultSchema,
+  AppShutdownResultSchema,
+  DemoCreateResultSchema,
+  TaskInspectStateResultSchema,
+  OccurrenceDetailSchema,
+  ReviewUpdateNoteResultSchema,
+  ExportJsonResultSchema,
+  ExportReviewResultSchema,
+  ExportHtmlResultSchema,
+  TaskIdOnlyParamsSchema,
+  PARAM_SCHEMA_REGISTRY,
+  RESULT_SCHEMA_REGISTRY,
   normalizeSearchText,
   parseMethodResult,
   SourcePreflightJobSchema,
@@ -716,5 +732,153 @@ describe("IPC contract — 共享 fixture（TS Zod 端）", () => {
     // 错误码闭合枚举未新增开发者本地错误码
     expect(ErrorCodeSchema.safeParse("DEVELOPER_MODE_REQUIRED").success).toBe(false);
     expect(ErrorCodeSchema.safeParse("DIAGNOSTIC_PAYLOAD_TOO_LARGE").success).toBe(false);
+  });
+
+  it("P1-8 Commit 2：MethodNameSchema 由生成 tuple 派生，移除非 Engine 方法并补登缺失方法", () => {
+    // MethodNameSchema 现为 42 项（从 43 项收敛）
+    expect(MethodNameSchema.options.length).toBe(42);
+    expect(MethodNameSchema.options).toEqual([...ENGINE_METHOD_NAMES]);
+    expect(ENGINE_PUBLIC_METHOD_NAMES.length).toBe(38);
+    expect(ENGINE_INTERNAL_METHOD_NAMES.length).toBe(3);
+    expect(ENGINE_TEST_METHOD_NAMES.length).toBe(1);
+
+    // Commit 2 移除的非 Engine 方法（Python 无 handler / Electron 本地 / 残留）
+    for (const method of ["files.openOriginal", "files.openFolder", "settings.get", "settings.update"]) {
+      expect(MethodNameSchema.safeParse(method).success, `${method} 应已从 MethodNameSchema 移除`).toBe(false);
+    }
+
+    // Commit 2 补登的 Engine 方法（Python handler 与 Main 调用早已存在）
+    for (const method of ["app.shutdown", "tasks.inspectState", "demo.create"]) {
+      expect(MethodNameSchema.safeParse(method).success, `${method} 应已补入 MethodNameSchema`).toBe(true);
+    }
+  });
+
+  it("P1-8 Commit 2：新增结果 schema 正反例（依据 Python handler 真实返回）", () => {
+    // TaskActionResultSchema：tasks.start/pause/resume/cancel 返回
+    expect(TaskActionResultSchema.safeParse({ task_id: "task-1", status: "running" }).success).toBe(true);
+    expect(TaskActionResultSchema.safeParse({ task_id: "task-1", status: "pausing" }).success).toBe(true);
+    expect(TaskActionResultSchema.safeParse({ task_id: "", status: "running" }).success).toBe(false);
+    expect(TaskActionResultSchema.safeParse({ task_id: "task-1", status: "" }).success).toBe(false);
+
+    // AppShutdownResultSchema：app.shutdown 返回（幂等重入带 already）
+    expect(AppShutdownResultSchema.safeParse({ status: "shutting_down" }).success).toBe(true);
+    expect(AppShutdownResultSchema.safeParse({ status: "shutting_down", already: true }).success).toBe(true);
+    expect(AppShutdownResultSchema.safeParse({ status: "ok" }).success).toBe(false);
+
+    // DemoCreateResultSchema：create_demo 真实返回
+    expect(DemoCreateResultSchema.safeParse({
+      task_id: "task-1", workspace_dir: "/tmp/task-1", status: "completed",
+      occurrence_count: 3, is_demo: true,
+    }).success).toBe(true);
+    expect(DemoCreateResultSchema.safeParse({
+      task_id: "task-1", workspace_dir: "/tmp", status: "completed",
+      occurrence_count: 0, is_demo: false,
+    }).success).toBe(false);
+    expect(DemoCreateResultSchema.safeParse({
+      workspace_dir: "/tmp", status: "completed", occurrence_count: 0, is_demo: true,
+    }).success).toBe(false);
+
+    // TaskInspectStateResultSchema：tasks.inspectState 真实返回（最小夹具）
+    const checkpoint = {
+      task_id: "task-1", source_id: "src-1", last_completed_page: 2, next_page: 3,
+      processed_page_ids: [1, 2], worker_generation: 1, updated_at: "2026-07-28T00:00:00Z",
+    };
+    expect(TaskInspectStateResultSchema.safeParse({
+      task: {}, task_id: "task-1", source_id: "src-1",
+      processed_page_ids: [1, 2], occurrence_ids: ["occ-1"],
+      checkpoint, events: [], occurrence_count: 1,
+    }).success).toBe(true);
+    // 缺少必需字段 task_id 拒绝
+    expect(TaskInspectStateResultSchema.safeParse({
+      task: {}, source_id: "src-1", processed_page_ids: [], occurrence_ids: [],
+      checkpoint: null, events: [], occurrence_count: 0,
+    }).success).toBe(false);
+
+    // OccurrenceDetailSchema：results.getDetail 返回（passthrough 兼容）
+    expect(OccurrenceDetailSchema.safeParse({ occurrence_id: "occ-1", layout_context: null, extra: 1 }).success).toBe(true);
+    expect(OccurrenceDetailSchema.safeParse({ layout_context: null }).success).toBe(false);
+
+    // ReviewUpdateNoteResultSchema
+    expect(ReviewUpdateNoteResultSchema.safeParse({ occurrence_id: "occ-1", note: "批注", updated_at: "t" }).success).toBe(true);
+
+    // ExportJson/Review/Html
+    expect(ExportJsonResultSchema.safeParse({ path: "/tmp/out.json", occurrence_count: 5 }).success).toBe(true);
+    expect(ExportReviewResultSchema.safeParse({ path: "/tmp/out.review", record_count: 3 }).success).toBe(true);
+    expect(ExportHtmlResultSchema.safeParse({ path: "/tmp/out.html", occurrence_count: 5, file_size_bytes: 1024 }).success).toBe(true);
+
+    // TaskIdOnlyParams：search.corpusStatus 用 OcrSearchSessionsParams.pick({task_id})
+    expect(TaskIdOnlyParamsSchema.safeParse({ task_id: "task-1" }).success).toBe(true);
+    expect(TaskIdOnlyParamsSchema.safeParse({ task_id: "task-1", extra: 1 }).success).toBe(false);
+  });
+
+  it("P1-8 Commit 2：PARAM/RESULT schema registry 覆盖契约全部 schema_id", () => {
+    // registry 的 key 数应与契约中 schema_id 数量一致（编译期 satisfies 已保证穷尽，
+    // 这里做运行时复核：14 个 params schema_id，34 个 result schema_id）
+    expect(Object.keys(PARAM_SCHEMA_REGISTRY).length).toBe(14);
+    expect(Object.keys(RESULT_SCHEMA_REGISTRY).length).toBe(34);
+    // 每个 registry 值都是 Zod schema
+    for (const v of Object.values(PARAM_SCHEMA_REGISTRY)) {
+      expect(v).toBeDefined();
+    }
+    for (const v of Object.values(RESULT_SCHEMA_REGISTRY)) {
+      expect(v).toBeDefined();
+    }
+  });
+
+  it("P1-8 Commit 3：parseMethodResult 穷尽接入 Commit 2 新 schema（成功路径）", () => {
+    // 旧 28 个方法行为保持（抽样校验，完整矩阵在 ipcResultParser.spec.ts）
+    expect(() => parseMethodResult("tasks.get", {
+      task_id: "task-1", status: "running", search_text: "档", search_terms: ["档"],
+      search_mode: "exact_literal", processed_pages: 0, total_pages: 1, occurrence_count: 0,
+      worker_generation: 1, last_event_sequence: 0,
+    })).not.toThrow();
+    expect(() => parseMethodResult("review.layoutContext", {
+      task_id: "task-1", occurrence_id: "occ-1", context: { version: 1 },
+    })).toThrow(); // context 需完整 LayoutContext，简陋 fixture 应失败（证明真实校验）
+
+    // Commit 3 新接入的方法
+    expect(() => parseMethodResult("app.info", {
+      engine_version: "0.1.0", protocol_version: 4, python_executable: "/p",
+    })).not.toThrow();
+    expect(() => parseMethodResult("app.shutdown", { status: "shutting_down" })).not.toThrow();
+    expect(() => parseMethodResult("demo.create", {
+      task_id: "t1", workspace_dir: "/w", status: "completed", occurrence_count: 0, is_demo: true,
+    })).not.toThrow();
+    expect(() => parseMethodResult("diagnostics.run", {
+      engine_version: "0.1", python_version: "3.11", python_executable: "/p", platform: "win32", overall: "PASS", checks: [],
+    })).not.toThrow();
+    expect(() => parseMethodResult("tasks.start", { task_id: "t1", status: "running" })).not.toThrow();
+    expect(() => parseMethodResult("tasks.pause", { task_id: "t1", status: "pausing" })).not.toThrow();
+    expect(() => parseMethodResult("tasks.resume", { task_id: "t1", status: "running" })).not.toThrow();
+    expect(() => parseMethodResult("tasks.cancel", { task_id: "t1", status: "cancelled" })).not.toThrow();
+    expect(() => parseMethodResult("results.getDetail", { occurrence_id: "occ-1" })).not.toThrow();
+    expect(() => parseMethodResult("review.updateNote", {
+      occurrence_id: "occ-1", note: "批注", updated_at: "2026-07-28T00:00:00Z",
+    })).not.toThrow();
+    expect(() => parseMethodResult("export.json", { path: "/o.json", occurrence_count: 1 })).not.toThrow();
+    expect(() => parseMethodResult("export.review", { path: "/o.review", record_count: 1 })).not.toThrow();
+    expect(() => parseMethodResult("export.html", { path: "/o.html", occurrence_count: 1, file_size_bytes: 10 })).not.toThrow();
+    expect(() => parseMethodResult("tasks.inspectState", {
+      task: {}, task_id: "t1", source_id: "s1", processed_page_ids: [], occurrence_ids: [],
+      checkpoint: null, events: [], occurrence_count: 0,
+    })).not.toThrow();
+  });
+
+  it("P1-8 Commit 3：parseMethodResult 拒绝未知 method 与 Electron local method", () => {
+    expect(() => parseMethodResult("bogus.method", {})).toThrow();
+    // Electron local / 残留 schema 项不应作为 Engine method 解析
+    expect(() => parseMethodResult("settings.get", {})).toThrow();
+    expect(() => parseMethodResult("settings.update", {})).toThrow();
+    expect(() => parseMethodResult("files.openOriginal", {})).toThrow();
+    expect(() => parseMethodResult("files.openFolder", {})).toThrow();
+  });
+
+  it("P1-8 Commit 3：parseMethodResult 拒绝非对象顶层结果（证明无 identity parser）", () => {
+    // 所有 Engine 结果当前都是对象 envelope；null/原始值必须被拒绝
+    expect(() => parseMethodResult("app.info", null)).toThrow();
+    expect(() => parseMethodResult("app.info", "string")).toThrow();
+    expect(() => parseMethodResult("app.info", 123)).toThrow();
+    expect(() => parseMethodResult("app.info", true)).toThrow();
+    expect(() => parseMethodResult("app.info", [])).toThrow();
   });
 });

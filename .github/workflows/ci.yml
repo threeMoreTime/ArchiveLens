@@ -151,13 +151,29 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate TS IPC contract fixtures
-        run: pnpm --filter @archivelens/desktop test:contract
+      - name: Validate generated IPC contract is up to date
+        run: pnpm check:ipc-contract-generated
+
+      - name: Test IPC contract generator validation
+        run: pnpm test:ipc-contract-generator
+
+      - name: Validate TypeScript IPC contract and consistency
+        run: pnpm test:contract
+
+      - name: Validate Python IPC historical baseline
+        env:
+          PYTHONPATH: engine/src;.
+        run: python -m unittest engine.tests.test_ipc_method_baseline -v
 
       - name: Validate Python IPC contract fixtures
         env:
           PYTHONPATH: engine/src;.
         run: python -m unittest engine.tests.test_ipc_contract -v
+
+      - name: Validate Python IPC contract consistency
+        env:
+          PYTHONPATH: engine/src;.
+        run: python -m unittest engine.tests.test_ipc_contract_consistency -v
 
   lifecycle-e2e:
     name: Lifecycle E2E

@@ -1,0 +1,6 @@
+# P1-8：IPC 契约与生成产物跨平台必须保持 LF，避免 git autocrlf 导致
+# 生成检查（pnpm check:ipc-contract-generated）在 CI 上因 CRLF 误报不一致。
+contracts/*.json eol=lf
+packages/ipc-schema/src/generated/*.ts eol=lf
+scripts/ipc-contract-core.mjs eol=lf
+scripts/generate-ipc-contract.mjs eol=lf
