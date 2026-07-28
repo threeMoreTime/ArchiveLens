@@ -1,7 +1,8 @@
 // ArchiveLens 竞态测试压力验证入口（P1-9 Commit 1）。
 //
-// 通过 spawnSync 调用 pnpm.cmd（Windows）执行 vitest，对竞态测试重复运行，
-// 记录每次迭代的耗时与退出码，输出汇总。不依赖 Bash，Windows CI 可运行。
+// 通过 spawnSync 用 process.execPath（node）直接调用 vitest 的 JS 入口，
+// 对竞态测试重复运行，记录每次迭代的耗时与退出码，输出汇总。
+// 不依赖 Bash、不使用 shell: true（遵循 AGENTS.md 子进程安全要求），Windows CI 可运行。
 //
 // 用法：
 //   node scripts/stress-race-tests.mjs --target export --iterations 30
@@ -16,8 +17,10 @@
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = path.resolve(new URL("..", import.meta.url).pathname.replace(/^\//, ""));
+// 用 fileURLToPath 保持绝对路径（POSIX 不丢失前导斜杠，Windows 正确解码）。
+const REPO_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DESKTOP_DIR = path.join(REPO_ROOT, "apps", "desktop");
 
 const TARGETS = {
@@ -60,17 +63,13 @@ function parseArgs(argv) {
   return args;
 }
 
-// 直接调用 apps/desktop 下的 vitest bin，避免 pnpm --filter exec 包装层的退出码问题。
-function vitestBin() {
-  return process.platform === "win32"
-    ? path.join(DESKTOP_DIR, "node_modules", ".bin", "vitest.CMD")
-    : path.join(DESKTOP_DIR, "node_modules", ".bin", "vitest");
-}
+// 用 process.execPath（node）直接调用 vitest 的 JS 入口（dist/cli.js），
+// shell: false 遵循 AGENTS.md 子进程安全要求（不拼命令字符串，参数数组传递）。
+const VITEST_JS = path.join(DESKTOP_DIR, "node_modules", "vitest", "dist", "cli.js");
 
 function runOneIteration(target, maxWorkers) {
   const files = TARGETS[target];
-  const cmd = vitestBin();
-  const args = ["run"];
+  const args = [VITEST_JS, "run"];
   if (files.length > 0) {
     args.push(...files);
   }
@@ -78,11 +77,11 @@ function runOneIteration(target, maxWorkers) {
     args.push("--maxWorkers", String(maxWorkers));
   }
   const t0 = performance.now();
-  const result = spawnSync(cmd, args, {
+  const result = spawnSync(process.execPath, args, {
     cwd: DESKTOP_DIR,
     stdio: "pipe",
     encoding: "utf-8",
-    shell: process.platform === "win32",
+    shell: false,
   });
   const elapsed = performance.now() - t0;
   return {
