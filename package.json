@@ -18,6 +18,7 @@
     "generate:ipc-contract": "node scripts/generate-ipc-contract.mjs",
     "check:ipc-contract-generated": "node scripts/generate-ipc-contract.mjs --check",
     "test:ipc-contract-generator": "node --test scripts/tests/ipc-contract-generator.test.mjs",
+    "test:ipc-contract-generator:coverage": "node --test --experimental-test-coverage --test-coverage-include=scripts/ipc-contract-core.mjs --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=95 scripts/tests/ipc-contract-generator.test.mjs",
     "stress:race-tests": "node scripts/stress-race-tests.mjs",
     "lint": "pnpm -r lint",
     "test:coverage": "pnpm --filter @archivelens/desktop test:coverage",
