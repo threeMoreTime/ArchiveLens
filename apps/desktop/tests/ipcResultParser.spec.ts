@@ -17,6 +17,7 @@ import {
   ENGINE_RESULT_PARSERS,
   RESULT_SCHEMA_REGISTRY,
   parseMethodResult,
+  type EngineResultSchemaId,
 } from "@shared/index";
 
 // --------------------------------------------------------------------------- //
@@ -245,8 +246,10 @@ const checkpoint = {
   updated_at: ISO,
 };
 
-/** 34 个唯一 result schema_id → 最小真实 fixture。 */
-const VALID_RESULT_FIXTURES_BY_SCHEMA_ID: Record<string, unknown> = {
+/** 34 个唯一 result schema_id → 最小真实 fixture。
+ *  satisfies Record<EngineResultSchemaId, unknown> 保证：缺少任一 schema ID、
+ *  拼写错误或多余 schema ID 时 typecheck 失败。 */
+const VALID_RESULT_FIXTURES_BY_SCHEMA_ID = {
   AppInfoResult: {
     engine_version: "0.1.0",
     protocol_version: 4,
@@ -365,7 +368,7 @@ const VALID_RESULT_FIXTURES_BY_SCHEMA_ID: Record<string, unknown> = {
   },
   TaskSummary: taskBase,
   TasksListResult: { items: [taskBase], limit: 50, offset: 0, total: 1 },
-};
+} satisfies Record<EngineResultSchemaId, unknown>;
 
 describe("P1-8 Commit 3 — Engine 结果 parser registry", () => {
   it("registry 穷尽性：keys == ENGINE_METHOD_NAMES == CONTRACT keys（42）", () => {
@@ -400,6 +403,21 @@ describe("P1-8 Commit 3 — Engine 结果 parser registry", () => {
     expect(uniqueSchemaIds.size).toBe(34);
     const missing = [...uniqueSchemaIds].filter((id) => !(id in VALID_RESULT_FIXTURES_BY_SCHEMA_ID));
     expect(missing, `缺少 fixture 的 schema_id: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("parser 与正式契约对象身份一致：ENGINE_RESULT_PARSERS[method] === RESULT_SCHEMA_REGISTRY[contract.schemaId]", () => {
+    // 不只检查 parser 是函数或 fixture 能解析，而是验证 parser 引用的 Zod schema
+    // 与契约声明的 schemaId 在 RESULT_SCHEMA_REGISTRY 中是同一对象（===）。
+    for (const method of ENGINE_METHOD_NAMES) {
+      const resultContract = ENGINE_METHOD_RESULT_CONTRACT[method];
+      if (resultContract.kind !== "schema") {
+        throw new Error(`当前方法出现未实现的 result kind: ${method}`);
+      }
+      expect(
+        ENGINE_RESULT_PARSERS[method],
+        `${method} parser 未引用契约声明的 schema`,
+      ).toBe(RESULT_SCHEMA_REGISTRY[resultContract.schemaId]);
+    }
   });
 
   it("42 个方法用合法 fixture 解析通过", () => {

@@ -1138,19 +1138,22 @@ export const TaskSearchEventPayloadSchema = z.object({
 }).passthrough();
 
 // --------------------------------------------------------------------------- //
-// P1-8 Commit 3：穷尽 Engine 结果解析。
+// P1-8 Commit 3/4：穷尽 Engine 结果解析。
 //
 // parseMethodResult 不再用 if 链 + return value 兜底，而是：
 //   1. MethodNameSchema.parse(method) 运行时拒绝未知方法；
 //   2. ENGINE_RESULT_PARSERS[method] 取对应 Zod schema 并 .parse。
 //
-// ENGINE_RESULT_PARSERS 是 Record<EngineMethodName, z.ZodTypeAny>，编译期穷尽：
+// ENGINE_RESULT_PARSERS 是 Record<EngineMethodName, EngineResultParser>，编译期穷尽：
 // 删除任一项或新增非法项都会 typecheck 失败。不存在 identity parser、
 // passthroughResult、parseVoidResult、unknown as 或 fail-open return value。
 // --------------------------------------------------------------------------- //
 
-/** Engine 结果 parser 签名：接收 wire result，返回经 Zod 校验的结构化结果。 */
-export type ResultParser = (value: unknown) => unknown;
+/**
+ * Engine 结果 parser 类型。ENGINE_RESULT_PARSERS 直接存储 Zod schema 对象
+ * （非闭包），parseMethodResult 通过 .parse 执行结构校验，避免 42 个闭包分配。
+ */
+export type EngineResultParser = z.ZodTypeAny;
 
 /**
  * 42 个 Engine 方法的结果 schema 注册表，编译期穷尽、运行时 fail-closed。
@@ -1200,7 +1203,7 @@ export const ENGINE_RESULT_PARSERS = {
   "tasks.preflightGet": RESULT_SCHEMA_REGISTRY.SourcePreflightJob,
   "tasks.resume": RESULT_SCHEMA_REGISTRY.TaskActionResult,
   "tasks.start": RESULT_SCHEMA_REGISTRY.TaskActionResult,
-} satisfies Record<EngineMethodName, z.ZodTypeAny>;
+} satisfies Record<EngineMethodName, EngineResultParser>;
 
 /**
  * 解析 Engine 成功响应 result。未知方法经 MethodNameSchema 抛 Zod 错误，
@@ -1404,8 +1407,7 @@ export {
   type EngineInternalMethodName,
   type EngineTestMethodName,
   type EngineMethodVisibility,
-  type EngineMethodResultContract,
-  type EngineMethodResultKind,
+  type EngineMethodResultEntry,
 } from "./generated/engineMethods.generated";
 
 export { z };

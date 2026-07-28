@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "test": "vitest run",
-    "test:contract": "vitest run tests/contract.spec.ts tests/ipcMethodBaseline.spec.ts tests/ipcResultParser.spec.ts",
+    "test:contract": "vitest run tests/contract.spec.ts tests/ipcMethodBaseline.spec.ts tests/ipcResultParser.spec.ts tests/ipcContractConsistency.spec.ts",
     "build": "electron-vite build && node ../../scripts/write-build-metadata.mjs desktop apps/desktop/out/main/app.info.json apps/desktop/app.info.json",
     "lint": "eslint src tests e2e --max-warnings 0 && pnpm run typecheck",
     "test:coverage": "vitest run --coverage && node ../../scripts/check-desktop-coverage.mjs",

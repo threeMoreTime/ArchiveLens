@@ -201,7 +201,7 @@ export const ENGINE_METHOD_RESULT_CONTRACT = {
   "tasks.preflightGet": { kind: "schema", schemaId: "SourcePreflightJob" },
   "tasks.resume": { kind: "schema", schemaId: "TaskActionResult" },
   "tasks.start": { kind: "schema", schemaId: "TaskActionResult" },
-} as const;
+} as const satisfies Record<EngineMethodName, EngineMethodResultEntry>;
 
 export type EngineMethodName = typeof ENGINE_METHOD_NAMES[number];
 export type EnginePublicMethodName = typeof ENGINE_PUBLIC_METHOD_NAMES[number];
@@ -209,9 +209,10 @@ export type EngineInternalMethodName = typeof ENGINE_INTERNAL_METHOD_NAMES[numbe
 export type EngineTestMethodName = typeof ENGINE_TEST_METHOD_NAMES[number];
 export type EngineParamSchemaId = typeof ENGINE_PARAM_SCHEMA_IDS[number];
 export type EngineResultSchemaId = typeof ENGINE_RESULT_SCHEMA_IDS[number];
-export type EngineMethodResultContract = typeof ENGINE_METHOD_RESULT_CONTRACT;
-export type EngineMethodResultKind = EngineMethodResultContract[EngineMethodName]["kind"];
 
+export type EngineMethodResultEntry =
+  | { readonly kind: "schema"; readonly schemaId: EngineResultSchemaId }
+  | { readonly kind: "empty_object" };
 export type EngineMethodVisibility =
   | "engine_public"
   | "engine_internal"

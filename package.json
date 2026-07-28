@@ -17,6 +17,7 @@
     "test:contract": "pnpm --filter @archivelens/desktop run test:contract",
     "generate:ipc-contract": "node scripts/generate-ipc-contract.mjs",
     "check:ipc-contract-generated": "node scripts/generate-ipc-contract.mjs --check",
+    "test:ipc-contract-generator": "node --test scripts/tests/ipc-contract-generator.test.mjs",
     "lint": "pnpm -r lint",
     "test:coverage": "pnpm --filter @archivelens/desktop test:coverage",
     "coverage:python": "python scripts/run-python-coverage.py",
