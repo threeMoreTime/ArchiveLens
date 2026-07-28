@@ -100,10 +100,18 @@ describe("P1-8 Commit 4 — Engine 六方集合一致（均为 42）", () => {
   it("真实 sidecar.call/request 字面量方法集合 = 42 个 Engine 方法", () => {
     // 扫描整个 apps/desktop/src（含 manager.ts 的 app.shutdown 内部握手）
     const { methods: realCalls, dynamicHits } = extractTsEngineCalls(APPS_DESKTOP_SRC);
-    const disallowedDynamic = dynamicHits.filter(
-      (h) => !/main\/sidecar\/manager\.(ts|tsx)$/.test(h.file.replace(/\\/g, "/")),
-    );
-    expect(disallowedDynamic, "非 SidecarManager 内部的动态 method 调用").toEqual([]);
+    // 唯一允许的动态内部转发：SidecarManager.call 内 this.request(method)
+    const isAllowedInternalForward = (h: { receiver: string; method: string; enclosingClass: string | null; enclosingMethod: string | null }) =>
+      h.receiver === "this" &&
+      h.method === "request" &&
+      h.enclosingClass === "SidecarManager" &&
+      h.enclosingMethod === "call";
+    const disallowedDynamic = dynamicHits.filter((h) => !isAllowedInternalForward(h));
+    expect(
+      disallowedDynamic.map((h) => `${h.file}:${h.line}:${h.column} ${h.receiver}.${h.method}`),
+      "非允许的动态 Engine method 调用",
+    ).toEqual([]);
+    expect(dynamicHits.filter(isAllowedInternalForward).length, "允许的动态内部转发应恰好 1 处").toBe(1);
     expect(realCalls.size).toBe(42);
     const d = diffSets(realCalls, contractMethods);
     expect(d, `真实调用 vs 契约\n  Missing: ${d.missing}\n  Extra: ${d.extra}`).toEqual({ missing: [], extra: [] });
@@ -162,18 +170,30 @@ describe("P1-8 Commit 4 — parser 与 schema 对象身份一致（42/42）", ()
   });
 });
 
-describe("P1-8 Commit 4 — Main handler 精确映射核验", () => {
+describe("P1-8 Commit 4/4.1 — Main handler 精确映射核验", () => {
   const electron = loadElectronContract();
   const handlers = extractIpcMainHandlers();
-  const handlerByChannel = new Map(handlers.map((h) => [h.channel, h]));
+  const handlerByChannel = new Map(handlers.filter((h) => h.channel !== null).map((h) => [h.channel as string, h]));
+
+  it("ipcMain.handle 调用总数 71，全部字符串字面量 channel，无动态/缺失/重复", () => {
+    expect(handlers.length, "真实 ipcMain.handle 调用总数应为 71").toBe(71);
+    // 全部 channel 为字符串字面量
+    const nonLiteral = handlers.filter((h) => !h.channelIsLiteral).map((h) => `${h.file}:${h.line}`);
+    expect(nonLiteral, "动态/缺失 channel 的 handle 调用").toEqual([]);
+    // 全部提供 callback
+    const noCallback = handlers.filter((h) => !h.callbackPresent).map((h) => `${h.file}:${h.line}`);
+    expect(noCallback, "缺失 callback 的 handle 调用").toEqual([]);
+    // 字面量 channel 数 = 71
+    expect(handlers.filter((h) => h.channelIsLiteral).length).toBe(71);
+    // 无重复 channel
+    const channels = handlers.map((h) => h.channel as string);
+    const dupes = sorted(channels.filter((c, i) => channels.indexOf(c) !== i));
+    expect(dupes, "源码无重复注册 channel").toEqual([]);
+  });
 
   it("真实 ipcMain.handle 注册 = electron-channels.json（71），分类 17/41/8/5", () => {
-    expect(handlers.length).toBe(71);
-    const sourceDupes = sorted(handlers.map((h) => h.channel).filter((c, i, arr) => arr.indexOf(c) !== i));
-    expect(sourceDupes, "源码无重复注册").toEqual([]);
-
     const classify = (h: (typeof handlers)[number]) => {
-      const isTest = h.channel.startsWith("test.");
+      const isTest = (h.channel ?? "").startsWith("test.");
       if (isTest) return h.hasSidecarCall || h.hasInspectTask ? "electron_test_forwarded" : "electron_test_local";
       return h.hasSidecarCall ? "electron_forwarded" : "electron_local";
     };
@@ -181,11 +201,19 @@ describe("P1-8 Commit 4 — Main handler 精确映射核验", () => {
     for (const h of handlers) counts[classify(h) as keyof typeof counts] += 1;
     expect(counts).toEqual({ electron_local: 17, electron_forwarded: 41, electron_test_local: 8, electron_test_forwarded: 5 });
 
-    const d = diffSets(handlers.map((h) => h.channel), electron.channels.map((c) => c.channel));
+    const d = diffSets(handlers.map((h) => h.channel as string), electron.channels.map((c) => c.channel));
     expect(d, `源码注册 vs 契约\n  Missing: ${d.missing}\n  Extra: ${d.extra}`).toEqual({ missing: [], extra: [] });
   });
 
-  it("每个 forwarded handler 精确映射到契约声明的 engine_method", () => {
+  it("全部 71 个 handler 的动态 Engine method 总数为 0", () => {
+    // 任何 handler 回调内的 sidecar.call/request 动态 method 都不允许
+    const allDynamic = handlers.flatMap((h) =>
+      h.dynamicEngineMethods.map((d) => `${h.file}:${d.line}:${d.column} ${d.receiver}.${d.method}`),
+    );
+    expect(allDynamic, "handler 回调内不允许动态 Engine method").toEqual([]);
+  });
+
+  it("每个 forwarded handler 精确映射到契约声明的 engine_method（恰好 1 个，无动态）", () => {
     const forwarded = electron.channels.filter(
       (c) => c.kind === "electron_forwarded" || c.kind === "electron_test_forwarded",
     );
@@ -196,14 +224,10 @@ describe("P1-8 Commit 4 — Main handler 精确映射核验", () => {
       expect(h, `源码缺失 ${c.channel} 注册`).toBeDefined();
       if (!h) continue;
 
-      // 无动态 method
-      expect(h.hasDynamicMethod, `${c.channel} 回调含动态 method 变量`).toBe(false);
-
       if (c.channel.startsWith("test.task.")) {
         // test.task.* 经 inspectTask 间接调用 tasks.inspectState
         expect(h.inspectTaskCallCount, `${c.channel} 应调用 inspectTask`).toBe(1);
         expect(c.engine_method, `${c.channel} 应映射 tasks.inspectState`).toBe("tasks.inspectState");
-        // 直接 sidecar 调用由 inspectTask 内部完成，handler 回调体本身无 sidecar.call
         expect(h.directEngineMethods, `${c.channel} 回调不应直接 sidecar.call`).toEqual([]);
       } else {
         // 生产 forwarded：恰好 1 个直接 sidecar.call 字面量
@@ -228,7 +252,7 @@ describe("P1-8 Commit 4 — Main handler 精确映射核验", () => {
     }
   });
 
-  it("local handler 解析出 0 个 sidecar method", () => {
+  it("local handler：直接 Engine method=0、动态=0、inspectTask=0", () => {
     const locals = electron.channels.filter(
       (c) => c.kind === "electron_local" || c.kind === "electron_test_local",
     );
@@ -236,7 +260,8 @@ describe("P1-8 Commit 4 — Main handler 精确映射核验", () => {
       const h = handlerByChannel.get(c.channel);
       expect(h, `源码缺失 ${c.channel}`).toBeDefined();
       expect(h?.directEngineMethods, `${c.channel} 不应含 sidecar 调用`).toEqual([]);
-      expect(h?.hasInspectTask, `${c.channel} 不应含 inspectTask`).toBe(false);
+      expect(h?.dynamicEngineMethods, `${c.channel} 不应含动态 sidecar 调用`).toEqual([]);
+      expect(h?.inspectTaskCallCount, `${c.channel} 不应含 inspectTask`).toBe(0);
     }
   });
 });

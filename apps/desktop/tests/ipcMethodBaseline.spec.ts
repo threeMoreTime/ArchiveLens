@@ -143,14 +143,20 @@ describe("IPC 正式契约 — Engine 方法（Commit 2 后当前状态）", () 
 
   it("TS 真实 sidecar 调用集合 = 正式契约 Engine 方法集合（42）", () => {
     const { methods, dynamicHits } = extractTsEngineCalls(APPS_DESKTOP_SRC);
-    const allowedDynamic = dynamicHits.filter((h) =>
-      /main\/sidecar\/manager\.(ts|tsx)$/.test(h.file.replace(/\\/g, "/")),
-    );
-    const disallowedDynamic = dynamicHits.filter(
-      (h) => !/main\/sidecar\/manager\.(ts|tsx)$/.test(h.file.replace(/\\/g, "/")),
-    );
-    expect(disallowedDynamic, "非 SidecarManager 内部的动态 method 调用").toEqual([]);
-    expect(allowedDynamic.length).toBe(1);
+    // 唯一允许的动态内部转发：SidecarManager.call(...) 内部 this.request(method, ...)
+    // 精确限定为 receiver=this / method=request / enclosingClass=SidecarManager / enclosingMethod=call。
+    const isAllowedInternalForward = (h: { receiver: string; method: string; enclosingClass: string | null; enclosingMethod: string | null }) =>
+      h.receiver === "this" &&
+      h.method === "request" &&
+      h.enclosingClass === "SidecarManager" &&
+      h.enclosingMethod === "call";
+    const allowedDynamic = dynamicHits.filter(isAllowedInternalForward);
+    const disallowedDynamic = dynamicHits.filter((h) => !isAllowedInternalForward(h));
+    expect(
+      disallowedDynamic.map((h) => `${h.file}:${h.line}:${h.column} ${h.receiver}.${h.method} in ${h.enclosingClass}.${h.enclosingMethod}`),
+      "非允许的动态 Engine method 调用（仅允许 SidecarManager.call 内 this.request 转发）",
+    ).toEqual([]);
+    expect(allowedDynamic.length, "允许的动态内部转发应恰好 1 处").toBe(1);
 
     expect(methods.size).toBe(42);
     const contractMethods = new Set(engineContract.engine_methods.map((m) => m.method));
