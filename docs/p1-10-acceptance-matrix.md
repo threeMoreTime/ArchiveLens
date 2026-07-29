@@ -5,7 +5,7 @@
 | 项 | 值 |
 |---|---|
 | main 起始基线 | `4da9523c1c6195dfaa9981f35ece2be56c53c58e` |
-| 最终候选 SHA | 待文档修正后重新执行 release gate 确定 |
+| 最终候选 SHA | `ab56a00a036b33d8b412e8a09fc7dbdd87303291` |
 | 版本 | `0.1.0-alpha.11` |
 | PROTOCOL_VERSION | 4 |
 | 基线分支 | main (P1-8/P1-9 已合并) |
