@@ -4,7 +4,8 @@
 
 | 项 | 值 |
 |---|---|
-| 候选 SHA | `4da9523c1c6195dfaa9981f35ece2be56c53c58e` |
+| main 起始基线 | `4da9523c1c6195dfaa9981f35ece2be56c53c58e` |
+| 最终候选 SHA | 待文档修正后重新执行 release gate 确定 |
 | 版本 | `0.1.0-alpha.11` |
 | PROTOCOL_VERSION | 4 |
 | 基线分支 | main (P1-8/P1-9 已合并) |
@@ -16,8 +17,8 @@
 | Engine 构建 | `scripts/build-engine.ps1` | ✅ Packaged Smoke | ✅ release gate | ✅ dist/engine/win-x64/ | 低 |
 | Setup 构建 | electron-builder | ✅ Packaged Smoke (win-unpacked) | ✅ release gate | ✅ apps/desktop/release/ | 低 |
 | Portable 构建 | electron-builder | ✅ Packaged Smoke (win-unpacked) | ✅ release gate | ✅ apps/desktop/release/ | 低 |
-| Setup smoke（安装/卸载） | `scripts/smoke-installer.ps1` | ❌ CI 只到 win-unpacked | ✅ release gate | ⚠️ 7月21日旧版 | 中 |
-| Portable smoke | `scripts/smoke-portable.ps1` | ❌ CI 只到 win-unpacked | ✅ release gate | ⚠️ 7月21日旧版 | 中 |
+| Setup smoke（安装/卸载） | `scripts/smoke-installer.ps1` | ❌ CI 只到 win-unpacked | ✅ release gate | ✅ 本次 gate PASS | 中 |
+| Portable smoke | `scripts/smoke-portable.ps1` | ❌ CI 只到 win-unpacked | ✅ release gate | ✅ 本次 gate PASS | 中 |
 | win-unpacked smoke | CI package-smoke job | ✅ | ✅ release gate | ✅ | 低 |
 | 离线原生组件 smoke | `scripts/offline-native-smoke.py` | ✅ Packaged Smoke | ✅ release gate | ✅ | 低 |
 | 八组 OCR smoke | `scripts/packaged-ocr-smoke.py` | ✅ Packaged Smoke | ✅ release gate | ✅ | 低 |
@@ -27,11 +28,11 @@
 | Manifest 生成 | `scripts/generate-manifest.py` | ✅ Packaged Smoke | ✅ release gate | ✅ | 低 |
 | 同 SHA 校验 | `scripts/verify-release-chain.ps1` | ✅ Packaged Smoke | ✅ release gate | ✅ | 低 |
 | Authenticode | 无证书 | ✅ 记录未签名 | ✅ 记录未签名 | ✅ 未签名 | 已知限制 |
-| 完整 Playwright E2E | CI lifecycle-e2e job | ✅ | ✅ release gate | ✅ | 低 |
+| Playwright E2E | CI lifecycle-e2e + 本地 gate | ⚠️ PARTIAL（6 个核心 suites：lifecycle/custom-search/review-completeness/offline-html-navigation/export-job/task-center-batch） | ✅ 全量（含 vertical.spec.ts） | ✅ 本地 gate 全量 PASS | 中 |
 
 ### 关键风险
-1. **CI 与本地门禁的证据断层**：CI package-smoke 验证 win-unpacked（非最终 Setup/Portable），Setup/Portable 真实安装验收只在本地 release gate 执行
-2. **旧版产物**：本机已有 7月21日产物，但需基于 `4da9523c` 重新构建验证
+1. **CI 与本地门禁的证据断层**：CI lifecycle-e2e 只跑 6 个指定 suites（不含 vertical.spec.ts），本地 release gate 跑全部 E2E。vertical.spec.ts 不在 CI 中验证，仅在本地 gate 覆盖。
+2. **Setup/Portable 真实安装验收**：CI 只到 win-unpacked，Setup/Portable smoke 只在本地 release gate 执行。
 
 ## 现有 fixture 清单
 
@@ -58,6 +59,8 @@
 |---|---|---|
 | multipage.tiff | TIFF | ✅ |
 | simplified-horizontal.png | PNG | ✅ |
+| synthetic-three-page.djvu | DJVU | ✅ |
+| traditional-horizontal.jpg | JPEG | ✅ |
 
 ### 真实档案（不入仓库）
 | fixture_id | 格式 | 大小 | 来源 | 可提交 |
@@ -67,8 +70,8 @@
 ### 缺失类别（需多轮补充）
 | 类别 | 最低要求 | 当前 | 缺口 |
 |---|---|---|---|
-| DJVU/DJV | 3 | 0 | 3 |
-| JPEG | 2 | 0 | 2 |
+| DJVU/DJV | 3 | 1 | 2 |
+| JPEG | 2 | 1 | 1 |
 | 繁体竖排 | 3 | 0 | 3 |
 | 双栏/多栏 | 3 | 0 | 3 |
 | 低对比度 | 2 | 0 | 2 |
