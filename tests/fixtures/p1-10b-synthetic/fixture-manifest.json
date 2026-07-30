@@ -306,7 +306,8 @@
         "allowed_missing": 0,
         "note": "空白页无 OCR 内容，用于性能/恢复验收"
       },
-      "sha256": "8edeea40d71803e5bbc5fa243cab0dbbbbfdab1a6ad3d3bd5d894f09608369b4"
+      "sha256": "8edeea40d71803e5bbc5fa243cab0dbbbbfdab1a6ad3d3bd5d894f09608369b4",
+      "generated_at_runtime": true
     }
   ]
 }

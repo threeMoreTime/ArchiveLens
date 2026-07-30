@@ -324,6 +324,7 @@ try:
         "expected_task_result": "completed",
         "expected_hits": hits(None, 0, 0, "空白页无 OCR 内容，用于性能/恢复验收"),
         "sha256": sha256_file(large_path),
+        "generated_at_runtime": True,  # pypdf 生成的 PDF 跨版本可能有字节差异
     })
 except Exception as e:
     print(f"错误：大任务 PDF 生成失败: {e}", file=sys.stderr)
