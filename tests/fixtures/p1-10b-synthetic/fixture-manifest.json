@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-30",
+  "synthetic": true,
+  "description": "P1-10B 合成验收 fixture。所有样本为 SYNTHETIC，不声称是真实档案。",
+  "font": "C:/Windows/Fonts/msyh.ttc",
+  "fixtures": [
+    {
+      "fixture_id": "traditional-vertical-1",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "繁体竖排",
+      "degradation": "清晰",
+      "pages": 1,
+      "expected_search_term": "檔案管理",
+      "expected_hits": ">=1",
+      "sha256": "774aab75f68ee7412a0ff380a5e108aded5384462a39eebe0b118ab8ca5d8b3f"
+    },
+    {
+      "fixture_id": "traditional-vertical-2",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "繁体竖排",
+      "degradation": "清晰",
+      "pages": 1,
+      "expected_search_term": "檔案管理",
+      "expected_hits": ">=1",
+      "sha256": "774aab75f68ee7412a0ff380a5e108aded5384462a39eebe0b118ab8ca5d8b3f"
+    },
+    {
+      "fixture_id": "traditional-vertical-3",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "繁体竖排",
+      "degradation": "清晰",
+      "pages": 1,
+      "expected_search_term": "檔案管理",
+      "expected_hits": ">=1",
+      "sha256": "774aab75f68ee7412a0ff380a5e108aded5384462a39eebe0b118ab8ca5d8b3f"
+    },
+    {
+      "fixture_id": "multicolumn-1",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "双栏或多栏",
+      "degradation": "清晰",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=1",
+      "sha256": "606a46abccde294874742ae166ae79a76ccf55583e4d560fe38d74246b2250ea"
+    },
+    {
+      "fixture_id": "multicolumn-2",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "双栏或多栏",
+      "degradation": "清晰",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=1",
+      "sha256": "fbf9de495312242870d3e63630fb2e782898c91f2168f0e519e3a6a7c4a0079c"
+    },
+    {
+      "fixture_id": "multicolumn-3",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "双栏或多栏",
+      "degradation": "清晰",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=1",
+      "sha256": "fbf9de495312242870d3e63630fb2e782898c91f2168f0e519e3a6a7c4a0079c"
+    },
+    {
+      "fixture_id": "low-contrast-1",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "简体横排",
+      "degradation": "低对比度",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=0（低对比度可能 OCR 失败）",
+      "sha256": "47eb9232b3277c64be8dabc0eff800ed844b1d043b1e2c46d9eb166cca76e718"
+    },
+    {
+      "fixture_id": "low-contrast-2",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "简体横排",
+      "degradation": "低对比度",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=0（低对比度可能 OCR 失败）",
+      "sha256": "47eb9232b3277c64be8dabc0eff800ed844b1d043b1e2c46d9eb166cca76e718"
+    },
+    {
+      "fixture_id": "rotated-synthetic-1",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "简体横排",
+      "degradation": "倾斜5.0度",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=0（倾斜可能影响 OCR）",
+      "sha256": "d2c9b942a7c18ef1a55994e72e4924f8b30ac94a231adbc94ddf5d6b360f5c43"
+    },
+    {
+      "fixture_id": "rotated-synthetic-2",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "简体横排",
+      "degradation": "倾斜10.0度",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=0（倾斜可能影响 OCR）",
+      "sha256": "282b0d427a14b43e6d2177b9b6c0614de4f55805e5e79fb325d103ecb0648a7d"
+    },
+    {
+      "fixture_id": "rotated-synthetic-3",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "简体横排",
+      "degradation": "倾斜-8.0度",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=0（倾斜可能影响 OCR）",
+      "sha256": "f4732ee9cf3261f5d087681583bf5cd37664748f00f0ff41433df377196f354d"
+    },
+    {
+      "fixture_id": "noise-1",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "简体横排",
+      "degradation": "污渍/噪声",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=0（噪声可能影响 OCR）",
+      "sha256": "4f20ac8e5e8d4c3dffb3ecb4ecf71eda4677338ddf2f84348396b3f4448dbf56"
+    },
+    {
+      "fixture_id": "noise-2",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "简体横排",
+      "degradation": "污渍/噪声",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=0（噪声可能影响 OCR）",
+      "sha256": "6ea584e6c5dfd0a3958929f49e28c08de4f6d3e48e2c354149678f695ec3da75"
+    },
+    {
+      "fixture_id": "long-unicode-path-1",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "简体横排",
+      "degradation": "清晰",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=1",
+      "sha256": "d1c47a0fe3b31ab558dc54c676ec2700ef933f3081bad41462286e7a6134f005",
+      "special_filename": "档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理.png"
+    },
+    {
+      "fixture_id": "special-chars-filename-1",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "简体横排",
+      "degradation": "清晰",
+      "pages": 1,
+      "expected_search_term": "档案管理",
+      "expected_hits": ">=1",
+      "sha256": "a5ad635b946d7c9397b8ec20e3b0785b26af95f17d87465fa84b869529cfb079",
+      "special_filename": "档案【特殊】#%&@测试.png"
+    },
+    {
+      "fixture_id": "corrupt-truncated-1",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "N/A",
+      "degradation": "损坏文件（截断 PNG）",
+      "pages": 0,
+      "expected_search_term": "N/A",
+      "expected_hits": "0（损坏文件应失败）",
+      "sha256": "89754d34217cd6b7828fe333b27b1bcd82d955ef9559c6a2a886a232565b4984"
+    },
+    {
+      "fixture_id": "corrupt-zero-byte-1",
+      "format": "PNG",
+      "synthetic": true,
+      "layout": "N/A",
+      "degradation": "损坏文件（零字节）",
+      "pages": 0,
+      "expected_search_term": "N/A",
+      "expected_hits": "0（损坏文件应失败）",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "fixture_id": "encrypted-pdf-1",
+      "format": "PDF",
+      "synthetic": true,
+      "layout": "空白页",
+      "degradation": "加密 PDF（密码 test123）",
+      "pages": 1,
+      "expected_search_term": "N/A",
+      "expected_hits": "0（加密 PDF 无 OCR 内容）",
+      "sha256": "1fc0066b1de049e674568e145cb003a303d36d7a8d5a6552cce30a6a22aa4c27"
+    },
+    {
+      "fixture_id": "large-350-page",
+      "format": "PDF",
+      "synthetic": true,
+      "layout": "空白页",
+      "degradation": "大任务（350 页空白 PDF）",
+      "pages": 350,
+      "expected_search_term": "N/A（空白页无 OCR 内容，用于性能/恢复验收）",
+      "expected_hits": "0",
+      "sha256": "8edeea40d71803e5bbc5fa243cab0dbbbbfdab1a6ad3d3bd5d894f09608369b4"
+    }
+  ]
+}
