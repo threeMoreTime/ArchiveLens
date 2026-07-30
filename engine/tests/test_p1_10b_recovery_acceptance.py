@@ -1,29 +1,33 @@
-"""P1-10B: 七类异常恢复验收。
+"""P1-10B-A: SlowFake 调度回归基线测试。
 
-用 SlowFake 模式（快速假处理器）验证七个恢复场景。
-所有场景使用合成 fixture，不依赖真实 OCR 推理。
+诚实定位：这些测试用 SlowFake 模式（假处理器）验证 Engine 内部任务调度的正确性，
+不覆盖系统级恢复（强制结束 Electron/Engine 进程、磁盘不足、权限错误、导出中断等）。
 
-场景覆盖：
-1. 正常暂停与恢复（无重复 OCR）
-2. 扫描中正常退出（数据库完整）
-3. 强制结束进程（模拟：cancel + reload）
-4. 损坏文件处理（部分失败，其他文件继续）
-5. 权限错误（只读/无权限模拟）
-6. 磁盘不足（模拟：结构化错误检查）
-7. 导出中断与恢复（作业标记 interrupted，可重新导出）
+系统级恢复验收需要真实打包制品（Setup/Portable/win-unpacked）和操作系统级操作，
+属于 P1-10B-B 范围，不在本文件中声称覆盖。
 
-注意：场景 3/4/5/6 在 Python 单元测试层模拟（不启动真实 Electron 进程），
-因为强制结束/磁盘满需要系统级操作。
+本文件验证的 SlowFake 调度行为：
+1. 任务创建→启动→完成全流程
+2. processed_pages 单调递增（不回退）
+3. 数据库 integrity_check 通过
+4. 来源文件 SHA-256 不变
+5. 损坏文件在 preflight 被拦截（VALIDATION_ERROR）
+6. 任务取消后状态正确
+7. JSON 导出可用
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
+
+from archivelens_engine.protocol import ErrorCode, ProtocolError
 
 
 def _create_test_image(dir_path: Path, name: str = "test.png") -> Path:
@@ -34,8 +38,12 @@ def _create_test_image(dir_path: Path, name: str = "test.png") -> Path:
     return dir_path / name
 
 
-class P1_10B_RecoveryAcceptanceTests(unittest.TestCase):
-    """P1-10B 七类异常恢复验收。"""
+class P1_10B_SlowFakeRegressionTests(unittest.TestCase):
+    """SlowFake 调度回归基线。
+
+    注意：这些是 Engine 内部调度回归测试，不是系统级恢复验收。
+    所有断言精确检查预期行为，不使用 except Exception: PASS 模式。
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -43,7 +51,6 @@ class P1_10B_RecoveryAcceptanceTests(unittest.TestCase):
         with patch.dict(os.environ, {"AL_SLOWFAKE_PAGES": "10", "AL_SLOWFAKE_PAGE_DELAY_MS": "200"}, clear=False):
             from archivelens_engine.server import Server
             cls.server = Server(workspace_root=cls._tmpdir.name)
-        cls.results = {}
 
     @classmethod
     def tearDownClass(cls):
@@ -52,210 +59,137 @@ class P1_10B_RecoveryAcceptanceTests(unittest.TestCase):
         finally:
             cls._tmpdir.cleanup()
 
-    # --- 场景 1: 正常暂停与恢复 ---
-    def test_01_pause_resume_no_duplicate_ocr(self):
-        """暂停后恢复，已处理页不重复 OCR。SlowFake 10 页 × 200ms = 2s，有窗口暂停。"""
-        src = Path(self._tmpdir.name) / "src_pause"
-        src.mkdir()
+    def _wait_for_terminal_status(self, task_id: str, timeout_s: float = 30.0) -> dict:
+        """轮询等待任务到达终态，返回最终 task dict。"""
+        deadline = time.perf_counter() + timeout_s
+        while time.perf_counter() < deadline:
+            task = self.server.handlers["tasks.get"](self.server, {"task_id": task_id})
+            if task["status"] in ("completed", "failed", "cancelled"):
+                return task
+            time.sleep(0.3)
+        # 返回当前状态（调用者断言终态）
+        return self.server.handlers["tasks.get"](self.server, {"task_id": task_id})
+
+    # --- 测试 1: 任务全流程完整性 ---
+    def test_01_task_lifecycle_completed(self):
+        """SlowFake 任务：创建→启动→completed，processed_pages = total_pages。"""
+        src = Path(self._tmpdir.name) / "src_lifecycle"
+        src.mkdir(exist_ok=True)
         _create_test_image(src)
 
         create_result = self.server.handlers["tasks.create"](
-            self.server,
-            {"source_dir": str(src), "search_text": "档"},
+            self.server, {"source_dir": str(src), "search_text": "档"},
+        )
+        task_id = create_result["task_id"]
+        self.assertEqual(create_result["status"], "draft")
+
+        start_result = self.server.handlers["tasks.start"](self.server, {"task_id": task_id})
+        self.assertEqual(start_result["status"], "running")
+
+        task = self._wait_for_terminal_status(task_id, timeout_s=15)
+        self.assertEqual(task["status"], "completed", f"任务未完成: {task['status']}")
+        self.assertEqual(task["processed_pages"], task["total_pages"], "processed != total")
+
+    # --- 测试 2: processed_pages 单调递增 ---
+    def test_02_processed_pages_monotonic(self):
+        """任务运行中 processed_pages 只增不减。"""
+        src = Path(self._tmpdir.name) / "src_monotonic"
+        src.mkdir(exist_ok=True)
+        _create_test_image(src)
+
+        create_result = self.server.handlers["tasks.create"](
+            self.server, {"source_dir": str(src), "search_text": "档"},
         )
         task_id = create_result["task_id"]
         self.server.handlers["tasks.start"](self.server, {"task_id": task_id})
 
-        import time
-
-        # 等待任务进入 running，然后暂停
-        processed_before = 0
-        resumed = False
-        for _ in range(10):
+        last_processed = 0
+        for _ in range(30):
             time.sleep(0.2)
             task = self.server.handlers["tasks.get"](self.server, {"task_id": task_id})
-            if task["status"] == "running" and task.get("processed_pages", 0) > 0:
-                processed_before = task["processed_pages"]
-                try:
-                    self.server.handlers["tasks.pause"](self.server, {"task_id": task_id})
-                    time.sleep(0.5)  # 等 pausing→paused
-                    task_paused = self.server.handlers["tasks.get"](self.server, {"task_id": task_id})
-                    if task_paused["status"] in ("paused", "pausing"):
-                        self.server.handlers["tasks.resume"](self.server, {"task_id": task_id})
-                        resumed = True
-                except Exception:
-                    pass  # 状态转走或已完成
+            current = task.get("processed_pages", 0)
+            self.assertGreaterEqual(current, last_processed,
+                                    f"processed_pages 回退: {last_processed} → {current}")
+            last_processed = current
+            if task["status"] in ("completed", "failed", "cancelled"):
                 break
 
-        # 等待任务最终完成
-        time.sleep(5)
-        task_final = self.server.handlers["tasks.get"](self.server, {"task_id": task_id})
-
-        # 关键断言：processed_pages 只增不减
-        self.assertGreaterEqual(
-            task_final.get("processed_pages", 0),
-            processed_before,
-            "恢复后 processed_pages 不应回退",
-        )
-        # 任务不卡在异常状态
-        self.assertIn(task_final["status"], ("completed", "running"))
-
-        self.results["01_pause_resume"] = f"PASS (resumed={resumed}, pages={task_final.get('processed_pages', 0)})"
-
-    # --- 场景 2: 数据库完整性 ---
-    def test_02_database_integrity_check(self):
-        """数据库 integrity_check 通过。"""
+    # --- 测试 3: 数据库 integrity_check ---
+    def test_03_database_integrity(self):
+        """数据库 integrity_check 返回 ok。"""
         result = self.server.store.conn.execute("PRAGMA integrity_check").fetchone()
-        self.assertEqual(result[0], "ok", f"数据库 integrity_check 失败: {result[0]}")
-        self.results["02_db_integrity"] = "PASS"
+        self.assertEqual(result[0], "ok", f"integrity_check 失败: {result[0]}")
 
-    # --- 场景 3: 强制结束模拟（cancel） ---
-    def test_03_force_cancel_task(self):
-        """取消任务后状态正确，数据库完整。"""
-        src = Path(self._tmpdir.name) / "src_cancel"
-        src.mkdir()
-        _create_test_image(src)
+    # --- 测试 4: 来源文件 SHA-256 不变 ---
+    def test_04_source_file_integrity(self):
+        """任务处理前后来源文件 SHA-256 不变。"""
+        src = Path(self._tmpdir.name) / "src_integrity"
+        src.mkdir(exist_ok=True)
+        test_img = _create_test_image(src, "integrity_check.png")
+        original_sha = hashlib.sha256(test_img.read_bytes()).hexdigest()
 
         create_result = self.server.handlers["tasks.create"](
-            self.server,
-            {"source_dir": str(src), "search_text": "档"},
+            self.server, {"source_dir": str(src), "search_text": "档"},
         )
         task_id = create_result["task_id"]
         self.server.handlers["tasks.start"](self.server, {"task_id": task_id})
+        self._wait_for_terminal_status(task_id, timeout_s=15)
 
-        import time
-        time.sleep(1)
+        after_sha = hashlib.sha256(test_img.read_bytes()).hexdigest()
+        self.assertEqual(original_sha, after_sha, "来源文件被修改")
+
+    # --- 测试 5: 损坏文件被 preflight 拦截 ---
+    def test_05_corrupt_file_preflight_blocked(self):
+        """损坏文件（零字节 PNG）在 tasks.create 被 preflight 拦截（VALIDATION_ERROR）。"""
+        src = Path(self._tmpdir.name) / "src_corrupt"
+        src.mkdir(exist_ok=True)
+        _create_test_image(src, "good.png")
+        (src / "corrupt.png").write_bytes(b"")  # 零字节
+
+        with self.assertRaises(ProtocolError) as ctx:
+            self.server.handlers["tasks.create"](
+                self.server, {"source_dir": str(src), "search_text": "档"},
+            )
+        self.assertEqual(ctx.exception.code, ErrorCode.VALIDATION_ERROR)
+
+    # --- 测试 6: 任务取消后数据库完整 ---
+    def test_06_cancel_preserves_database(self):
+        """取消任务后数据库 integrity_check 仍为 ok。"""
+        src = Path(self._tmpdir.name) / "src_cancel"
+        src.mkdir(exist_ok=True)
+        _create_test_image(src)
+
+        create_result = self.server.handlers["tasks.create"](
+            self.server, {"source_dir": str(src), "search_text": "档"},
+        )
+        task_id = create_result["task_id"]
+        self.server.handlers["tasks.start"](self.server, {"task_id": task_id})
+        time.sleep(0.5)
 
         cancel_result = self.server.handlers["tasks.cancel"](self.server, {"task_id": task_id})
         self.assertIn(cancel_result["status"], ("stopping", "cancelled", "completed"))
 
-        # 数据库仍完整
         result = self.server.store.conn.execute("PRAGMA integrity_check").fetchone()
         self.assertEqual(result[0], "ok")
 
-        self.results["03_force_cancel"] = "PASS"
-
-    # --- 场景 4: 损坏文件处理 ---
-    def test_04_corrupt_file_partial_failure(self):
-        """损坏文件在 preflight 被正确拦截（VALIDATION_ERROR），保护用户。"""
-        src = Path(self._tmpdir.name) / "src_corrupt"
-        src.mkdir()
-        # 正常文件
-        _create_test_image(src, "good.png")
-        # 损坏文件（零字节）
-        (src / "corrupt.png").write_bytes(b"")
-
-        # preflight 应拦截含损坏文件的源
-        from archivelens_engine.protocol import ErrorCode, ProtocolError
-        try:
-            self.server.handlers["tasks.create"](
-                self.server,
-                {"source_dir": str(src), "search_text": "档"},
-            )
-            # 如果没被拦截（某些 preflight 版本允许），验证任务仍能完成
-            # 这种情况下也 PASS（任务不卡死）
-            self.results["04_corrupt_file"] = "PASS (allowed, no block)"
-        except ProtocolError as e:
-            # 正确行为：preflight 拦截无效文件
-            self.assertEqual(e.code, ErrorCode.VALIDATION_ERROR)
-            self.results["04_corrupt_file"] = "PASS (preflight blocked)"
-
-    # --- 场景 5: 加密 PDF 处理 ---
-    def test_05_encrypted_pdf_handling(self):
-        """加密 PDF 被正确识别为不可处理。"""
-        encrypted_pdf = Path("tests/fixtures/p1-10b-synthetic/encrypted-blank.pdf")
-        if not encrypted_pdf.exists():
-            self.skipTest("加密 PDF fixture 不存在")
-
-        src = Path(self._tmpdir.name) / "src_encrypted"
-        src.mkdir()
-        # 复制加密 PDF
-        import shutil
-        shutil.copy2(encrypted_pdf, src / "encrypted.pdf")
-        # 添加一个正常文件确保任务可继续
-        _create_test_image(src, "good.png")
-
-        try:
-            create_result = self.server.handlers["tasks.create"](
-                self.server,
-                {"source_dir": str(src), "search_text": "档"},
-            )
-            task_id = create_result["task_id"]
-            self.server.handlers["tasks.start"](self.server, {"task_id": task_id})
-
-            import time
-            time.sleep(3)
-
-            task = self.server.handlers["tasks.get"](self.server, {"task_id": task_id})
-            # 任务不卡死
-            self.assertIn(task["status"], ("completed", "running", "failed"))
-
-            self.results["05_encrypted_pdf"] = "PASS"
-        except Exception as e:
-            # 如果 Engine 正确拒绝加密 PDF（VALIDATION_ERROR），也是 PASS
-            self.results["05_encrypted_pdf"] = f"PASS (rejected: {type(e).__name__})"
-
-    # --- 场景 6: 来源文件不被修改 ---
-    def test_06_source_files_not_modified(self):
-        """来源文件 SHA-256 在任务前后不变。"""
-        import hashlib
-
-        src = Path(self._tmpdir.name) / "src_integrity"
-        src.mkdir()
-        test_img = _create_test_image(src, "integrity.png")
-
-        # 记录原始 SHA
-        original_sha = hashlib.sha256(test_img.read_bytes()).hexdigest()
-
-        # 创建 + 运行任务
-        create_result = self.server.handlers["tasks.create"](
-            self.server,
-            {"source_dir": str(src), "search_text": "档"},
-        )
-        task_id = create_result["task_id"]
-        self.server.handlers["tasks.start"](self.server, {"task_id": task_id})
-
-        import time
-        time.sleep(3)
-
-        # 验证 SHA 不变
-        after_sha = hashlib.sha256(test_img.read_bytes()).hexdigest()
-        self.assertEqual(original_sha, after_sha, "来源文件被修改！")
-
-        self.results["06_source_integrity"] = "PASS"
-
-    # --- 场景 7: 导出可用性 ---
-    def test_07_export_availability(self):
-        """任务完成后可导出（JSON + HTML）。"""
-        # 找一个已完成的任务
+    # --- 测试 7: JSON 导出可用 ---
+    def test_07_json_export_available(self):
+        """已完成任务可执行 JSON 导出，返回 path 字段。"""
+        # 查找已完成的任务
         tasks_list = self.server.handlers["tasks.list"](self.server, {"limit": 10})
-        completed_task = None
+        completed_task_id = None
         for item in tasks_list.get("items", []):
             if item.get("status") == "completed":
-                completed_task = item
+                completed_task_id = item["task_id"]
                 break
 
-        if not completed_task:
-            self.skipTest("无已完成任务可用于导出验收")
+        if not completed_task_id:
+            self.skipTest("无已完成任务可用于导出测试")
 
-        task_id = completed_task["task_id"]
-
-        # 验证 results.query 可用
-        results = self.server.handlers["results.query"](
-            self.server, {"task_id": task_id, "limit": 10}
+        export_result = self.server.handlers["export.json"](
+            self.server, {"task_id": completed_task_id},
         )
-        self.assertEqual(results["task_id"], task_id)
-
-        # 验证 export.json 可用（同步导出）
-        try:
-            export_result = self.server.handlers["export.json"](
-                self.server, {"task_id": task_id}
-            )
-            self.assertIn("path", export_result)
-            self.results["07_export"] = "PASS"
-        except Exception as e:
-            # 如果无命中可导出，也是合理的
-            self.results["07_export"] = f"PASS (no hits: {type(e).__name__})"
+        self.assertIn("path", export_result, "导出结果缺少 path 字段")
 
 
 if __name__ == "__main__":

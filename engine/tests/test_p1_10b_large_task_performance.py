@@ -1,14 +1,10 @@
-"""P1-10B: 300+ 页大任务性能验收。
+"""P1-10B-A: SlowFake 大任务调度回归基线。
 
-使用 350 页合成 PDF（空白页）+ SlowFake 模式验证大任务的：
-- 任务创建/启动
-- 处理完整性（350 页全部处理）
-- 数据库完整性
-- 耗时记录
-- 来源文件不变
+诚实定位：使用 SlowFake 模式（假处理器）验证 Engine 对 350 页任务的处理完整性，
+不覆盖真实打包制品的 OCR 推理性能。
 
-注意：SlowFake 不执行真实 OCR，耗时数据反映 Engine 调度性能（非 OCR 推理性能）。
-真实 OCR 性能需用打包制品的完整 release gate smoke。
+真实打包制品性能验收（每页 OCR 耗时、P50/P95、峰值内存、CPU 等）
+需要用 Setup/Portable/win-unpacked 的真实 Engine，属于 P1-10B-B 范围。
 """
 from __future__ import annotations
 

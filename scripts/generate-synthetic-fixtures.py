@@ -124,10 +124,14 @@ def sha256_file(path: Path) -> str:
 
 manifest = []
 
-# === 1. 繁体竖排 ===
-for idx in range(3):
+# === 1. 繁体竖排（每张不同内容）===
+vertical_texts = [
+    ["清朝檔案管理制度", "乾隆年間檔案彙編"],
+    ["歷史文獻保存規範", "故宫博物院藏品"],
+    ["四庫全書編纂紀要", "軍機處檔案整理"],
+]
+for idx, lines in enumerate(vertical_texts):
     img = make_text_image()
-    lines = ["清朝檔案管理制度", "乾隆年間檔案彙編", "歷史文獻保存規範"]
     draw_vertical_text(img, lines)
     path = OUTPUT_DIR / f"traditional-vertical-{idx+1}.png"
     img.save(path, "PNG")
@@ -139,16 +143,18 @@ for idx in range(3):
         "degradation": "清晰",
         "pages": 1,
         "expected_search_term": "檔案管理",
-        "expected_hits": ">=1",
+        "expected_hits": {"term": "檔案管理", "min_hits": 1, "allowed_missing": 0},
         "sha256": sha256_file(path),
     })
 
-# === 2. 双栏/多栏 ===
-for idx in range(3):
+# === 2. 双栏/多栏（每张不同列数/内容）===
+multicolumn_sets = [
+    [["档案管理制度", "第一条"], ["历史文献保存", "第二条"]],
+    [["档案管理", "第一条"], ["历史文献", "第二条"], ["附录条款", "补充"]],
+    [["档案管理制度规定", "实施细则"], ["保存管理办法", "附则"]],
+]
+for idx, cols in enumerate(multicolumn_sets):
     img = make_text_image()
-    cols = [["档案管理制度", "第一条规定"], ["历史文献保存", "第二条规定"]]
-    if idx >= 1:
-        cols.append(["附录条款", "补充说明"])
     draw_multicolumn(img, cols, font_size=28)
     path = OUTPUT_DIR / f"multicolumn-{idx+1}.png"
     img.save(path, "PNG")
@@ -160,15 +166,19 @@ for idx in range(3):
         "degradation": "清晰",
         "pages": 1,
         "expected_search_term": "档案管理",
-        "expected_hits": ">=1",
+        "expected_hits": {"term": "档案管理", "min_hits": 1, "allowed_missing": 0},
         "sha256": sha256_file(path),
     })
 
-# === 3. 低对比度 ===
-for idx in range(2):
+# === 3. 低对比度（每张不同对比度/文字）===
+contrast_texts = [
+    (["档案管理低对比度", "历史文献"], 0.25),
+    (["模糊扫描测试样本", "文献保存"], 0.35),
+]
+for idx, (lines, factor) in enumerate(contrast_texts):
     img = make_text_image()
-    draw_horizontal_text(img, ["档案管理低对比度测试", "历史文献模糊扫描"], color="gray")
-    img = add_low_contrast(img)
+    draw_horizontal_text(img, lines, color="gray")
+    img = img.point(lambda v: 128 + (v - 128) * factor)
     path = OUTPUT_DIR / f"low-contrast-{idx+1}.png"
     img.save(path, "PNG")
     manifest.append({
@@ -176,17 +186,22 @@ for idx in range(2):
         "format": "PNG",
         "synthetic": True,
         "layout": "简体横排",
-        "degradation": "低对比度",
+        "degradation": f"低对比度(factor={factor})",
         "pages": 1,
         "expected_search_term": "档案管理",
-        "expected_hits": ">=0（低对比度可能 OCR 失败）",
+        "expected_hits": {"term": "档案管理", "min_hits": 0, "allowed_missing": 1, "note": "低对比度可能 OCR 失败"},
         "sha256": sha256_file(path),
     })
 
-# === 4. 倾斜/旋转 ===
-for idx, angle in enumerate([5.0, 10.0, -8.0]):
+# === 4. 倾斜/旋转（每张不同角度和文字）===
+rotated_sets = [
+    (["档案管理倾斜测试", "历史文献"], 5.0),
+    (["文献保存旋转样本", "管理制度"], 10.0),
+    (["档案整理工作规范", "清点检查"], -8.0),
+]
+for idx, (lines, angle) in enumerate(rotated_sets):
     img = make_text_image()
-    draw_horizontal_text(img, ["档案管理倾斜测试", "历史文献旋转扫描"])
+    draw_horizontal_text(img, lines)
     img = rotate(img, angle)
     path = OUTPUT_DIR / f"rotated-synthetic-{idx+1}.png"
     img.save(path, "PNG")
@@ -198,15 +213,19 @@ for idx, angle in enumerate([5.0, 10.0, -8.0]):
         "degradation": f"倾斜{angle}度",
         "pages": 1,
         "expected_search_term": "档案管理",
-        "expected_hits": ">=0（倾斜可能影响 OCR）",
+        "expected_hits": {"term": "档案管理", "min_hits": 0, "allowed_missing": 1, "note": f"倾斜{angle}度可能影响 OCR"},
         "sha256": sha256_file(path),
     })
 
-# === 5. 污渍/噪声 ===
-for idx in range(2):
+# === 5. 污渍/噪声（每张不同噪声强度和文字）===
+noise_sets = [
+    (["档案管理噪声测试", "历史文献"], 30),
+    (["文献保存污渍扫描", "管理制度"], 50),
+]
+for idx, (lines, intensity) in enumerate(noise_sets):
     img = make_text_image()
-    draw_horizontal_text(img, ["档案管理噪声测试", "历史文献污渍扫描"])
-    img = add_noise(img, intensity=40)
+    draw_horizontal_text(img, lines)
+    img = add_noise(img, intensity=intensity)
     path = OUTPUT_DIR / f"noise-{idx+1}.png"
     img.save(path, "PNG")
     manifest.append({
@@ -214,10 +233,10 @@ for idx in range(2):
         "format": "PNG",
         "synthetic": True,
         "layout": "简体横排",
-        "degradation": "污渍/噪声",
+        "degradation": f"污渍/噪声(intensity={intensity})",
         "pages": 1,
         "expected_search_term": "档案管理",
-        "expected_hits": ">=0（噪声可能影响 OCR）",
+        "expected_hits": {"term": "档案管理", "min_hits": 0, "allowed_missing": 1, "note": f"噪声强度{intensity}可能影响 OCR"},
         "sha256": sha256_file(path),
     })
 
