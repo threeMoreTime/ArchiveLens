@@ -39,3 +39,4 @@ coverage/
 .vscode/
 .idea/
 *.log
+.zcode/

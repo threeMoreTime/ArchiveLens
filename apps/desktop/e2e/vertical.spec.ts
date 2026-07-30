@@ -60,17 +60,20 @@ test("E2E-2 体验示例进入校对工作台", async () => {
 
 test("E2E-3 校对状态修改与持久化", async () => {
   await win.locator(".al-result-item").first().click();
-  await win.getByRole("button", { name: "确认命中 (A)" }).click();
-  await expect(win.locator(".al-review-aside")).toHaveAttribute("aria-label", /已校对 1/);
+  // 按钮文案为 "确认 A"（shortcutLabel 返回快捷键标签），用 title 精确匹配。
+  await win.getByTitle(/确认命中/).click();
+  // 当前 UI 用 al-review-progress-summary + aria-label="已审核 X，共 Y 条"
+  await expect(win.locator(".al-review-progress-summary")).toHaveAttribute("aria-label", /已审核 1/);
   // 重载验证持久化（SQLite）
   await win.reload();
   await win.waitForLoadState("domcontentloaded");
   await expect(win.locator(".al-result-item").first()).toBeVisible({ timeout: 30_000 });
-  await expect(win.locator(".al-review-aside")).toHaveAttribute("aria-label", /已校对 1/);
+  await expect(win.locator(".al-review-progress-summary")).toHaveAttribute("aria-label", /已审核 1/);
 });
 
 test("E2E-4 导出中心生成 HTML 并保持应用可用", async () => {
-  await win.getByRole("button", { name: "导出中心" }).click();
+  // 当前 UI 导出按钮文案为 "导出"（非 "导出中心"）。
+  await win.getByRole("button", { name: "导出" }).click();
   await win.waitForURL(/#\/export\//);
   await expect(win.getByRole("heading", { name: "导出结果" })).toBeVisible();
   await win.getByRole("radio", { name: /HTML 审阅报告/ }).click();
