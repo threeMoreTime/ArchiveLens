@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-30",
   "synthetic": true,
-  "description": "P1-10B 合成验收 fixture。所有样本为 SYNTHETIC，不声称是真实档案。",
+  "description": "P1-10B 合成验收 fixture。所有样本为 SYNTHETIC，不声称是真实档案。固定随机种子确保可重复生成。",
   "font": "C:/Windows/Fonts/msyh.ttc",
+  "random_seed": 42,
+  "fixture_count": 19,
   "fixtures": [
     {
       "fixture_id": "traditional-vertical-1",
@@ -12,7 +13,7 @@
       "layout": "繁体竖排",
       "degradation": "清晰",
       "pages": 1,
-      "expected_search_term": "檔案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "檔案管理",
         "min_hits": 1,
@@ -27,7 +28,7 @@
       "layout": "繁体竖排",
       "degradation": "清晰",
       "pages": 1,
-      "expected_search_term": "檔案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "檔案管理",
         "min_hits": 1,
@@ -42,7 +43,7 @@
       "layout": "繁体竖排",
       "degradation": "清晰",
       "pages": 1,
-      "expected_search_term": "檔案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "檔案管理",
         "min_hits": 1,
@@ -57,7 +58,7 @@
       "layout": "双栏或多栏",
       "degradation": "清晰",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 1,
@@ -72,7 +73,7 @@
       "layout": "双栏或多栏",
       "degradation": "清晰",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 1,
@@ -87,7 +88,7 @@
       "layout": "双栏或多栏",
       "degradation": "清晰",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 1,
@@ -102,12 +103,12 @@
       "layout": "简体横排",
       "degradation": "低对比度(factor=0.25)",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 0,
         "allowed_missing": 1,
-        "note": "低对比度可能 OCR 失败"
+        "note": "低对比度 factor=0.25 可能 OCR 失败"
       },
       "sha256": "a06a54147bcf4ceff69f35e28c114fcaf4aa7ec45453a13256b09e14ce8e88b4"
     },
@@ -118,12 +119,12 @@
       "layout": "简体横排",
       "degradation": "低对比度(factor=0.35)",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 0,
         "allowed_missing": 1,
-        "note": "低对比度可能 OCR 失败"
+        "note": "低对比度 factor=0.35 可能 OCR 失败"
       },
       "sha256": "316ad759b4d21f3a4b7d50eed8dfd1d02556b8603863c4b2a81f0878392ced2e"
     },
@@ -134,7 +135,7 @@
       "layout": "简体横排",
       "degradation": "倾斜5.0度",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 0,
@@ -150,7 +151,7 @@
       "layout": "简体横排",
       "degradation": "倾斜10.0度",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 0,
@@ -166,7 +167,7 @@
       "layout": "简体横排",
       "degradation": "倾斜-8.0度",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 0,
@@ -182,14 +183,14 @@
       "layout": "简体横排",
       "degradation": "污渍/噪声(intensity=30)",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 0,
         "allowed_missing": 1,
         "note": "噪声强度30可能影响 OCR"
       },
-      "sha256": "40b51bcadc019d024e86642ad1756c1738414db180c0210f537c5bb443c63025"
+      "sha256": "d41b9034e8b69b5efa4255aa69dc30275efcb9f09e7b567e3f1a8da4f445629a"
     },
     {
       "fixture_id": "noise-2",
@@ -198,14 +199,14 @@
       "layout": "简体横排",
       "degradation": "污渍/噪声(intensity=50)",
       "pages": 1,
-      "expected_search_term": "档案管理",
+      "expected_task_result": "completed",
       "expected_hits": {
         "term": "档案管理",
         "min_hits": 0,
         "allowed_missing": 1,
         "note": "噪声强度50可能影响 OCR"
       },
-      "sha256": "5adf340d665629a2a5c0427c498d174f02931ac6ca4391de3f2522c8cd23a017"
+      "sha256": "9d262f13be3377af9c484b0b21aa0247ac6c72f8a010f96c6d3bdb50d4ec09f2"
     },
     {
       "fixture_id": "long-unicode-path-1",
@@ -214,8 +215,12 @@
       "layout": "简体横排",
       "degradation": "清晰",
       "pages": 1,
-      "expected_search_term": "档案管理",
-      "expected_hits": ">=1",
+      "expected_task_result": "completed",
+      "expected_hits": {
+        "term": "档案管理",
+        "min_hits": 1,
+        "allowed_missing": 0
+      },
       "sha256": "d1c47a0fe3b31ab558dc54c676ec2700ef933f3081bad41462286e7a6134f005",
       "special_filename": "档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理.png"
     },
@@ -226,8 +231,12 @@
       "layout": "简体横排",
       "degradation": "清晰",
       "pages": 1,
-      "expected_search_term": "档案管理",
-      "expected_hits": ">=1",
+      "expected_task_result": "completed",
+      "expected_hits": {
+        "term": "档案管理",
+        "min_hits": 1,
+        "allowed_missing": 0
+      },
       "sha256": "a5ad635b946d7c9397b8ec20e3b0785b26af95f17d87465fa84b869529cfb079",
       "special_filename": "档案【特殊】#%&@测试.png"
     },
@@ -238,8 +247,14 @@
       "layout": "N/A",
       "degradation": "损坏文件（截断 PNG）",
       "pages": 0,
-      "expected_search_term": "N/A",
-      "expected_hits": "0（损坏文件应失败）",
+      "expected_task_result": "rejected",
+      "expected_error_code": "VALIDATION_ERROR",
+      "expected_hits": {
+        "term": null,
+        "min_hits": 0,
+        "allowed_missing": 0,
+        "note": "异常文件不产生 OCR 结果"
+      },
       "sha256": "89754d34217cd6b7828fe333b27b1bcd82d955ef9559c6a2a886a232565b4984"
     },
     {
@@ -249,8 +264,14 @@
       "layout": "N/A",
       "degradation": "损坏文件（零字节）",
       "pages": 0,
-      "expected_search_term": "N/A",
-      "expected_hits": "0（损坏文件应失败）",
+      "expected_task_result": "rejected",
+      "expected_error_code": "VALIDATION_ERROR",
+      "expected_hits": {
+        "term": null,
+        "min_hits": 0,
+        "allowed_missing": 0,
+        "note": "异常文件不产生 OCR 结果"
+      },
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
@@ -260,8 +281,14 @@
       "layout": "空白页",
       "degradation": "加密 PDF（密码 test123）",
       "pages": 1,
-      "expected_search_term": "N/A",
-      "expected_hits": "0（加密 PDF 无 OCR 内容）",
+      "expected_task_result": "rejected",
+      "expected_error_code": "UNSUPPORTED_FILE",
+      "expected_hits": {
+        "term": null,
+        "min_hits": 0,
+        "allowed_missing": 0,
+        "note": "加密 PDF 无 OCR 内容"
+      },
       "sha256": "1fc0066b1de049e674568e145cb003a303d36d7a8d5a6552cce30a6a22aa4c27"
     },
     {
@@ -271,8 +298,13 @@
       "layout": "空白页",
       "degradation": "大任务（350 页空白 PDF）",
       "pages": 350,
-      "expected_search_term": "N/A（空白页无 OCR 内容，用于性能/恢复验收）",
-      "expected_hits": "0",
+      "expected_task_result": "completed",
+      "expected_hits": {
+        "term": null,
+        "min_hits": 0,
+        "allowed_missing": 0,
+        "note": "空白页无 OCR 内容，用于性能/恢复验收"
+      },
       "sha256": "8edeea40d71803e5bbc5fa243cab0dbbbbfdab1a6ad3d3bd5d894f09608369b4"
     }
   ]
