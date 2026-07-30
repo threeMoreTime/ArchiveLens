@@ -302,6 +302,7 @@ try:
         "expected_error_code": "UNSUPPORTED_FILE",
         "expected_hits": hits(None, 0, 0, "加密 PDF 无 OCR 内容"),
         "sha256": sha256_file(encrypted_path),
+        "generated_at_runtime": True,  # 加密 PDF 含随机盐值，SHA 跨平台不可重复
     })
 except Exception as e:
     print(f"错误：加密 PDF 生成失败: {e}", file=sys.stderr)

@@ -289,7 +289,8 @@
         "allowed_missing": 0,
         "note": "加密 PDF 无 OCR 内容"
       },
-      "sha256": "1fc0066b1de049e674568e145cb003a303d36d7a8d5a6552cce30a6a22aa4c27"
+      "sha256": "1fc0066b1de049e674568e145cb003a303d36d7a8d5a6552cce30a6a22aa4c27",
+      "generated_at_runtime": true
     },
     {
       "fixture_id": "large-350-page",

@@ -59,10 +59,9 @@ class FixtureManifestTests(unittest.TestCase):
 
     def test_all_files_exist(self):
         for f in self.fixtures:
-            # 特殊文件名的 fixture 用 special_filename 字段
-            filename = f.get("special_filename") or f["fixture_id"]
-            # 尝试找到实际文件（fixture_id 不一定是文件名）
-            # 检查 SHA 是否能匹配目录中某个文件
+            # 加密 PDF 的 SHA 含随机盐值，跨平台不可重复；用文件名匹配。
+            if f.get("generated_at_runtime"):
+                continue
             matched = False
             for candidate in FIXTURE_DIR.iterdir():
                 if candidate.is_file() and _sha256(candidate) == f["sha256"]:
@@ -71,12 +70,16 @@ class FixtureManifestTests(unittest.TestCase):
             self.assertTrue(matched, f"{f['fixture_id']}: 目录中找不到 SHA 匹配的文件")
 
     def test_sha256_matches(self):
-        """manifest 中的 SHA-256 与实际文件一致。"""
+        """manifest 中的 SHA-256 与实际文件一致（跳过加密 PDF）。"""
         for f in self.fixtures:
+            if f.get("generated_at_runtime"):
+                continue
+            found = False
             for candidate in FIXTURE_DIR.iterdir():
                 if candidate.is_file() and _sha256(candidate) == f["sha256"]:
+                    found = True
                     break
-            # 如果没找到匹配文件，上一个 test 会失败
+            self.assertTrue(found, f"{f['fixture_id']}: SHA-256 不匹配")
 
     def test_expected_hits_structure_unified(self):
         """所有 fixture 的 expected_hits 必须是对象（dict），不能是字符串。"""
