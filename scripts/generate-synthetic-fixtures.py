@@ -23,6 +23,8 @@ from PIL import Image, ImageDraw, ImageFont
 # 固定随机种子，确保噪声 fixture 可重复生成（相同 SHA）。
 RNG = random.Random(42)
 
+SEARCH_TERM = "档案管理"
+
 OUTPUT_DIR = Path("tests/fixtures/p1-10b-synthetic")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -330,8 +332,55 @@ except Exception as e:
     print(f"错误：大任务 PDF 生成失败: {e}", file=sys.stderr)
     sys.exit(1)
 
+# === 11. 350 页真实文字 PDF（独立生成器产出，这里只注册 manifest 条目）===
+real_pdf_path = OUTPUT_DIR / "real-text-350-page.pdf"
+real_truth_path = OUTPUT_DIR / "real-text-350-source-truth.json"
+if not real_pdf_path.exists():
+    print("错误：350 页真实文字 PDF 不存在，请先运行 generate-real-text-pdf.py", file=sys.stderr)
+    sys.exit(1)
+manifest.append({
+    "fixture_id": "real-text-350-page",
+    "relative_path": "real-text-350-page.pdf",
+    "format": "PDF", "synthetic": True, "layout": "混合（简体/繁体/横排/竖排）",
+    "degradation": "清晰（35 个不同模板的真实渲染文字）", "pages": 350,
+    "expected_task_result": "completed",
+    "expected_hits": hits(SEARCH_TERM, 1, 0, "每页至少包含一次检索词"),
+    "sha256": sha256_file(real_pdf_path),
+    "source_truth": "real-text-350-source-truth.json",
+    "generated_at_runtime": True,
+})
+
+# === 统一补充 relative_path ===
+# 为所有 fixture 补充 relative_path（如果尚未设置）
+# 用 fixture_id 到已知文件名的映射
+FIXTURE_FILENAMES = {
+    "traditional-vertical-1": "traditional-vertical-1.png",
+    "traditional-vertical-2": "traditional-vertical-2.png",
+    "traditional-vertical-3": "traditional-vertical-3.png",
+    "multicolumn-1": "multicolumn-1.png",
+    "multicolumn-2": "multicolumn-2.png",
+    "multicolumn-3": "multicolumn-3.png",
+    "low-contrast-1": "low-contrast-1.png",
+    "low-contrast-2": "low-contrast-2.png",
+    "rotated-synthetic-1": "rotated-synthetic-1.png",
+    "rotated-synthetic-2": "rotated-synthetic-2.png",
+    "rotated-synthetic-3": "rotated-synthetic-3.png",
+    "noise-1": "noise-1.png",
+    "noise-2": "noise-2.png",
+    "long-unicode-path-1": "档案管理" * 20 + ".png",
+    "special-chars-filename-1": "档案【特殊】#%&@测试.png",
+    "corrupt-truncated-1": "corrupt-truncated.png",
+    "corrupt-zero-byte-1": "corrupt-zero-byte.png",
+    "encrypted-pdf-1": "encrypted-blank.pdf",
+    "large-350-page": "large-350-page.pdf",
+    "real-text-350-page": "real-text-350-page.pdf",
+}
+for f in manifest:
+    if "relative_path" not in f:
+        f["relative_path"] = FIXTURE_FILENAMES.get(f["fixture_id"], f["fixture_id"])
+
 # === 写入 manifest ===
-EXPECTED_FIXTURE_COUNT = 19
+EXPECTED_FIXTURE_COUNT = 20
 if len(manifest) != EXPECTED_FIXTURE_COUNT:
     print(f"错误：生成 {len(manifest)} 个 fixture，预期 {EXPECTED_FIXTURE_COUNT}", file=sys.stderr)
     sys.exit(1)

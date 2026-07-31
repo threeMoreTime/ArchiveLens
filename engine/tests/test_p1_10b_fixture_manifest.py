@@ -12,7 +12,7 @@ from pathlib import Path
 
 MANIFEST_PATH = Path("tests/fixtures/p1-10b-synthetic/fixture-manifest.json")
 FIXTURE_DIR = MANIFEST_PATH.parent
-EXPECTED_COUNT = 19
+EXPECTED_COUNT = 20
 
 # 必须存在的 fixture_id（不得缺失）
 REQUIRED_IDS = {
@@ -25,6 +25,7 @@ REQUIRED_IDS = {
     "corrupt-zero-byte-1",
     "encrypted-pdf-1",
     "large-350-page",
+    "real-text-350-page",
 }
 
 
@@ -58,28 +59,35 @@ class FixtureManifestTests(unittest.TestCase):
         self.assertFalse(missing, f"缺少必需 fixture: {missing}")
 
     def test_all_files_exist(self):
+        """所有 fixture 的 relative_path 指向的文件必须实际存在。"""
         for f in self.fixtures:
-            # 加密 PDF 的 SHA 含随机盐值，跨平台不可重复；用文件名匹配。
-            if f.get("generated_at_runtime"):
-                continue
-            matched = False
-            for candidate in FIXTURE_DIR.iterdir():
-                if candidate.is_file() and _sha256(candidate) == f["sha256"]:
-                    matched = True
-                    break
-            self.assertTrue(matched, f"{f['fixture_id']}: 目录中找不到 SHA 匹配的文件")
+            rel_path = f.get("relative_path")
+            self.assertIsNotNone(rel_path, f"{f['fixture_id']}: 缺少 relative_path")
+            file_path = FIXTURE_DIR / rel_path
+            self.assertTrue(file_path.exists(), f"{f['fixture_id']}: 文件不存在 {rel_path}")
 
     def test_sha256_matches(self):
-        """manifest 中的 SHA-256 与实际文件一致（跳过加密 PDF）。"""
+        """确定性 fixture 的 SHA-256 与实际文件一致；runtime fixture 跳过 SHA 但验证格式。"""
         for f in self.fixtures:
+            file_path = FIXTURE_DIR / f["relative_path"]
             if f.get("generated_at_runtime"):
+                # runtime PDF：验证文件存在 + 可打开（加密 PDF 用密码）
+                if f["format"] == "PDF":
+                    from pypdf import PdfReader
+                    try:
+                        reader = PdfReader(str(file_path))
+                        if reader.is_encrypted:
+                            reader.decrypt("test123")
+                        page_count = len(reader.pages)
+                        self.assertEqual(page_count, f["pages"],
+                                         f"{f['fixture_id']}: PDF 页数 {page_count} != 预期 {f['pages']}")
+                    except Exception as e:
+                        self.fail(f"{f['fixture_id']}: PDF 无法打开: {e}")
                 continue
-            found = False
-            for candidate in FIXTURE_DIR.iterdir():
-                if candidate.is_file() and _sha256(candidate) == f["sha256"]:
-                    found = True
-                    break
-            self.assertTrue(found, f"{f['fixture_id']}: SHA-256 不匹配")
+            # 确定性 fixture：SHA-256 必须匹配
+            actual_sha = _sha256(file_path)
+            self.assertEqual(actual_sha, f["sha256"],
+                             f"{f['fixture_id']}: SHA-256 不匹配")
 
     def test_expected_hits_structure_unified(self):
         """所有 fixture 的 expected_hits 必须是对象（dict），不能是字符串。"""
