@@ -338,13 +338,42 @@ real_truth_path = OUTPUT_DIR / "real-text-350-source-truth.json"
 if not real_pdf_path.exists():
     print("错误：350 页真实文字 PDF 不存在，请先运行 generate-real-text-pdf.py", file=sys.stderr)
     sys.exit(1)
+# 从 source truth 读取多词统计
+import json as _json
+_truth = _json.loads(real_truth_path.read_text(encoding="utf-8"))
 manifest.append({
     "fixture_id": "real-text-350-page",
     "relative_path": "real-text-350-page.pdf",
-    "format": "PDF", "synthetic": True, "layout": "混合（简体/繁体/横排/竖排）",
+    "format": "PDF", "synthetic": True,
+    "layout": "混合（简体横排240/简体竖排60/繁体横排40/繁体竖排10）",
     "degradation": "清晰（35 个不同模板的真实渲染文字）", "pages": 350,
     "expected_task_result": "completed",
-    "expected_hits": hits(SEARCH_TERM, 1, 0, "每页至少包含一次检索词"),
+    "expected_hits": {
+        "term": None,
+        "min_hits": 0,
+        "allowed_missing": 0,
+        "note": "按 source_truth 和 expected_terms 分词执行验收",
+    },
+    "expected_terms": [
+        {
+            "term": "档案管理",
+            "source_truth_hits": next(
+                (st["source_truth_hits"] for st in _truth["search_terms"] if st["term"] == "档案管理"), 0
+            ),
+            "pages_containing_term": next(
+                (st["pages_containing_term"] for st in _truth["search_terms"] if st["term"] == "档案管理"), 0
+            ),
+        },
+        {
+            "term": "檔案管理",
+            "source_truth_hits": next(
+                (st["source_truth_hits"] for st in _truth["search_terms"] if st["term"] == "檔案管理"), 0
+            ),
+            "pages_containing_term": next(
+                (st["pages_containing_term"] for st in _truth["search_terms"] if st["term"] == "檔案管理"), 0
+            ),
+        },
+    ],
     "sha256": sha256_file(real_pdf_path),
     "source_truth": "real-text-350-source-truth.json",
     "generated_at_runtime": True,
