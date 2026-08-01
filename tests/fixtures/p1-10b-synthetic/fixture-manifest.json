@@ -4,7 +4,7 @@
   "description": "P1-10B 合成验收 fixture。所有样本为 SYNTHETIC，不声称是真实档案。固定随机种子确保可重复生成。",
   "font": "C:/Windows/Fonts/msyh.ttc",
   "random_seed": 42,
-  "fixture_count": 19,
+  "fixture_count": 20,
   "fixtures": [
     {
       "fixture_id": "traditional-vertical-1",
@@ -19,7 +19,8 @@
         "min_hits": 1,
         "allowed_missing": 0
       },
-      "sha256": "e80fc43e4c84a46073b544f6a430e9b05fb1c698d30810ffdf06d90f0a01e7e2"
+      "sha256": "e80fc43e4c84a46073b544f6a430e9b05fb1c698d30810ffdf06d90f0a01e7e2",
+      "relative_path": "traditional-vertical-1.png"
     },
     {
       "fixture_id": "traditional-vertical-2",
@@ -34,7 +35,8 @@
         "min_hits": 1,
         "allowed_missing": 0
       },
-      "sha256": "28bbad9844e872a3297126894dcbf5ec5f843ce34cb142deb224d5eedc919c44"
+      "sha256": "28bbad9844e872a3297126894dcbf5ec5f843ce34cb142deb224d5eedc919c44",
+      "relative_path": "traditional-vertical-2.png"
     },
     {
       "fixture_id": "traditional-vertical-3",
@@ -49,7 +51,8 @@
         "min_hits": 1,
         "allowed_missing": 0
       },
-      "sha256": "2de739a20a20c879c72fbd1eb9c1f10ad17f8a06b91d64c94e6436c97a189939"
+      "sha256": "2de739a20a20c879c72fbd1eb9c1f10ad17f8a06b91d64c94e6436c97a189939",
+      "relative_path": "traditional-vertical-3.png"
     },
     {
       "fixture_id": "multicolumn-1",
@@ -64,7 +67,8 @@
         "min_hits": 1,
         "allowed_missing": 0
       },
-      "sha256": "f88e665bfadc1c6e0b3438afb2d665124835c7ab8a908ad74443d6528341c662"
+      "sha256": "f88e665bfadc1c6e0b3438afb2d665124835c7ab8a908ad74443d6528341c662",
+      "relative_path": "multicolumn-1.png"
     },
     {
       "fixture_id": "multicolumn-2",
@@ -79,7 +83,8 @@
         "min_hits": 1,
         "allowed_missing": 0
       },
-      "sha256": "4304bbb5a5d936749ed8ac93e136a2d17bd116ee88bca6cf781b4ba2615c9d4b"
+      "sha256": "4304bbb5a5d936749ed8ac93e136a2d17bd116ee88bca6cf781b4ba2615c9d4b",
+      "relative_path": "multicolumn-2.png"
     },
     {
       "fixture_id": "multicolumn-3",
@@ -94,7 +99,8 @@
         "min_hits": 1,
         "allowed_missing": 0
       },
-      "sha256": "d8c15781c670e133bea9e14746bbae8b3aece15ebf39e30d82abed194d79c4e7"
+      "sha256": "d8c15781c670e133bea9e14746bbae8b3aece15ebf39e30d82abed194d79c4e7",
+      "relative_path": "multicolumn-3.png"
     },
     {
       "fixture_id": "low-contrast-1",
@@ -110,7 +116,8 @@
         "allowed_missing": 1,
         "note": "低对比度 factor=0.25 可能 OCR 失败"
       },
-      "sha256": "a06a54147bcf4ceff69f35e28c114fcaf4aa7ec45453a13256b09e14ce8e88b4"
+      "sha256": "a06a54147bcf4ceff69f35e28c114fcaf4aa7ec45453a13256b09e14ce8e88b4",
+      "relative_path": "low-contrast-1.png"
     },
     {
       "fixture_id": "low-contrast-2",
@@ -126,7 +133,8 @@
         "allowed_missing": 1,
         "note": "低对比度 factor=0.35 可能 OCR 失败"
       },
-      "sha256": "316ad759b4d21f3a4b7d50eed8dfd1d02556b8603863c4b2a81f0878392ced2e"
+      "sha256": "316ad759b4d21f3a4b7d50eed8dfd1d02556b8603863c4b2a81f0878392ced2e",
+      "relative_path": "low-contrast-2.png"
     },
     {
       "fixture_id": "rotated-synthetic-1",
@@ -142,7 +150,8 @@
         "allowed_missing": 1,
         "note": "倾斜5.0度可能影响 OCR"
       },
-      "sha256": "1be83508a5ce034d2aca004ee9482010cf106036c52f0001b42db7fbc531fd3f"
+      "sha256": "1be83508a5ce034d2aca004ee9482010cf106036c52f0001b42db7fbc531fd3f",
+      "relative_path": "rotated-synthetic-1.png"
     },
     {
       "fixture_id": "rotated-synthetic-2",
@@ -158,7 +167,8 @@
         "allowed_missing": 1,
         "note": "倾斜10.0度可能影响 OCR"
       },
-      "sha256": "15a03c76e0a68c4d2f79d0dbf1e0e39ad721765556dd80650f5f6f756f6979d3"
+      "sha256": "15a03c76e0a68c4d2f79d0dbf1e0e39ad721765556dd80650f5f6f756f6979d3",
+      "relative_path": "rotated-synthetic-2.png"
     },
     {
       "fixture_id": "rotated-synthetic-3",
@@ -174,7 +184,8 @@
         "allowed_missing": 1,
         "note": "倾斜-8.0度可能影响 OCR"
       },
-      "sha256": "c77615a6cddcc6486c0c3c9acbed2aa34a4406517b09dc10dc43cb966f39058f"
+      "sha256": "c77615a6cddcc6486c0c3c9acbed2aa34a4406517b09dc10dc43cb966f39058f",
+      "relative_path": "rotated-synthetic-3.png"
     },
     {
       "fixture_id": "noise-1",
@@ -190,7 +201,8 @@
         "allowed_missing": 1,
         "note": "噪声强度30可能影响 OCR"
       },
-      "sha256": "d41b9034e8b69b5efa4255aa69dc30275efcb9f09e7b567e3f1a8da4f445629a"
+      "sha256": "d41b9034e8b69b5efa4255aa69dc30275efcb9f09e7b567e3f1a8da4f445629a",
+      "relative_path": "noise-1.png"
     },
     {
       "fixture_id": "noise-2",
@@ -206,7 +218,8 @@
         "allowed_missing": 1,
         "note": "噪声强度50可能影响 OCR"
       },
-      "sha256": "9d262f13be3377af9c484b0b21aa0247ac6c72f8a010f96c6d3bdb50d4ec09f2"
+      "sha256": "9d262f13be3377af9c484b0b21aa0247ac6c72f8a010f96c6d3bdb50d4ec09f2",
+      "relative_path": "noise-2.png"
     },
     {
       "fixture_id": "long-unicode-path-1",
@@ -222,7 +235,8 @@
         "allowed_missing": 0
       },
       "sha256": "d1c47a0fe3b31ab558dc54c676ec2700ef933f3081bad41462286e7a6134f005",
-      "special_filename": "档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理.png"
+      "special_filename": "档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理.png",
+      "relative_path": "档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理档案管理.png"
     },
     {
       "fixture_id": "special-chars-filename-1",
@@ -238,7 +252,8 @@
         "allowed_missing": 0
       },
       "sha256": "a5ad635b946d7c9397b8ec20e3b0785b26af95f17d87465fa84b869529cfb079",
-      "special_filename": "档案【特殊】#%&@测试.png"
+      "special_filename": "档案【特殊】#%&@测试.png",
+      "relative_path": "档案【特殊】#%&@测试.png"
     },
     {
       "fixture_id": "corrupt-truncated-1",
@@ -255,7 +270,8 @@
         "allowed_missing": 0,
         "note": "异常文件不产生 OCR 结果"
       },
-      "sha256": "89754d34217cd6b7828fe333b27b1bcd82d955ef9559c6a2a886a232565b4984"
+      "sha256": "89754d34217cd6b7828fe333b27b1bcd82d955ef9559c6a2a886a232565b4984",
+      "relative_path": "corrupt-truncated.png"
     },
     {
       "fixture_id": "corrupt-zero-byte-1",
@@ -272,7 +288,8 @@
         "allowed_missing": 0,
         "note": "异常文件不产生 OCR 结果"
       },
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "relative_path": "corrupt-zero-byte.png"
     },
     {
       "fixture_id": "encrypted-pdf-1",
@@ -290,7 +307,8 @@
         "note": "加密 PDF 无 OCR 内容"
       },
       "sha256": "1fc0066b1de049e674568e145cb003a303d36d7a8d5a6552cce30a6a22aa4c27",
-      "generated_at_runtime": true
+      "generated_at_runtime": true,
+      "relative_path": "encrypted-blank.pdf"
     },
     {
       "fixture_id": "large-350-page",
@@ -307,6 +325,38 @@
         "note": "空白页无 OCR 内容，用于性能/恢复验收"
       },
       "sha256": "8edeea40d71803e5bbc5fa243cab0dbbbbfdab1a6ad3d3bd5d894f09608369b4",
+      "generated_at_runtime": true,
+      "relative_path": "large-350-page.pdf"
+    },
+    {
+      "fixture_id": "real-text-350-page",
+      "relative_path": "real-text-350-page.pdf",
+      "format": "PDF",
+      "synthetic": true,
+      "layout": "混合（简体横排240/简体竖排60/繁体横排40/繁体竖排10）",
+      "degradation": "清晰（35 个不同模板的真实渲染文字）",
+      "pages": 350,
+      "expected_task_result": "completed",
+      "expected_hits": {
+        "term": null,
+        "min_hits": 0,
+        "allowed_missing": 0,
+        "note": "按 source_truth 和 expected_terms 分词执行验收"
+      },
+      "expected_terms": [
+        {
+          "term": "档案管理",
+          "source_truth_hits": 1630,
+          "pages_containing_term": 300
+        },
+        {
+          "term": "檔案管理",
+          "source_truth_hits": 280,
+          "pages_containing_term": 50
+        }
+      ],
+      "sha256": "5fa0485e5d75393030d73539455f2f933d8289dc306dfab16e5197bccd47f9d0",
+      "source_truth": "real-text-350-source-truth.json",
       "generated_at_runtime": true
     }
   ]
