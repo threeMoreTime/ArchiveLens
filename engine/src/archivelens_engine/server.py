@@ -15,6 +15,7 @@ import errno
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -173,6 +174,7 @@ class Server:
 
         self.handlers: dict[str, Handler] = {}
         self._stdout_lock = threading.Lock()
+        self._scan_state_lock = threading.RLock()
         self._scan_threads: dict[str, threading.Thread] = {}
         self._task_controls: dict[str, TaskControl] = {}
         # SlowFake 测试模式（任务 §十二）：AL_SLOWFAKE_PAGES>0 时用慢速假处理器替代真实 OCR。
@@ -391,6 +393,80 @@ class Server:
             if self._shutting_down:
                 break
 
+    def close(self, timeout: float = 30.0, *, cancel_workers: bool = True) -> None:
+        """Stop background work and close SQLite before the process exits.
+
+        The JSONL loop can stop immediately after ``app.shutdown`` while a
+        page/export/preflight worker is still unwinding.  On Windows, letting the
+        interpreter tear down the SQLite connection implicitly can leave a
+        short-lived file handle race for callers that clean the workspace
+        immediately after process exit.  Wait for tracked workers when
+        possible; if a worker does not cooperate within the bound, leave the
+        connection for process teardown rather than closing it underneath a
+        live worker.  ``cancel_workers=False`` is used for forced process exit
+        after stdin EOF so the active task remains recoverable on next launch.
+        """
+        if cancel_workers and not self._shutting_down:
+            self._shutting_down = True
+            with self._scan_state_lock:
+                task_controls = list(self._task_controls.values())
+            for task_control in task_controls:
+                task_control.request_cancel()
+            with self._export_state_lock:
+                export_events = list(self._export_cancel_events.values())
+            for event in export_events:
+                event.set()
+            with self._preflight_lock:
+                preflight_events = list(self._preflight_cancel_events.values())
+            for event in preflight_events:
+                event.set()
+
+        current_thread = threading.current_thread()
+        worker_threads = self._worker_threads_snapshot()
+        if cancel_workers:
+            deadline = time.monotonic() + max(0.0, timeout)
+            for thread in worker_threads:
+                if thread is current_thread or not thread.is_alive():
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                thread.join(timeout=remaining)
+
+        live_workers = [thread for thread in worker_threads if thread.is_alive()]
+        if live_workers:
+            try:
+                sys.stderr.write(
+                    f"[server] shutdown {'deferred SQLite close' if cancel_workers else 'skipped worker cancellation'} "
+                    f"for {len(live_workers)} live worker(s)\n"
+                )
+                sys.stderr.flush()
+            except Exception:
+                pass
+            return
+        self.store.close()
+
+    def _worker_threads_snapshot(self) -> list[threading.Thread]:
+        with self._scan_state_lock:
+            scan_threads = list(self._scan_threads.values())
+        with self._export_state_lock:
+            export_threads = list(self._export_threads.values())
+        with self._preflight_lock:
+            preflight_threads: list[threading.Thread] = []
+            for job in self._preflight_jobs.values():
+                thread = job.get("thread")
+                if isinstance(thread, threading.Thread):
+                    preflight_threads.append(thread)
+        return [*scan_threads, *export_threads, *preflight_threads]
+
+    def _finish_scan_worker(self, task_id: str, task_control: TaskControl) -> None:
+        current_thread = threading.current_thread()
+        with self._scan_state_lock:
+            if self._task_controls.get(task_id) is task_control:
+                self._task_controls.pop(task_id, None)
+            if self._scan_threads.get(task_id) is current_thread:
+                self._scan_threads.pop(task_id, None)
+
     # ---- handler 注册 ----
     def _register_defaults(self) -> None:
         # 注册内容由模块级 ENGINE_HANDLERS 提供（见文件末尾），
@@ -428,9 +504,26 @@ class Server:
             source_id=SLOWFAKE_SOURCE_ID if self.slowfake_pages > 0 else "",
             worker_generation=generation,
         )
-        thread = threading.Thread(target=self._run_scan, args=(task_id, generation), daemon=True)
-        self._scan_threads[task_id] = thread
-        thread.start()
+        task_control = TaskControl()
+        thread = threading.Thread(
+            target=self._run_scan,
+            args=(task_id, generation, task_control),
+            daemon=True,
+        )
+        with self._scan_state_lock:
+            self._scan_threads[task_id] = thread
+            self._task_controls[task_id] = task_control
+        if self._shutting_down:
+            task_control.request_cancel()
+        try:
+            thread.start()
+        except Exception:
+            with self._scan_state_lock:
+                if self._scan_threads.get(task_id) is thread:
+                    self._scan_threads.pop(task_id, None)
+                if self._task_controls.get(task_id) is task_control:
+                    self._task_controls.pop(task_id, None)
+            raise
         return generation
 
     def _run_slowfake(self, task_id: str, tc: TaskControl, worker_generation: int) -> None:
@@ -751,7 +844,12 @@ class Server:
             rows.append(row)
         return self.store.add_occurrences(task_id, rows)
 
-    def _run_scan(self, task_id: str, worker_generation: int) -> None:
+    def _run_scan(
+        self,
+        task_id: str,
+        worker_generation: int,
+        task_control: TaskControl | None = None,
+    ) -> None:
         """在后台线程跑 ReportPipeline 并把结果导入 TaskStore。
 
         通过 TaskControl 实现协作式 pause/resume/cancel：管线在每个页面边界
@@ -759,12 +857,18 @@ class Server:
         """
         task = self.store.get_task(task_id)
         if task is None:
+            if task_control is not None:
+                self._finish_scan_worker(task_id, task_control)
             return
-        tc = TaskControl()
-        self._task_controls[task_id] = tc
+        tc = task_control or TaskControl()
+        with self._scan_state_lock:
+            if self._task_controls.get(task_id) is None:
+                self._task_controls[task_id] = tc
         if self.slowfake_pages > 0:
-            self._run_slowfake(task_id, tc, worker_generation)
-            self._task_controls.pop(task_id, None)
+            try:
+                self._run_slowfake(task_id, tc, worker_generation)
+            finally:
+                self._finish_scan_worker(task_id, tc)
             return
         try:
             from .report_pipeline import ReportPipeline  # 延迟导入（重依赖）
@@ -897,7 +1001,7 @@ class Server:
                 worker_generation=worker_generation,
             )
         finally:
-            self._task_controls.pop(task_id, None)
+            self._finish_scan_worker(task_id, tc)
 
     def _import_report(self, task_id: str, task_workspace: Path, scan_workspace: Path, report: dict) -> None:
         pages_by_id = {p.get("page_image_id"): p for p in report.get("pages", [])}
@@ -950,7 +1054,9 @@ def _h_shutdown(server: Server, params: dict) -> dict:
         return {"status": "shutting_down", "already": True}
     server._shutting_down = True
     # 唤醒所有 paused/正在处理的任务（协作式退出）
-    for task_id, tc in server._task_controls.items():
+    with server._scan_state_lock:
+        task_controls = list(server._task_controls.items())
+    for task_id, tc in task_controls:
         task = server.store.get_task(task_id)
         if task is not None and task.get("status") == "paused":
             continue
@@ -3515,7 +3621,13 @@ ENGINE_HANDLERS: dict[str, Handler] = {
 
 
 def run_server(config: EngineConfig | None = None, workspace_root: str | Path | None = None) -> None:
-    Server(config=config, workspace_root=workspace_root).run()
+    server = Server(config=config, workspace_root=workspace_root)
+    try:
+        server.run()
+    finally:
+        # stdin EOF is the forced-quit path: preserve an active task for
+        # restart recovery instead of turning it into an intentional cancel.
+        server.close(cancel_workers=server._shutting_down)
 
 
 __all__ = ["Server", "Handler", "ENGINE_HANDLERS", "run_server"]

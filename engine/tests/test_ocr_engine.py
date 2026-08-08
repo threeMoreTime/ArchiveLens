@@ -50,6 +50,31 @@ class OCRCandidateTests(unittest.TestCase):
                 primary_text="亏",
             )
 
+    def test_empty_first_pass_retries_rotated_ocr(self) -> None:
+        ocr = ArchiveLensOCR.__new__(ArchiveLensOCR)
+        rotated_items = [
+            [[[10, 20], [30, 20], [30, 60], [10, 60]], "档案管理", 0.9],
+        ]
+        with (
+            patch.object(
+                ocr,
+                "_recognize_once",
+                side_effect=[([], {"attempt": "initial"}), (rotated_items, {"attempt": "rotated"})],
+            ) as recognize_once,
+            patch.object(
+                ocr,
+                "_rotated_image_for_vertical_retry",
+                return_value=(np.zeros((100, 200, 3), dtype=np.uint8), (200, 100)),
+            ),
+            patch.object(ocr, "_enrich_results", side_effect=lambda _image, items: items),
+        ):
+            results, timings = ocr("source")
+
+        self.assertEqual(recognize_once.call_count, 2)
+        self.assertEqual(results[0][1], "档案管理")
+        self.assertEqual(timings["ocr_attempts"], 2)
+        self.assertEqual(timings["ocr_retry_reason"], "empty_result")
+
     def test_explicit_model_path_rejects_hash_mismatch_before_runtime_load(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             model_path = Path(temporary_directory) / "model.onnx"
@@ -126,6 +151,38 @@ class OCRCandidateTests(unittest.TestCase):
             reconciliation["method"],
             "same_model_character_box_opencc_family",
         )
+
+    def test_real_vertical_text_retries_rotated_ocr_and_recovers_all_terms(self) -> None:
+        fixture = (
+            Path(__file__).resolve().parents[2]
+            / "tests"
+            / "fixtures"
+            / "p1-10b-synthetic"
+            / "real-text-350-page.pdf"
+        )
+        term = "\u6863\u6848\u7ba1\u7406"
+        with TemporaryDirectory() as temporary_directory:
+            image_path = Path(temporary_directory) / "vertical.png"
+            document = pdfium.PdfDocument(str(fixture))
+            try:
+                page = document[14]
+                try:
+                    page.render(scale=2.0).to_pil().save(image_path, "PNG")
+                finally:
+                    page.close()
+            finally:
+                document.close()
+
+            results, _ = ArchiveLensOCR()(str(image_path))
+
+        matches = [str(item[1]) for item in results or [] if term in str(item[1])]
+        self.assertEqual(sum(text.count(term) for text in matches), 6)
+        for item in results or []:
+            for point in item[0]:
+                self.assertGreaterEqual(float(point[0]), 0)
+                self.assertGreaterEqual(float(point[1]), 0)
+                self.assertLessEqual(float(point[0]), 2480)
+                self.assertLessEqual(float(point[1]), 3508)
 
 
 if __name__ == "__main__":

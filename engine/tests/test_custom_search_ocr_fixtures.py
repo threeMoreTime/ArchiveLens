@@ -7,6 +7,7 @@ import html
 import json
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -79,8 +80,15 @@ class CustomSearchFixtureTests(unittest.TestCase):
                         )
                         task_id = created["task_id"]
                         _h_tasks_start(server, {"task_id": task_id})
-                        server._scan_threads[task_id].join(timeout=120)
-                        self.assertFalse(server._scan_threads[task_id].is_alive(), case["id"])
+                        deadline = time.monotonic() + 120
+                        task = None
+                        while time.monotonic() < deadline:
+                            task = server.store.get_task(task_id)
+                            if task is not None and task["status"] in {"completed", "failed", "cancelled"}:
+                                break
+                            time.sleep(0.05)
+                        self.assertIsNotNone(task, case["id"])
+                        self.assertEqual(task["status"], "completed", case["id"])
 
                         task = server.store.get_task(task_id)
                         assert task is not None

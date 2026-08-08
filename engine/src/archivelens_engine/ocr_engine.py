@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unicodedata
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,9 @@ from .script_variants import ScriptVariantResolver
 SCRIPT_RECONCILIATION_MAX_CONTEXT_CONFIDENCE = 0.85
 SCRIPT_RECONCILIATION_MIN_ISOLATED_CONFIDENCE = 0.97
 SCRIPT_RECONCILIATION_MIN_CONFIDENCE_GAIN = 0.15
+VERTICAL_RETRY_ASPECT_RATIO = 1.5
+VERTICAL_RETRY_MIN_BOXES = 2
+VERTICAL_RETRY_MIN_FRACTION = 0.15
 
 
 def is_han_character(value: str) -> bool:
@@ -239,13 +243,122 @@ class ArchiveLensOCR:
             for line_index, entries in reconciliations.items()
         }
 
-    def __call__(self, img_content: Any, *args: Any, **kwargs: Any) -> Any:
+    @staticmethod
+    def _should_retry_vertical(result_items: list[list[Any]]) -> bool:
+        dimensions: list[tuple[float, float]] = []
+        for item in result_items:
+            if not item:
+                continue
+            try:
+                points = item[0]
+                xs = [float(point[0]) for point in points]
+                ys = [float(point[1]) for point in points]
+            except (IndexError, TypeError, ValueError):
+                continue
+            if not xs or not ys:
+                continue
+            width = max(xs) - min(xs)
+            height = max(ys) - min(ys)
+            if width > 0 and height > 0:
+                dimensions.append((width, height))
+
+        if len(dimensions) < VERTICAL_RETRY_MIN_BOXES:
+            return False
+        vertical_count = sum(
+            1 for width, height in dimensions
+            if height >= width * VERTICAL_RETRY_ASPECT_RATIO
+        )
+        return (
+            vertical_count >= VERTICAL_RETRY_MIN_BOXES
+            and vertical_count / len(dimensions) >= VERTICAL_RETRY_MIN_FRACTION
+        )
+
+    def _rotated_image_for_vertical_retry(
+        self,
+        img_content: Any,
+    ) -> tuple[np.ndarray, tuple[int, int]] | None:
+        """Return a BGR 90-degree image and the original RGB dimensions."""
+
+        from PIL import Image, ImageOps
+
+        try:
+            if isinstance(img_content, (str, Path)):
+                with Image.open(str(img_content)) as opened:
+                    source = ImageOps.exif_transpose(opened).convert("RGB")
+            elif isinstance(img_content, (bytes, bytearray)):
+                with Image.open(BytesIO(img_content)) as opened:
+                    source = ImageOps.exif_transpose(opened).convert("RGB")
+            elif isinstance(img_content, Image.Image):
+                source = ImageOps.exif_transpose(img_content).convert("RGB")
+            else:
+                loaded = self._engine.load_img(img_content)
+                if loaded is None:
+                    return None
+                loaded_array = np.asarray(loaded)
+                if loaded_array.ndim == 3 and loaded_array.shape[2] >= 3:
+                    loaded_array = loaded_array[..., :3][..., ::-1]
+                source = Image.fromarray(loaded_array).convert("RGB")
+
+            original_size = (int(source.width), int(source.height))
+            rotated = source.rotate(90, expand=True, fillcolor="white")
+            # RapidOCR accepts numpy images as BGR, matching its file loader.
+            rotated_array = np.asarray(rotated, dtype=np.uint8)[..., ::-1].copy()
+            source.close()
+            rotated.close()
+            return rotated_array, original_size
+        except (OSError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _map_rotated_polygon(
+        polygon: Any,
+        original_size: tuple[int, int],
+    ) -> Any:
+        """Map a polygon from 90-degree CCW image space to source space."""
+
+        width, _ = original_size
+        try:
+            return [
+                [width - float(point[1]), float(point[0])]
+                for point in polygon
+            ]
+        except (IndexError, TypeError, ValueError):
+            return polygon
+
+    @classmethod
+    def _map_rotated_results(
+        cls,
+        result_items: list[list[Any]],
+        original_size: tuple[int, int],
+    ) -> list[list[Any]]:
+        mapped: list[list[Any]] = []
+        for item in result_items:
+            copied = list(item)
+            if copied:
+                copied[0] = cls._map_rotated_polygon(copied[0], original_size)
+            if len(copied) >= 6 and isinstance(copied[3], list):
+                copied[3] = [
+                    cls._map_rotated_polygon(word_box, original_size)
+                    for word_box in copied[3]
+                ]
+            mapped.append(copied)
+        return mapped
+
+    def _recognize_once(
+        self,
+        img_content: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[list[list[Any]] | None, Any]:
         internal_kwargs = dict(kwargs)
         internal_kwargs["return_word_box"] = True
-        result_items, timings = self._engine(img_content, *args, **internal_kwargs)
-        if not result_items:
-            return result_items, timings
+        return self._engine(img_content, *args, **internal_kwargs)
 
+    def _enrich_results(
+        self,
+        img_content: Any,
+        result_items: list[list[Any]],
+    ) -> list[list[Any]]:
         script_resolutions = self._reconcile_script_variants(img_content, result_items)
         raw_predictions = self._raw_single_character_predictions(img_content, result_items)
         characters = self._engine.text_rec.postprocess_op.character
@@ -275,7 +388,48 @@ class ArchiveLensOCR:
                 )
             copied.append(metadata)
             enriched.append(copied)
-        return enriched, timings
+        return enriched
+
+    @staticmethod
+    def _retry_timings(initial: Any, retry: Any, reason: str) -> Any:
+        """保留两次识别的诊断信息，同时兼容 RapidOCR 的原始返回形状。"""
+
+        if isinstance(retry, dict):
+            combined = dict(retry)
+            combined["ocr_attempts"] = 2
+            combined["ocr_retry_reason"] = reason
+            combined["ocr_initial_timings"] = initial
+            return combined
+        return retry
+
+    def __call__(self, img_content: Any, *args: Any, **kwargs: Any) -> Any:
+        result_items, timings = self._recognize_once(img_content, *args, **kwargs)
+        retry_reason: str | None = None
+        if not result_items:
+            retry_reason = "empty_result"
+        elif self._should_retry_vertical(result_items):
+            retry_reason = "vertical_layout_signal"
+
+        if retry_reason is not None:
+            rotated = self._rotated_image_for_vertical_retry(img_content)
+            if rotated is not None:
+                rotated_content, original_size = rotated
+                rotated_items, rotated_timings = self._recognize_once(
+                    rotated_content,
+                    *args,
+                    **kwargs,
+                )
+                if rotated_items:
+                    enriched = self._enrich_results(rotated_content, rotated_items)
+                    return (
+                        self._map_rotated_results(enriched, original_size),
+                        self._retry_timings(timings, rotated_timings, retry_reason),
+                    )
+
+        if not result_items:
+            return result_items, timings
+
+        return self._enrich_results(img_content, result_items), timings
 
 
 __all__ = [
