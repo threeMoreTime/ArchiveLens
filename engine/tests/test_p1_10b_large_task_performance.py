@@ -22,7 +22,8 @@ class P1_10B_LargeTaskPerformanceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._tmpdir = tempfile.TemporaryDirectory()
-        with patch.dict(os.environ, {"AL_SLOWFAKE_PAGES": "0", "AL_SLOWFAKE_PAGE_DELAY_MS": "10"}, clear=False):
+        # P1-10B-A 只验证 350 页任务调度；必须显式启用 SlowFake，避免误跑真实 OCR。
+        with patch.dict(os.environ, {"AL_SLOWFAKE_PAGES": "350", "AL_SLOWFAKE_PAGE_DELAY_MS": "10"}, clear=False):
             from archivelens_engine.server import Server
             cls.server = Server(workspace_root=cls._tmpdir.name)
         cls.metrics = {}
@@ -36,6 +37,11 @@ class P1_10B_LargeTaskPerformanceTests(unittest.TestCase):
 
     def test_large_task_350_pages(self):
         """350 页 PDF 大任务：创建→启动→完成→完整性检查。"""
+        self.assertEqual(
+            self.server.slowfake_pages,
+            350,
+            "P1-10B-A 必须走 350 页 SlowFake 分支，真实 OCR 应由 P1-10B-B 验收",
+        )
         large_pdf = Path("tests/fixtures/p1-10b-synthetic/large-350-page.pdf")
         if not large_pdf.exists():
             self.skipTest("350 页 PDF fixture 不存在")

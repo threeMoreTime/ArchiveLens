@@ -55,6 +55,16 @@ class P1_10B_SlowFakeRegressionTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         try:
+            # test_06 intentionally exercises cancellation.  Wait for every
+            # scan thread before closing SQLite; otherwise a late page can
+            # raise "Cannot operate on a closed database" after unittest has
+            # already reported the test class as green.
+            for task_control in list(cls.server._task_controls.values()):
+                task_control.request_cancel()
+            for thread in list(cls.server._scan_threads.values()):
+                thread.join(timeout=30)
+                if thread.is_alive():
+                    raise RuntimeError("SlowFake scan thread did not stop before test teardown")
             cls.server.store.close()
         finally:
             cls._tmpdir.cleanup()

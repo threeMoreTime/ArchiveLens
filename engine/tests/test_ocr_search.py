@@ -192,6 +192,33 @@ class OCRSearchServiceTests(unittest.TestCase):
             {1, 2},
         )
 
+    def test_p1_10b_terms_strictly_filter_source_script(self) -> None:
+        task_id = self._create_ready_task(
+            [
+                self._line(0, "档案管理"),
+                self._line(1, "檔案管理"),
+            ]
+        )
+
+        for query_text in ("档案管理", "檔案管理"):
+            simplified = self.service.search(
+                task_id=task_id,
+                query_text=query_text,
+                script_scope=SCRIPT_SCOPE_SIMPLIFIED,
+            )
+            traditional = self.service.search(
+                task_id=task_id,
+                query_text=query_text,
+                script_scope=SCRIPT_SCOPE_TRADITIONAL,
+            )
+
+            simplified_hits = self._hits(simplified["search_session_id"])
+            traditional_hits = self._hits(traditional["search_session_id"])
+            self.assertEqual([hit["line_index"] for hit in simplified_hits], [0])
+            self.assertEqual([hit["source_script"] for hit in simplified_hits], ["simplified"])
+            self.assertEqual([hit["line_index"] for hit in traditional_hits], [1])
+            self.assertEqual([hit["source_script"] for hit in traditional_hits], ["traditional"])
+
     def test_neutral_glyph_matches_both_scopes_but_mixed_requires_both(self) -> None:
         task_id = self._create_ready_task(
             [
